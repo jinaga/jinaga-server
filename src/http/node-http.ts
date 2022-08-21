@@ -1,4 +1,4 @@
-import { HttpConnection, HttpResponse } from "jinaga";
+import { HttpConnection, HttpResponse } from "./web-client";
 import * as http from "http";
 import * as https from "https";
 import * as url from "url";

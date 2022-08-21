@@ -1,11 +1,12 @@
-import { Feed } from 'jinaga';
-import { Keystore, UserIdentity } from 'jinaga';
-import { Query } from 'jinaga';
-import { FactEnvelope, FactRecord, FactReference } from 'jinaga';
-import { mapAsync } from '../util/fn';
-import { Authorization } from 'jinaga';
-import { AuthorizationEngine } from 'jinaga';
-import { AuthorizationRules } from 'jinaga';
+import { Feed } from "../feed/feed";
+import { Keystore } from "../keystore";
+import { Query } from "../query/query";
+import { Specification } from "../specification/specification";
+import { FactEnvelope, FactRecord, FactReference } from "../storage";
+import { UserIdentity } from "../user-identity";
+import { Authorization } from "./authorization";
+import { AuthorizationEngine } from "./authorization-engine";
+import { AuthorizationRules } from "./authorizationRules";
 
 export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
@@ -19,8 +20,8 @@ export class AuthorizationKeystore implements Authorization {
             new AuthorizationEngine(authorizationRules, feed);
     }
 
-    async getUserFact(userIdentity: UserIdentity) {
-        const userFact = await this.keystore.getUserFact(userIdentity);
+    async getOrCreateUserFact(userIdentity: UserIdentity) {
+        const userFact = await this.keystore.getOrCreateUserFact(userIdentity);
         const envelopes = [
             <FactEnvelope>{
                 fact: userFact,
@@ -33,6 +34,10 @@ export class AuthorizationKeystore implements Authorization {
 
     query(userIdentity: UserIdentity, start: FactReference, query: Query) {
         return this.feed.query(start, query);
+    }
+
+    read(userIdentity: UserIdentity, start: FactReference[], specification: Specification) {
+        return this.feed.read(start, specification);
     }
 
     load(userIdentity: UserIdentity, references: FactReference[]) {
@@ -50,10 +55,7 @@ export class AuthorizationKeystore implements Authorization {
 
         const userFact = await this.keystore.getUserFact(userIdentity);
         const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
-        const signedFacts = await mapAsync(authorizedFacts, async fact => (<FactEnvelope>{
-            fact,
-            signatures: await this.keystore.signFact(userIdentity, fact)
-        }))
+        const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
         const envelopes = await this.feed.save(signedFacts);
         return envelopes.map(envelope => envelope.fact);
     }
