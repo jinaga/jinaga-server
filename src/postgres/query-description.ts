@@ -1,4 +1,4 @@
-import { FactBookmark } from "../storage";
+import { FactBookmark } from "jinaga";
 
 export interface SpecificationLabel {
     name: string;

@@ -1,12 +1,19 @@
-import { AuthorizationEngine } from "../authorization/authorization-engine";
-import { Feed, Observable } from "../feed/feed";
-import { Channel } from "../fork/channel";
-import { LoginResponse } from "../http/messages";
+import {
+    AuthorizationEngine,
+    AuthorizationRules,
+    Channel,
+    FactEnvelope,
+    FactRecord,
+    FactReference,
+    Feed,
+    LoginResponse,
+    Observable,
+    Query,
+    Specification,
+    UserIdentity,
+} from "jinaga";
+
 import { Keystore } from "../keystore";
-import { Query } from "../query/query";
-import { Specification } from "../specification/specification";
-import { FactEnvelope, FactRecord, FactReference } from "../storage";
-import { UserIdentity } from "../user-identity";
 import { Authentication } from "./authentication";
 
 export class AuthenticationSession implements Authentication {

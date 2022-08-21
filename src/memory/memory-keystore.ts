@@ -1,9 +1,7 @@
+import { computeHash, FactEnvelope, FactRecord, PredecessorCollection, UserIdentity } from "jinaga";
 import { pki } from "node-forge";
 
-import { computeHash } from "../fact/hash";
 import { Keystore } from "../keystore";
-import { FactEnvelope, FactRecord, PredecessorCollection } from "../storage";
-import { UserIdentity } from "../user-identity";
 
 export class MemoryKeystore implements Keystore {
     private keyPairs: { [key: string]: { publicKey: string, privateKey: string }} = {};

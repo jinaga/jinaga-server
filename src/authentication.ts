@@ -1,8 +1,4 @@
-import { Feed, Observable } from './feed/feed';
-import { WebClient } from './http/web-client';
-import { Query } from './query/query';
-import { Specification } from "./specification/specification";
-import { FactEnvelope, FactRecord, FactReference } from './storage';
+import { FactEnvelope, FactRecord, FactReference, Feed, Observable, Query, Specification, WebClient } from "jinaga";
 
 export class Principal {
     

@@ -1,6 +1,4 @@
-import { Fork } from "../fork/fork";
-import { LoginResponse } from '../http/messages';
-import { FactRecord } from '../storage';
+import { FactRecord, Fork, LoginResponse } from "jinaga";
 
 export interface Authentication extends Fork {
     login(): Promise<LoginResponse>;

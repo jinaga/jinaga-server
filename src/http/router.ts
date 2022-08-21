@@ -1,14 +1,10 @@
 import { Handler, Router } from "express";
-
-import { Authorization } from "../authorization/authorization";
-import { Forbidden } from "../authorization/authorization-engine";
-import { fromDescriptiveString } from "../query/descriptive-string";
-import { Declaration } from "../specification/declaration";
-import { SpecificationParser } from "../specification/specification-parser";
-import { FactRecord } from "../storage";
-import { UserIdentity } from "../user-identity";
-import { Trace } from "../util/trace";
 import {
+    Authorization,
+    Declaration,
+    FactRecord,
+    Forbidden,
+    fromDescriptiveString,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
@@ -16,7 +12,10 @@ import {
     QueryResponse,
     SaveMessage,
     SaveResponse,
-} from "./messages";
+    SpecificationParser,
+    Trace,
+    UserIdentity,
+} from "jinaga";
 
 function get<U>(method: ((req: RequestUser) => Promise<U>)): Handler {
     return (req, res, next) => {

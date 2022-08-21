@@ -1,5 +1,14 @@
-import { Match, Specification, SpecificationProjection, ChildProjections, ResultProjection, SingularProjection, ElementProjection } from "../specification/specification";
-import { FactReference } from "../storage";
+import {
+    ChildProjections,
+    ElementProjection,
+    FactReference,
+    Match,
+    ResultProjection,
+    SingularProjection,
+    Specification,
+    SpecificationProjection,
+} from "jinaga";
+
 import { FactTypeMap, getFactTypeId, RoleMap } from "./maps";
 import { FactDescription, InputDescription, QueryDescription, SpecificationSqlQuery } from "./query-description";
 import { QueryDescriptionBuilder } from "./query-description-builder";

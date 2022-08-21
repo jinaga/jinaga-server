@@ -1,6 +1,6 @@
-import { HttpConnection, HttpResponse } from "./web-client";
 import * as http from "http";
 import * as https from "https";
+import { HttpConnection, HttpResponse } from "jinaga";
 import * as url from "url";
 
 export class NodeHttpConnection implements HttpConnection {

@@ -1,6 +1,6 @@
-import { Label, Match, PathCondition, Projection, Specification } from "../specification/specification";
-import { FactBookmark, FactReference } from "../storage";
-import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
+import { FactBookmark, FactReference, Match, Projection, Specification } from "jinaga";
+
+import { FactTypeMap, getFactTypeId, RoleMap } from "./maps";
 import { FactDescription, InputDescription, QueryDescription, SpecificationSqlQuery } from "./query-description";
 import { QueryDescriptionBuilder } from "./query-description-builder";
 

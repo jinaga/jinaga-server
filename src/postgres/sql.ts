@@ -1,5 +1,5 @@
-import { Direction, ExistentialCondition, Join, PropertyCondition, Quantifier, Step } from '../query/steps';
-import { FactReference } from '../storage';
+import { Direction, ExistentialCondition, FactReference, Join, PropertyCondition, Quantifier, Step } from "jinaga";
+
 import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
 export type SqlQuery = {

@@ -1,5 +1,4 @@
-import { FactEnvelope, FactRecord, FactSignature } from "./storage";
-import { UserIdentity } from "./user-identity";
+import { FactEnvelope, FactRecord, UserIdentity } from "jinaga";
 
 export interface Keystore {
     close(): Promise<void>;

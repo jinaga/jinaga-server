@@ -1,11 +1,6 @@
-import { Observable } from '../feed/feed';
-import { Channel } from "../fork/channel";
-import { Fork } from "../fork/fork";
-import { WebClient } from '../http/web-client';
-import { Query } from '../query/query';
-import { Specification } from "../specification/specification";
-import { FactEnvelope, FactRecord, FactReference } from '../storage';
-import { Authentication } from './authentication';
+import { Channel, FactEnvelope, FactRecord, FactReference, Fork, Observable, Query, Specification, WebClient } from "jinaga";
+
+import { Authentication } from "./authentication";
 
 export class Principal {
     

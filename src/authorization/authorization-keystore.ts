@@ -1,12 +1,17 @@
-import { Feed } from "../feed/feed";
+import {
+    Authorization,
+    AuthorizationEngine,
+    AuthorizationRules,
+    FactEnvelope,
+    FactRecord,
+    FactReference,
+    Feed,
+    Query,
+    Specification,
+    UserIdentity,
+} from "jinaga";
+
 import { Keystore } from "../keystore";
-import { Query } from "../query/query";
-import { Specification } from "../specification/specification";
-import { FactEnvelope, FactRecord, FactReference } from "../storage";
-import { UserIdentity } from "../user-identity";
-import { Authorization } from "./authorization";
-import { AuthorizationEngine } from "./authorization-engine";
-import { AuthorizationRules } from "./authorizationRules";
 
 export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;

@@ -1,11 +1,8 @@
+import { canonicalizeFact, computeHash, FactEnvelope, FactRecord, PredecessorCollection, Trace, UserIdentity } from "jinaga";
 import { md, pki, util } from "node-forge";
 import { PoolClient } from "pg";
 
-import { canonicalizeFact, computeHash } from "../fact/hash";
 import { Keystore } from "../keystore";
-import { FactEnvelope, FactRecord, PredecessorCollection } from "../storage";
-import { UserIdentity } from "../user-identity";
-import { Trace } from "../util/trace";
 import { ConnectionFactory } from "./connection";
 
 interface KeyPair {

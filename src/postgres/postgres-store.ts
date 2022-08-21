@@ -1,10 +1,7 @@
-import { PoolClient } from "pg";
-
-import { canonicalPredecessors } from "../fact/hash";
-import { Query } from "../query/query";
-import { Direction, ExistentialCondition, Join, PropertyCondition, Step } from "../query/steps";
-import { getAllFactTypes, getAllRoles, Specification } from "../specification/specification";
 import {
+    canonicalPredecessors,
+    Direction,
+    ExistentialCondition,
     FactBookmark,
     FactEnvelope,
     FactPath,
@@ -13,9 +10,18 @@ import {
     factReferenceEquals,
     FactStream,
     FactTuple,
+    getAllFactTypes,
+    getAllRoles,
+    Join,
     PredecessorCollection,
+    PropertyCondition,
+    Query,
+    Specification,
+    Step,
     Storage,
-} from "../storage";
+} from "jinaga";
+import { PoolClient } from "pg";
+
 import { distinct, flatten } from "../util/fn";
 import { ConnectionFactory, Row } from "./connection";
 import { EdgeRecord, makeEdgeRecords } from "./edge-record";

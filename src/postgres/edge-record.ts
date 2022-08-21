@@ -1,4 +1,4 @@
-import { FactRecord, FactReference } from '../storage';
+import { FactRecord, FactReference } from "jinaga";
 
 export type EdgeRecord = {
     predecessor_hash: string,

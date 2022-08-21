@@ -1,4 +1,5 @@
-import { Label, PathCondition } from "../specification/specification";
+import { Label, PathCondition } from "jinaga";
+
 import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 import { QueryDescription } from "./query-description";
 import { FactByIdentifier } from "./specification-result-sql";

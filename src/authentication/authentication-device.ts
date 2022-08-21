@@ -1,13 +1,18 @@
-import { Observable } from '../feed/feed';
-import { Channel } from "../fork/channel";
-import { Fork } from "../fork/fork";
-import { LoginResponse } from '../http/messages';
-import { Keystore } from '../keystore';
-import { Query } from '../query/query';
-import { Specification } from "../specification/specification";
-import { FactEnvelope, FactRecord, FactReference } from '../storage';
-import { UserIdentity } from "../user-identity";
-import { Authentication } from './authentication';
+import {
+    Channel,
+    FactEnvelope,
+    FactRecord,
+    FactReference,
+    Fork,
+    LoginResponse,
+    Observable,
+    Query,
+    Specification,
+    UserIdentity,
+} from "jinaga";
+
+import { Keystore } from "../keystore";
+import { Authentication } from "./authentication";
 
 export class AuthenticationDevice implements Authentication {
     constructor(
