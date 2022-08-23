@@ -1,9 +1,17 @@
-import 'source-map-support/register';
-import { dehydrateReference } from '../../src/fact/hydrate';
+import "source-map-support/register";
+
+import {
+  dehydrateReference,
+  Direction,
+  ExistentialCondition,
+  fromDescriptiveString,
+  Join,
+  PropertyCondition,
+  Step,
+} from "jinaga";
+
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, getFactTypeId, getRoleId } from "../../src/postgres/maps";
-import { sqlFromSteps } from '../../src/postgres/sql';
-import { fromDescriptiveString } from '../../src/query/descriptive-string';
-import { Direction, ExistentialCondition, Join, PropertyCondition, Step } from "../../src/query/steps";
+import { sqlFromSteps } from "../../src/postgres/sql";
 import { distinct } from "../../src/util/fn";
 
 describe('Postgres', () => {

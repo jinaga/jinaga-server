@@ -1,11 +1,7 @@
+import { AuthorizationRules, dehydrateFact, ensure, FactRecord, FeedImpl, hydrate, Jinaga as j, MemoryStore } from "jinaga";
+
 import { AuthorizationKeystore } from "../../src/authorization/authorization-keystore";
-import { AuthorizationRules } from "../../src/authorization/authorizationRules";
-import { dehydrateFact, hydrate } from "../../src/fact/hydrate";
-import { FeedImpl } from "../../src/feed/feed-impl";
-import { Jinaga as j, ensure } from "../../src/jinaga";
 import { MemoryKeystore } from "../../src/memory/memory-keystore";
-import { MemoryStore } from "../../src/memory/memory-store";
-import { FactRecord } from "../../src/storage";
 
 describe('Authorization', () => {
     it('should authorize empty save', async () => {

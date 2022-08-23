@@ -1,10 +1,8 @@
-import { dehydrateReference } from "../../src/fact/hydrate";
+import { dehydrateReference, FactBookmark, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
+
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, getFactTypeId, getRoleId } from "../../src/postgres/maps";
 import { SpecificationSqlQuery } from "../../src/postgres/query-description";
 import { sqlFromSpecification } from "../../src/postgres/specification-sql";
-import { getAllFactTypes, getAllRoles } from "../../src/specification/specification";
-import { SpecificationParser } from "../../src/specification/specification-parser";
-import { FactBookmark } from "../../src/storage";
 
 const root = dehydrateReference({ type: 'Root' });
 const rootHash = root.hash;
