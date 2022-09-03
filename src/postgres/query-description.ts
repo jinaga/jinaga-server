@@ -20,7 +20,7 @@ export interface InputDescription {
     factTypeParameter: number;
     factHashParameter: number;
 }
-interface OutputDescription {
+export interface OutputDescription {
     label: string;
     type: string;
     factIndex: number;
@@ -29,13 +29,13 @@ export interface FactDescription {
     type: string;
     factIndex: number;
 }
-interface EdgeDescription {
+export interface EdgeDescription {
     edgeIndex: number;
     predecessorFactIndex: number;
     successorFactIndex: number;
     roleParameter: number;
 }
-interface NotExistsConditionDescription {
+export interface NotExistsConditionDescription {
     edges: EdgeDescription[];
     notExistsConditions: NotExistsConditionDescription[];
 }
