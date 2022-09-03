@@ -1,4 +1,13 @@
-import { AuthorizationRules, dehydrateFact, ensure, FactRecord, FeedImpl, hydrate, Jinaga as j, MemoryStore } from "jinaga";
+import {
+    AuthorizationRules,
+    dehydrateFact,
+    ensure,
+    FactRecord,
+    hydrate,
+    Jinaga as j,
+    MemoryStore,
+    ObservableSourceImpl,
+} from "jinaga";
 
 import { AuthorizationKeystore } from "../../src/authorization/authorization-keystore";
 import { MemoryKeystore } from "../../src/memory/memory-keystore";
@@ -152,7 +161,7 @@ function givenStorage() {
 function givenAuthorizationWithStorage(storage: MemoryStore) {
     const keystore = new MemoryKeystore();
     keystore.getOrCreateUserFact(givenMockUserIdentity());
-    const feed = new FeedImpl(storage);
+    const feed = new ObservableSourceImpl(storage);
     const authorizationRules = new AuthorizationRules()
         .any('Hashtag')
         .no('Jinaga.User')
