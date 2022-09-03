@@ -296,43 +296,43 @@ describe("Postgres query generator", () => {
 
         expect(sqlQueries.length).toEqual(1);
         expect(sqlQueries[0].sql).toEqual(
-            'SELECT f3.hash as hash3, ' +
-            'f4.hash as hash4, ' +
-            'sort(array[f3.fact_id, f4.fact_id], \'desc\') as bookmark ' +
+            'SELECT f2.hash as hash2, ' +
+            'f3.hash as hash3, ' +
+            'sort(array[f2.fact_id, f3.fact_id], \'desc\') as bookmark ' +
             'FROM public.fact f1 ' +
-            'JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3 ' +
-            'JOIN public.fact f3 ON f3.fact_id = e1.successor_fact_id ' +
-            'JOIN public.edge e2 ON e2.predecessor_fact_id = f3.fact_id AND e2.role_id = $4 ' +
-            'JOIN public.fact f4 ON f4.fact_id = e2.successor_fact_id ' +
-            'JOIN public.edge e3 ON e3.successor_fact_id = f4.fact_id AND e3.role_id = $7 ' +
-            'JOIN public.fact f2 ON f2.fact_id = e3.predecessor_fact_id ' +
+            'JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $5 ' +
+            'JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id ' +
+            'JOIN public.edge e2 ON e2.predecessor_fact_id = f2.fact_id AND e2.role_id = $6 ' +
+            'JOIN public.fact f3 ON f3.fact_id = e2.successor_fact_id ' +
+            'JOIN public.edge e3 ON e3.successor_fact_id = f3.fact_id AND e3.role_id = $7 ' +
+            'JOIN public.fact f4 ON f4.fact_id = e3.predecessor_fact_id ' +
             'WHERE f1.fact_type_id = $1 AND f1.hash = $2 ' +
-            'AND f2.fact_type_id = $5 AND f2.hash = $6 ' +
-            'AND sort(array[f3.fact_id, f4.fact_id], \'desc\') > $8 ' +
+            'AND f4.fact_type_id = $3 AND f4.hash = $4 ' +
+            'AND sort(array[f2.fact_id, f3.fact_id], \'desc\') > $8 ' +
             'ORDER BY bookmark ASC ' +
             'LIMIT $9'
         );
         expect(sqlQueries[0].parameters).toEqual([
             getFactTypeId(factTypes, "Root"),
             rootHash,
-            roleParameter(roleMap, factTypes, "MyApplication.Project", "root"),
-            roleParameter(roleMap, factTypes, "MyApplication.Assignment", "project"),
             getFactTypeId(factTypes, "Jinaga.User"),
             userHash,
+            roleParameter(roleMap, factTypes, "MyApplication.Project", "root"),
+            roleParameter(roleMap, factTypes, "MyApplication.Assignment", "project"),
             roleParameter(roleMap, factTypes, "MyApplication.Assignment", "user"),
             [],
             100
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f3",
+                name: "f2",
                 type: "MyApplication.Project",
-                index: 3
+                index: 2
             },
             {
-                name: "f4",
+                name: "f3",
                 type: "MyApplication.Assignment",
-                index: 4
+                index: 3
             }
         ]);
     });
@@ -352,43 +352,43 @@ describe("Postgres query generator", () => {
 
         expect(sqlQueries.length).toEqual(1);
         expect(sqlQueries[0].sql).toEqual(
-            'SELECT f3.hash as hash3, ' +
-            'f4.hash as hash4, ' +
-            'sort(array[f3.fact_id, f4.fact_id], \'desc\') as bookmark ' +
-            'FROM public.fact f2 ' +
-            'JOIN public.edge e1 ON e1.predecessor_fact_id = f2.fact_id AND e1.role_id = $3 ' +
-            'JOIN public.fact f3 ON f3.fact_id = e1.successor_fact_id ' +
-            'JOIN public.edge e2 ON e2.predecessor_fact_id = f3.fact_id AND e2.role_id = $4 ' +
-            'JOIN public.fact f4 ON f4.fact_id = e2.successor_fact_id ' +
-            'JOIN public.edge e3 ON e3.successor_fact_id = f4.fact_id AND e3.role_id = $7 ' +
-            'JOIN public.fact f1 ON f1.fact_id = e3.predecessor_fact_id ' +
-            'WHERE f1.fact_type_id = $5 AND f1.hash = $6 ' +
-            'AND f2.fact_type_id = $1 AND f2.hash = $2 ' +
-            'AND sort(array[f3.fact_id, f4.fact_id], \'desc\') > $8 ' +
+            'SELECT f2.hash as hash2, ' +
+            'f3.hash as hash3, ' +
+            'sort(array[f2.fact_id, f3.fact_id], \'desc\') as bookmark ' +
+            'FROM public.fact f1 ' +
+            'JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $5 ' +
+            'JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id ' +
+            'JOIN public.edge e2 ON e2.predecessor_fact_id = f2.fact_id AND e2.role_id = $6 ' +
+            'JOIN public.fact f3 ON f3.fact_id = e2.successor_fact_id ' +
+            'JOIN public.edge e3 ON e3.successor_fact_id = f3.fact_id AND e3.role_id = $7 ' +
+            'JOIN public.fact f4 ON f4.fact_id = e3.predecessor_fact_id ' +
+            'WHERE f1.fact_type_id = $1 AND f1.hash = $2 ' +
+            'AND f4.fact_type_id = $3 AND f4.hash = $4 ' +
+            'AND sort(array[f2.fact_id, f3.fact_id], \'desc\') > $8 ' +
             'ORDER BY bookmark ASC ' +
             'LIMIT $9'
         );
         expect(sqlQueries[0].parameters).toEqual([
             getFactTypeId(factTypes, "Root"),
             rootHash,
-            roleParameter(roleMap, factTypes, "MyApplication.Project", "root"),
-            roleParameter(roleMap, factTypes, "MyApplication.Assignment", "project"),
             getFactTypeId(factTypes, "Jinaga.User"),
             userHash,
+            roleParameter(roleMap, factTypes, "MyApplication.Project", "root"),
+            roleParameter(roleMap, factTypes, "MyApplication.Assignment", "project"),
             roleParameter(roleMap, factTypes, "MyApplication.Assignment", "user"),
             [],
             100
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f3",
+                name: "f2",
                 type: "MyApplication.Project",
-                index: 3
+                index: 2
             },
             {
-                name: "f4",
+                name: "f3",
                 type: "MyApplication.Assignment",
-                index: 4
+                index: 3
             }
         ]);
     });
