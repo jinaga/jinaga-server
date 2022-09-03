@@ -1,13 +1,22 @@
-import { FactEnvelope, FactRecord, FactReference, Feed, Observable, Query, Specification, WebClient } from "jinaga";
+import {
+    FactEnvelope,
+    FactRecord,
+    FactReference,
+    Observable,
+    ObservableSource,
+    Query,
+    Specification,
+    WebClient,
+} from "jinaga";
 
 export class Principal {
     
 }
 
-export class Authentication implements Feed {
+export class Authentication implements ObservableSource {
     private principal: Principal;
 
-    constructor(private inner: Feed, private client: WebClient) {
+    constructor(private inner: ObservableSource, private client: WebClient) {
     }
 
     async close(): Promise<void> {

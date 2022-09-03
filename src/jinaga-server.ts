@@ -4,11 +4,11 @@ import {
     AuthorizationNoOp,
     AuthorizationRules,
     Cache,
-    Feed,
     FeedImpl,
     Fork,
     Jinaga,
     MemoryStore,
+    ObservableSource,
     PassThroughFork,
     Storage,
     SyncStatusNotifier,
@@ -87,7 +87,7 @@ function createStore(config: JinagaServerConfig): Storage {
     }
 }
 
-function createFork(config: JinagaServerConfig, feed: Feed, syncStatusNotifier: SyncStatusNotifier): Fork {
+function createFork(config: JinagaServerConfig, feed: ObservableSource, syncStatusNotifier: SyncStatusNotifier): Fork {
     if (config.httpEndpoint) {
         const httpConnection = new NodeHttpConnection(config.httpEndpoint);
         const httpTimeoutSeconds = config.httpTimeoutSeconds || 5;
@@ -102,7 +102,7 @@ function createFork(config: JinagaServerConfig, feed: Feed, syncStatusNotifier: 
     }
 }
 
-function createAuthorization(authorizationRules: AuthorizationRules | null, feed: Feed, keystore: Keystore | null): Authorization {
+function createAuthorization(authorizationRules: AuthorizationRules | null, feed: ObservableSource, keystore: Keystore | null): Authorization {
     if (keystore) {
         const authorization = new AuthorizationKeystore(feed, keystore, authorizationRules);
         return authorization;
@@ -112,7 +112,7 @@ function createAuthorization(authorizationRules: AuthorizationRules | null, feed
     }
 }
 
-async function withSession(feed: Feed, keystore: Keystore, authorizationRules: AuthorizationRules | null, req: Request, callback: ((j: Jinaga) => Promise<void>)) {
+async function withSession(feed: ObservableSource, keystore: Keystore, authorizationRules: AuthorizationRules | null, req: Request, callback: ((j: Jinaga) => Promise<void>)) {
     const user = <RequestUser>req.user;
     const userIdentity: UserIdentity = {
         provider: user.provider,

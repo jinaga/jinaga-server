@@ -5,7 +5,7 @@ import {
     FactEnvelope,
     FactRecord,
     FactReference,
-    Feed,
+    ObservableSource,
     Query,
     Specification,
     UserIdentity,
@@ -17,7 +17,7 @@ export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private feed: Feed,
+        private feed: ObservableSource,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null) {
 

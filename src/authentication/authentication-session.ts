@@ -5,9 +5,9 @@ import {
     FactEnvelope,
     FactRecord,
     FactReference,
-    Feed,
     LoginResponse,
     Observable,
+    ObservableSource,
     Query,
     Specification,
     UserIdentity,
@@ -20,7 +20,7 @@ export class AuthenticationSession implements Authentication {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private inner: Feed,
+        private inner: ObservableSource,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null,
         private userIdentity: UserIdentity,
