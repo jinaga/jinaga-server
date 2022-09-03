@@ -4,11 +4,11 @@ import {
     AuthorizationNoOp,
     AuthorizationRules,
     Cache,
-    FeedImpl,
     Fork,
     Jinaga,
     MemoryStore,
     ObservableSource,
+    ObservableSourceImpl,
     PassThroughFork,
     Storage,
     SyncStatusNotifier,
@@ -51,8 +51,8 @@ export class JinagaServer {
     static create(config: JinagaServerConfig): JinagaServerInstance {
         const syncStatusNotifier = new SyncStatusNotifier();
         const store = createStore(config);
-        const feed = new FeedImpl(store);
-        const fork = createFork(config, feed, syncStatusNotifier);
+        const source = new ObservableSourceImpl(store);
+        const fork = createFork(config, source, syncStatusNotifier);
         const keystore = new PostgresKeystore(config.pgKeystore);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules()) : null;
         const authorization = createAuthorization(authorizationRules, fork, keystore);
@@ -69,7 +69,7 @@ export class JinagaServer {
             handler: router.handler,
             j,
             withSession: (req, callback) => {
-                return withSession(feed, keystore, authorizationRules, req, callback);
+                return withSession(source, keystore, authorizationRules, req, callback);
             },
             close
         }
