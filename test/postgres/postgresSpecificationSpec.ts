@@ -15,7 +15,7 @@ function parseSpecification(input: string) {
     return parser.parseSpecification();
 }
 
-function sqlFor(descriptiveString: string, bookmarks: FactBookmark[] = []) {
+function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
     const specification = parseSpecification(descriptiveString);
     const factTypeNames = getAllFactTypes(specification);
 
@@ -486,18 +486,9 @@ describe("Postgres query generator", () => {
                     ]
                 }
             }`, [
-                {
-                    labels: [ "project" ],
-                    bookmark: "123"
-                },
-                {
-                    labels: [ "project", "names.name", "names.next" ],
-                    bookmark: "456.345.234"
-                },
-                {
-                    labels: [ "project", "names.name" ],
-                    bookmark: "789.678"
-                }
+                "123",
+                "456.345.234",
+                "789.678"
             ]);
 
         expect(sqlQueries.length).toEqual(3);

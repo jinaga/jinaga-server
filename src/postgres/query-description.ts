@@ -217,7 +217,7 @@ export class QueryDescription {
         return this.outputs.length;
     }
 
-    generateSqlQuery(bookmarks: FactBookmark[], limit: number): SpecificationSqlQuery {
+    generateSqlQuery(bookmark: string, limit: number): SpecificationSqlQuery {
         const hashes = this.outputs
             .map(output => `f${output.factIndex}.hash as hash${output.factIndex}`)
             .join(", ");
@@ -239,10 +239,6 @@ export class QueryDescription {
             .join("");
         const bookmarkParameter = this.parameters.length + 1;
         const limitParameter = bookmarkParameter + 1;
-        const bookmark = bookmarks.find(bookmark =>
-            bookmark.labels.length === this.outputs.length &&
-            bookmark.labels.every((label, index) => label === this.outputs[index].label)
-        );
         const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
         const bookmarkValue: number[] = parseBookmark(bookmark);
         return {
@@ -375,11 +371,11 @@ function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDe
     return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
 }
 
-function parseBookmark(bookmark: FactBookmark): number[] {
-    if (bookmark === undefined || bookmark === null || bookmark.bookmark === "") {
+function parseBookmark(bookmark: string): number[] {
+    if (bookmark === undefined || bookmark === null || bookmark === "") {
         return [];
     }
     else {
-        return bookmark.bookmark.split(".").map(str => parseInt(str));
+        return bookmark.split(".").map(str => parseInt(str));
     }
 }

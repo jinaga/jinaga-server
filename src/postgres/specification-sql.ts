@@ -135,15 +135,16 @@ class DescriptionBuilder extends QueryDescriptionBuilder {
     }
 }
 
-export function sqlFromSpecification(start: FactReference[], bookmarks: FactBookmark[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
+export function sqlFromSpecification(start: FactReference[], bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
     const feeds = buildFeeds(start, specification);
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
-    const descriptions = feeds.map(feed =>
-        descriptionBuilder.buildDescription(start, feed)
-    );
+    const descriptionsAndBookmarks = feeds.map((feed, i) => ({
+        description: descriptionBuilder.buildDescription(start, feed),
+        bookmark: bookmarks[i]
+    }));
 
     // Only generate SQL for satisfiable queries.
-    return descriptions
-        .filter(description => description.isSatisfiable())
-        .map(description => description.generateSqlQuery(bookmarks, limit));
+    return descriptionsAndBookmarks
+        .filter(d => d.description.isSatisfiable())
+        .map(d => d.description.generateSqlQuery(d.bookmark, limit));
 }
