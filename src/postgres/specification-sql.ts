@@ -27,7 +27,37 @@ class DescriptionBuilder extends QueryDescriptionBuilder {
         roleMap: RoleMap
     ) { super(factTypes, roleMap); }
 
-    buildDescription(start: FactReference[], feed: Feed): QueryDescription {
+    isSatisfiable(feed: Feed, edges: FeedEdgeDescription[]): boolean {
+        for (const edge of edges) {
+            const successor = feed.facts.find(f => f.factIndex === edge.successorFactIndex);
+            if (!successor) {
+                return false;
+            }
+
+            const predecessor = feed.facts.find(f => f.factIndex === edge.predecessorFactIndex);
+            if (!predecessor) {
+                return false;
+            }
+
+            const successorFactTypeId = getFactTypeId(this.factTypes, successor.factType);
+            if (!successorFactTypeId) {
+                return false;
+            }
+
+            if (!getRoleId(this.roleMap, successorFactTypeId, edge.roleName)) {
+                return false;
+            }
+
+            const predecessorFactTypeId = getFactTypeId(this.factTypes, predecessor.factType);
+            if (!predecessorFactTypeId) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    buildDescription(feed: Feed): QueryDescription {
         const parameters: (string | number)[] = [];
         function addParameter(value: string | number) {
             parameters.push(value);
@@ -45,7 +75,10 @@ class DescriptionBuilder extends QueryDescriptionBuilder {
         );
 
         // Allocate parameters for the conditional roles.
-        const notExistsConditions: NotExistsConditionDescription[] = feed.notExistsConditions.map(condition =>
+        const satisfiableNotExistsConditions = feed.notExistsConditions.filter(condition =>
+            this.isSatisfiable(feed, condition.edges)
+        );
+        const notExistsConditions: NotExistsConditionDescription[] = satisfiableNotExistsConditions.map(condition =>
             this.buildNotExistsConditionDescription(feed, condition, addParameter)
         );
 
@@ -146,13 +179,16 @@ class DescriptionBuilder extends QueryDescriptionBuilder {
 export function sqlFromSpecification(start: FactReference[], bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
     const feeds = buildFeeds(start, specification);
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
-    const descriptionsAndBookmarks = feeds.map((feed, i) => ({
-        description: descriptionBuilder.buildDescription(start, feed),
-        bookmark: bookmarks[i]
+    const feedAndBookmark = feeds.map((feed, index) => ({
+        feed,
+        bookmark: bookmarks[index]
     }));
-
-    // Only generate SQL for satisfiable queries.
-    return descriptionsAndBookmarks
-        .filter(d => d.description.isSatisfiable())
-        .map(d => d.description.generateSqlQuery(d.bookmark, limit));
+    const satisfiableFeedsAndBookmarks = feedAndBookmark.filter(fb =>
+        descriptionBuilder.isSatisfiable(fb.feed, fb.feed.edges));
+    const sqlQueries = satisfiableFeedsAndBookmarks.map(fb => {
+        const description = descriptionBuilder.buildDescription(fb.feed);
+        const sql = description.generateSqlQuery(fb.bookmark, limit);
+        return sql;
+    });
+    return sqlQueries;
 }
