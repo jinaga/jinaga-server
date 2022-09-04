@@ -636,7 +636,7 @@ describe("Postgres query generator", () => {
         const { sqlQueries } = sqlFor(`
             (root: Root) {
                 successor: MyApplication.Successor [
-                    successor = root->intermediate: Unknown->root: Root
+                    successor = root->intermediate: Unknown->successor: MyApplication.Successor
                 ]
             }`);
 
@@ -658,7 +658,7 @@ describe("Postgres query generator", () => {
         const { sqlQueries } = sqlFor(`
             (root: Root) {
                 successor: MyApplication.Successor [
-                    successor = root->unknown: Intermediate->root: Root
+                    successor = root->unknown: Intermediate->successor: MyApplication.Successor
                 ]
             }`);
 
