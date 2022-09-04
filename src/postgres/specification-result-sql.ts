@@ -2,18 +2,356 @@ import {
     ChildProjections,
     ElementProjection,
     FactReference,
+    Label,
     Match,
+    PathCondition,
     ResultProjection,
     SingularProjection,
     Specification,
     SpecificationProjection,
 } from "jinaga";
 
-import { FactTypeMap, getFactTypeId, RoleMap } from "./maps";
-import { FactDescription, InputDescription, QueryDescription, SpecificationSqlQuery } from "./query-description";
-import { QueryDescriptionBuilder } from "./query-description-builder";
+import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
-export type FactByIdentifier = {
+interface SpecificationLabel {
+    name: string;
+    type: string;
+    index: number;
+}
+interface FactDescription {
+    type: string;
+    factIndex: number;
+}
+interface EdgeDescription {
+    edgeIndex: number;
+    predecessorFactIndex: number;
+    successorFactIndex: number;
+    roleParameter: number;
+}
+interface NotExistsConditionDescription {
+    edges: EdgeDescription[];
+    notExistsConditions: NotExistsConditionDescription[];
+}
+interface SpecificationSqlQuery {
+    sql: string;
+    parameters: (string | number | number[])[];
+    labels: SpecificationLabel[];
+    bookmark: string;
+};
+interface InputDescription {
+    label: string;
+    factIndex: number;
+    factTypeId: number;
+    factHash: string;
+    factTypeParameter: number;
+    factHashParameter: number;
+}
+interface OutputDescription {
+    label: string;
+    type: string;
+    factIndex: number;
+}
+
+function countEdges(notExistsConditions: NotExistsConditionDescription[]): number {
+    return notExistsConditions.reduce((count, c) => count + c.edges.length + countEdges(c.notExistsConditions),
+        0);
+}
+
+class QueryDescription {
+    // An unsatisfiable query description will produce no results.
+    static unsatisfiable: QueryDescription = new QueryDescription(
+        [], [], [], [], [], []
+    );
+
+    constructor(
+        private readonly inputs: InputDescription[],
+        private readonly parameters: (string | number)[],
+        private readonly outputs: OutputDescription[],
+        private readonly facts: FactDescription[],
+        private readonly edges: EdgeDescription[],
+        private readonly notExistsConditions: NotExistsConditionDescription[] = []
+    ) {}
+
+    public withParameter(parameter: string | number): { query: QueryDescription; parameterIndex: number; } {
+        const parameterIndex = this.parameters.length + 1;
+        const query = new QueryDescription(
+            this.inputs,
+            this.parameters.concat(parameter),
+            this.outputs,
+            this.facts,
+            this.edges,
+            this.notExistsConditions
+        );
+        return { query, parameterIndex };
+    }
+
+    public withInputParameter(label: string): QueryDescription {
+        const factTypeParameter = this.parameters.length + 1;
+        const factHashParameter = factTypeParameter + 1;
+        const input = this.inputs.find(i => i.label === label);
+        const inputs = this.inputs.map(input => input.label === label
+            ? { ...input, factTypeParameter, factHashParameter }
+            : input
+        );
+        return new QueryDescription(
+            inputs,
+            this.parameters.concat(input.factTypeId, input.factHash),
+            this.outputs,
+            this.facts,
+            this.edges,
+            this.notExistsConditions
+        );
+    }
+
+    public withFact(type: string): { query: QueryDescription; factIndex: number; } {
+        const factIndex = this.facts.length + 1;
+        const fact = { factIndex, type };
+        const query = new QueryDescription(
+            this.inputs,
+            this.parameters,
+            this.outputs,
+            this.facts.concat(fact),
+            this.edges,
+            this.notExistsConditions
+        );
+        return { query, factIndex };
+    }
+
+    public withOutput(label: string, type: string, factIndex: number): QueryDescription {
+        const output = { label, type, factIndex };
+        const query = new QueryDescription(
+            this.inputs,
+            this.parameters,
+            this.outputs.concat(output),
+            this.facts,
+            this.edges,
+            this.notExistsConditions
+        );
+        return query;
+    }
+
+    public withEdge(predecessorFactIndex: number, successorFactIndex: number, roleParameter: number, path: number[]) {
+        const edge = {
+            edgeIndex: this.edges.length + countEdges(this.notExistsConditions) + 1,
+            predecessorFactIndex,
+            successorFactIndex,
+            roleParameter
+        };
+        const query = (path.length === 0)
+            ? new QueryDescription(
+                this.inputs,
+                this.parameters,
+                this.outputs,
+                this.facts,
+                this.edges.concat(edge),
+                this.notExistsConditions
+            )
+            : new QueryDescription(
+                this.inputs,
+                this.parameters,
+                this.outputs,
+                this.facts,
+                this.edges,
+                notExistsWithEdge(this.notExistsConditions, edge, path)
+            );
+        return query;
+    }
+
+    public withNotExistsCondition(path: number[]): { query: QueryDescription; path: number[]; } {
+        const { notExistsConditions: newNotExistsConditions, path: newPath } = notExistsWithCondition(this.notExistsConditions, path);
+        const query = new QueryDescription(
+            this.inputs,
+            this.parameters,
+            this.outputs,
+            this.facts,
+            this.edges,
+            newNotExistsConditions
+        );
+        return { query, path: newPath };
+    }
+
+    isSatisfiable() {
+        return this.inputs.length > 0;
+    }
+
+    hasOutput(label: string) {
+        return this.outputs.some(o => o.label === label);
+    }
+
+    inputByLabel(label: string): InputDescription | undefined {
+        return this.inputs.find(i => i.label === label);
+    }
+
+    outputLength(): number {
+        return this.outputs.length;
+    }
+
+    generateResultSqlQuery(): SpecificationSqlQuery {
+        const columns = this.outputs
+            .map(output => `f${output.factIndex}.hash as hash${output.factIndex}, f${output.factIndex}.fact_id as id${output.factIndex}, f${output.factIndex}.data as data${output.factIndex}`)
+            .join(", ");
+        const firstEdge = this.edges[0];
+        const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
+        const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
+        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact.factIndex;
+        const writtenFactIndexes = new Set<number>().add(firstFactIndex);
+        const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
+        const inputWhereClauses = this.inputs
+            .filter(input => input.factTypeParameter !== 0)
+            .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+            .join(" AND ");
+        const notExistsWhereClauses = this.notExistsConditions
+            .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(notExistsWhereClause, writtenFactIndexes)})`)
+            .join("");
+        const orderByClause = this.outputs
+            .map(output => `f${output.factIndex}.fact_id ASC`)
+            .join(", ");
+        const sql = `SELECT ${columns} FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} ORDER BY ${orderByClause}`;
+        return {
+            sql,
+            parameters: this.parameters,
+            labels: this.outputs.map(output => ({
+                name: output.label,
+                type: output.type,
+                index: output.factIndex
+            })),
+            bookmark: "[]"
+        };
+    }
+}
+
+function notExistsWithEdge(notExistsConditions: NotExistsConditionDescription[], edge: { edgeIndex: number; predecessorFactIndex: number; successorFactIndex: number; roleParameter: number; }, path: number[]): NotExistsConditionDescription[] {
+    if (path.length === 1) {
+        return notExistsConditions.map((c, i) => i === path[0] ?
+            {
+                edges: [...c.edges, edge],
+                notExistsConditions: c.notExistsConditions
+            } :
+            c
+        );
+    }
+    else {
+        return notExistsConditions.map((c, i) => i === path[0] ?
+            {
+                edges: c.edges,
+                notExistsConditions: notExistsWithEdge(c.notExistsConditions, edge, path.slice(1))
+            } :
+            c
+        );
+    }
+}
+
+function notExistsWithCondition(notExistsConditions: NotExistsConditionDescription[], path: number[]): { notExistsConditions: NotExistsConditionDescription[]; path: number[]; } {
+    if (path.length === 0) {
+        path = [notExistsConditions.length];
+        notExistsConditions = [
+            ...notExistsConditions,
+            {
+                edges: [],
+                notExistsConditions: []
+            }
+        ];
+        return { notExistsConditions, path };
+    }
+    else {
+        const { notExistsConditions: newNotExistsConditions, path: newPath } = notExistsWithCondition(notExistsConditions[path[0]].notExistsConditions, path.slice(1));
+        notExistsConditions = notExistsConditions.map((c, i) => i === path[0] ?
+            {
+                edges: c.edges,
+                notExistsConditions: newNotExistsConditions
+            } :
+            c
+        );
+        path = [path[0], ...newPath];
+        return { notExistsConditions, path };
+    }
+}
+
+function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
+    const joins: string[] = [];
+    edges.forEach(edge => {
+        if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
+            if (writtenFactIndexes.has(edge.successorFactIndex)) {
+                joins.push(
+                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
+                    ` AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
+                    ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                );
+            }
+            else {
+                joins.push(
+                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
+                    ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                );
+                joins.push(
+                    ` JOIN public.fact f${edge.successorFactIndex}` +
+                    ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
+                );
+                writtenFactIndexes.add(edge.successorFactIndex);
+            }
+        }
+        else if (writtenFactIndexes.has(edge.successorFactIndex)) {
+            joins.push(
+                ` JOIN public.edge e${edge.edgeIndex}` +
+                ` ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
+                ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+            );
+            joins.push(
+                ` JOIN public.fact f${edge.predecessorFactIndex}` +
+                ` ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id`
+            );
+            writtenFactIndexes.add(edge.predecessorFactIndex);
+        }
+        else {
+            throw new Error("Neither predecessor nor successor fact has been written");
+        }
+    });
+    return joins;
+}
+
+function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDescription, outerFactIndexes: Set<number>): string {
+    const firstEdge = notExistsWhereClause.edges[0];
+    const writtenFactIndexes = new Set<number>(outerFactIndexes);
+    const firstJoin: string[] = [];
+    const whereClause: string[] = [];
+    if (writtenFactIndexes.has(firstEdge.predecessorFactIndex)) {
+        if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
+            throw new Error("Not yet implemented");
+        }
+        else {
+            whereClause.push(
+                `e${firstEdge.edgeIndex}.predecessor_fact_id = f${firstEdge.predecessorFactIndex}.fact_id` +
+                ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
+            );
+            firstJoin.push(
+                ` JOIN public.fact f${firstEdge.successorFactIndex}` +
+                ` ON f${firstEdge.successorFactIndex}.fact_id = e${firstEdge.edgeIndex}.successor_fact_id`
+            );
+            writtenFactIndexes.add(firstEdge.successorFactIndex);
+        }
+    }
+    else if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
+        whereClause.push(
+            `e${firstEdge.edgeIndex}.successor_fact_id = f${firstEdge.successorFactIndex}.fact_id` +
+            ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
+        );
+        firstJoin.push(
+            ` JOIN public.fact f${firstEdge.predecessorFactIndex}` +
+            ` ON f${firstEdge.predecessorFactIndex}.fact_id = e${firstEdge.edgeIndex}.predecessor_fact_id`
+        );
+        writtenFactIndexes.add(firstEdge.predecessorFactIndex);
+    }
+    else {
+        throw new Error("Neither predecessor nor successor fact has been written");
+    }
+    const tailJoins: string[] = generateJoins(notExistsWhereClause.edges.slice(1), writtenFactIndexes);
+    const joins = firstJoin.concat(tailJoins);
+    return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
+}
+
+type FactByIdentifier = {
     [identifier: string]: FactDescription;
 };
 
@@ -206,13 +544,11 @@ interface NamedResultComposer {
     resultComposer: ResultComposer;
 }
 
-class ResultDescriptionBuilder extends QueryDescriptionBuilder {
+class ResultDescriptionBuilder {
     constructor(
-        factTypes: FactTypeMap,
-        roleMap: RoleMap
-    ) {
-        super(factTypes, roleMap);
-    }
+        private factTypes: FactTypeMap,
+        private roleMap: RoleMap
+    ) { }
 
     buildDescription(start: FactReference[], specification: Specification): ResultDescription {
         // Verify that the number of start facts equals the number of inputs
@@ -332,6 +668,110 @@ class ResultDescriptionBuilder extends QueryDescriptionBuilder {
             queryDescription,
             knownFacts
         };
+    }
+
+    private addPathCondition(queryDescription: QueryDescription, knownFacts: FactByIdentifier, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
+        // If no input parameter has been allocated, allocate one now.
+        const input = queryDescription.inputByLabel(condition.labelRight);
+        if (input && input.factTypeParameter === 0) {
+            queryDescription = queryDescription.withInputParameter(input.label);
+        }
+
+        // Determine whether we have already written the output.
+        const knownFact = knownFacts[unknown.name];
+        const roleCount = condition.rolesLeft.length + condition.rolesRight.length;
+
+        // Walk up the right-hand side.
+        // This generates predecessor joins from a given or prior label.
+        let fact = knownFacts[condition.labelRight];
+        if (!fact) {
+            throw new Error(`Label ${condition.labelRight} not found. Known labels: ${Object.keys(knownFacts).join(", ")}`);
+        }
+        let type = fact.type;
+        let factIndex = fact.factIndex;
+        for (const [i, role] of condition.rolesRight.entries()) {
+            // If the type or role is not known, then no facts matching the condition can
+            // exist. The query is unsatisfiable.
+            const typeId = getFactTypeId(this.factTypes, type);
+            if (!typeId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+            const roleId = getRoleId(this.roleMap, typeId, role.name);
+            if (!roleId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+
+            const { query: queryWithParameter, parameterIndex: roleParameter } = queryDescription.withParameter(roleId);
+            if (i === roleCount - 1 && knownFact) {
+                // If we have already written the output, we can use the fact index.
+                queryDescription = queryWithParameter.withEdge(knownFact.factIndex, factIndex, roleParameter, path);
+                factIndex = knownFact.factIndex;
+            }
+            else {
+                // If we have not written the fact, we need to write it now.
+                const { query, factIndex: predecessorFactIndex } = queryWithParameter.withFact(role.targetType);
+                queryDescription = query.withEdge(predecessorFactIndex, factIndex, roleParameter, path);
+                factIndex = predecessorFactIndex;
+            }
+            type = role.targetType;
+        }
+
+        const rightType = type;
+
+        // Walk up the left-hand side.
+        // We will need to reverse this walk to generate successor joins.
+        type = unknown.type;
+        const newEdges: {
+            roleId: number;
+            declaringType: string;
+        }[] = [];
+        for (const role of condition.rolesLeft) {
+            // If the type or role is not known, then no facts matching the condition can
+            // exist. The query is unsatisfiable.
+            const typeId = getFactTypeId(this.factTypes, type);
+            if (!typeId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+            const roleId = getRoleId(this.roleMap, typeId, role.name);
+            if (!roleId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+
+            newEdges.push({
+                roleId,
+                declaringType: type
+            });
+            type = role.targetType;
+        }
+
+        if (type !== rightType) {
+            throw new Error(`Type mismatch: ${type} is compared to ${rightType}`);
+        }
+
+        newEdges.reverse().forEach(({ roleId, declaringType }, i) => {
+            const { query: queryWithParameter, parameterIndex: roleParameter } = queryDescription.withParameter(roleId);
+            if (condition.rolesRight.length + i === roleCount - 1 && knownFact) {
+                queryDescription = queryWithParameter.withEdge(factIndex, knownFact.factIndex, roleParameter, path);
+                factIndex = knownFact.factIndex;
+            }
+            else {
+                const { query: queryWithFact, factIndex: successorFactIndex } = queryWithParameter.withFact(declaringType);
+                queryDescription = queryWithFact.withEdge(factIndex, successorFactIndex, roleParameter, path);
+                factIndex = successorFactIndex;
+            }
+        });
+
+        // If we have not captured the known fact, add it now.
+        if (!knownFact) {
+            knownFacts = { ...knownFacts, [unknown.name]: { factIndex, type: unknown.type } };
+            // If we have not written the output, write it now.
+            // Only write the output if we are not inside of an existential condition.
+            // Use the prefix, which will be set for projections.
+            if (path.length === 0) {
+                queryDescription = queryDescription.withOutput(prefix + unknown.name, unknown.type, factIndex);
+            }
+        }
+        return { queryDescription, knownFacts };
     }
 }
 

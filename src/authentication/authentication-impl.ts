@@ -1,4 +1,5 @@
-import { Channel, FactEnvelope, FactRecord, FactReference, Fork, Observable, Query, Specification, WebClient } from "jinaga";
+import { Channel, FactEnvelope, FactRecord, FactReference, Feed, Fork, Observable, Query, Specification, WebClient } from "jinaga";
+import { FactFeed } from "jinaga/dist/storage";
 
 import { Authentication } from "./authentication";
 
@@ -7,8 +8,6 @@ export class Principal {
 }
 
 export class AuthenticationImpl implements Authentication {
-    private principal: Principal;
-
     constructor(private inner: Fork, private client: WebClient) {
     }
 
@@ -35,6 +34,10 @@ export class AuthenticationImpl implements Authentication {
 
     read(start: FactReference[], specification: Specification): Promise<any[]> {
         return this.inner.read(start, specification);
+    }
+
+    feed(feed: Feed, bookmark: string): Promise<FactFeed> {
+        return this.inner.feed(feed, bookmark);
     }
 
     whichExist(references: FactReference[]): Promise<FactReference[]> {

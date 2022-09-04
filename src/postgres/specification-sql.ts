@@ -1,138 +1,358 @@
-import { FactBookmark, FactReference, Match, Projection, Specification } from "jinaga";
+import {
+    buildFeeds,
+    EdgeDescription as FeedEdgeDescription,
+    FactReference,
+    Feed,
+    InputDescription as FeedInputDescription,
+    NotExistsConditionDescription as FeedNotExistsConditionDescription,
+    OutputDescription as FeedOutputDescription,
+    Specification,
+} from "jinaga";
 
-import { FactTypeMap, getFactTypeId, RoleMap } from "./maps";
-import { FactDescription, InputDescription, QueryDescription, SpecificationSqlQuery } from "./query-description";
-import { QueryDescriptionBuilder } from "./query-description-builder";
+import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
-type FactByIdentifier = {
-    [identifier: string]: FactDescription;
+interface SpecificationLabel {
+    type: string;
+    index: number;
+}
+
+interface SpecificationSqlQuery {
+    sql: string;
+    parameters: (string | number | number[])[];
+    labels: SpecificationLabel[];
+    bookmark: string;
 };
 
-class DescriptionBuilder extends QueryDescriptionBuilder {
+interface InputDescription {
+    factIndex: number;
+    factTypeId: number;
+    factHash: string;
+    factTypeParameter: number;
+    factHashParameter: number;
+}
+interface OutputDescription {
+    type: string;
+    factIndex: number;
+}
+interface EdgeDescription {
+    edgeIndex: number;
+    predecessorFactIndex: number;
+    successorFactIndex: number;
+    roleParameter: number;
+}
+interface NotExistsConditionDescription {
+    edges: EdgeDescription[];
+    notExistsConditions: NotExistsConditionDescription[];
+}
+class QueryDescription {
     constructor(
-        factTypes: FactTypeMap,
-        roleMap: RoleMap
-    ) { super(factTypes, roleMap); }
+        private readonly inputs: InputDescription[],
+        private readonly parameters: (string | number)[],
+        private readonly outputs: OutputDescription[],
+        private readonly edges: EdgeDescription[],
+        private readonly notExistsConditions: NotExistsConditionDescription[] = []
+    ) {}
 
-    public buildDescriptions(start: FactReference[], specification: Specification): QueryDescription[] {
-        // Verify that the number of start facts equals the number of inputs
-        if (start.length !== specification.given.length) {
-            throw new Error(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
-        }
-        // Verify that the input type matches the start fact type
-        for (let i = 0; i < start.length; i++) {
-            if (start[i].type !== specification.given[i].type) {
-                throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
-            }
-        }
-
-        // Allocate a fact table for each given.
-        // While the fact type and hash parameters are zero, the join will not be written.
-        const inputs: InputDescription[] = specification.given
-            .map((label, i) => ({
-                label: label.name,
-                factIndex: i+1,
-                factTypeId: getFactTypeId(this.factTypes, label.type),
-                factHash: start[i].hash,
-                factTypeParameter: 0,
-                factHashParameter: 0
-            }));
-        const facts: FactDescription[] = specification.given
-            .map((label, i) => ({
-                factIndex: i+1,
-                type: label.type
-            }));
-        const givenFacts = specification.given.reduce((knownFacts, label, i) => ({
-            ...knownFacts,
-            [label.name]: facts[i]
-        }), {} as FactByIdentifier);
-
-
-        // The QueryDescription is an immutable data type.
-        // Initialize it with the inputs and facts.
-        // The DescriptionBuilder will branch at various points, and
-        // build on the current query description along each branch.
-        const initialQueryDescription = new QueryDescription(inputs, [], [], facts, [], []);
-        const { queryDescriptions, knownFacts } = this.addEdges(initialQueryDescription, givenFacts, [], "", specification.matches);
-
-        // The final query description represents the complete tuple.
-        // Build projections onto that one.
-        const finalQueryDescription = queryDescriptions[queryDescriptions.length - 1];
-        if (Array.isArray(specification.childProjections)) {
-            const queryDescriptionsWithProjections = this.addProjections(finalQueryDescription, knownFacts, specification.childProjections);
-            return [ ...queryDescriptions, ...queryDescriptionsWithProjections ];
-        }
-        else {
-            return queryDescriptions;
-        }
-    }
-
-    private addEdges(queryDescription: QueryDescription, knownFacts: FactByIdentifier, path: number[], prefix: string, matches: Match[]): { queryDescriptions: QueryDescription[], knownFacts: FactByIdentifier } {
-        const queryDescriptions: QueryDescription[] = [];
-        for (const match of matches) {
-            for (const condition of match.conditions) {
-                if (condition.type === "path") {
-                    ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, knownFacts, path, match.unknown, prefix, condition));
-                }
-                else if (condition.type === "existential") {
-                    if (condition.exists) {
-                        // Include the edges of the existential condition into the current
-                        // query description.
-                        const { queryDescriptions: newQueryDescriptions } = this.addEdges(queryDescription, knownFacts, path, prefix, condition.matches);
-                        const last = newQueryDescriptions.length - 1;
-                        queryDescriptions.push(...newQueryDescriptions.slice(0, last));
-                        queryDescription = newQueryDescriptions[last];
-                    }
-                    else {
-                        // Branch from the current query description and follow the
-                        // edges of the existential condition.
-                        // This will produce tuples that prove the condition false.
-                        const { queryDescriptions: newQueryDescriptions } = this.addEdges(queryDescription, knownFacts, path, prefix, condition.matches);
-                        
-                        // Then apply the where clause and continue with the tuple where it is true.
-                        // The path describes which not-exists condition we are currently building on.
-                        // Because the path is not empty, labeled facts will be included in the output.
-                        const { query: queryDescriptionWithNotExist, path: conditionalPath } = queryDescription.withNotExistsCondition(path);
-                        const { queryDescriptions: newQueryDescriptionsWithNotExists } = this.addEdges(queryDescriptionWithNotExist, knownFacts, conditionalPath, prefix, condition.matches);
-                        const last = newQueryDescriptionsWithNotExists.length - 1;
-                        const queryDescriptionConditional = newQueryDescriptionsWithNotExists[last];
-
-                        // If the negative existential condition is not satisfiable, then
-                        // that means that the condition will always be true.
-                        // We can therefore skip the branch for the negative existential condition.
-                        if (queryDescriptionConditional.isSatisfiable()) {
-                            queryDescriptions.push(...newQueryDescriptions);
-                            queryDescriptions.push(...newQueryDescriptionsWithNotExists.slice(0, last));
-                            queryDescription = queryDescriptionConditional;
-                        }
-                    }
-                }
-            }
-        }
-        queryDescriptions.push(queryDescription);
-        return { queryDescriptions, knownFacts };
-    }
-
-    addProjections(queryDescription: QueryDescription, knownFacts: FactByIdentifier, projections: Projection[]): QueryDescription[] {
-        const queryDescriptions: QueryDescription[] = [];
-        projections.forEach(projection => {
-            if (projection.type === "specification") {
-                // Produce more facts in the tuple, and prefix the labels with the projection name.
-                const prefix = projection.name + ".";
-                const { queryDescriptions: queryDescriptionsWithEdges } = this.addEdges(queryDescription, knownFacts, [], prefix, projection.matches);
-                queryDescriptions.push(...queryDescriptionsWithEdges);
-            }
-        });
-        return queryDescriptions;
+    generateSqlQuery(bookmark: string, limit: number): SpecificationSqlQuery {
+        const hashes = this.outputs
+            .map(output => `f${output.factIndex}.hash as hash${output.factIndex}`)
+            .join(", ");
+        const factIds = this.outputs
+            .map(output => `f${output.factIndex}.fact_id`)
+            .join(", ");
+        const firstEdge = this.edges[0];
+        const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
+        const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
+        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact.factIndex;
+        const writtenFactIndexes = new Set<number>().add(firstFactIndex);
+        const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
+        const inputWhereClauses = this.inputs
+            .filter(input => input.factTypeParameter !== 0)
+            .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+            .join(" AND ");
+        const notExistsWhereClauses = this.notExistsConditions
+            .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(notExistsWhereClause, writtenFactIndexes)})`)
+            .join("");
+        const bookmarkParameter = this.parameters.length + 1;
+        const limitParameter = bookmarkParameter + 1;
+        const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+        const bookmarkValue: number[] = parseBookmark(bookmark);
+        return {
+            sql,
+            parameters: [...this.parameters, bookmarkValue, limit],
+            labels: this.outputs.map(output => ({
+                type: output.type,
+                index: output.factIndex
+            })),
+            bookmark: "[]"
+        };
     }
 }
 
-export function sqlFromSpecification(start: FactReference[], bookmarks: FactBookmark[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
-    const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
-    const descriptions = descriptionBuilder.buildDescriptions(start, specification);
+function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
+    const joins: string[] = [];
+    edges.forEach(edge => {
+        if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
+            if (writtenFactIndexes.has(edge.successorFactIndex)) {
+                joins.push(
+                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
+                    ` AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
+                    ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                );
+            }
+            else {
+                joins.push(
+                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
+                    ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                );
+                joins.push(
+                    ` JOIN public.fact f${edge.successorFactIndex}` +
+                    ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
+                );
+                writtenFactIndexes.add(edge.successorFactIndex);
+            }
+        }
+        else if (writtenFactIndexes.has(edge.successorFactIndex)) {
+            joins.push(
+                ` JOIN public.edge e${edge.edgeIndex}` +
+                ` ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
+                ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+            );
+            joins.push(
+                ` JOIN public.fact f${edge.predecessorFactIndex}` +
+                ` ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id`
+            );
+            writtenFactIndexes.add(edge.predecessorFactIndex);
+        }
+        else {
+            throw new Error("Neither predecessor nor successor fact has been written");
+        }
+    });
+    return joins;
+}
 
-    // Only generate SQL for satisfiable queries.
-    return descriptions
-        .filter(description => description.isSatisfiable())
-        .map(description => description.generateSqlQuery(bookmarks, limit));
+function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDescription, outerFactIndexes: Set<number>): string {
+    const firstEdge = notExistsWhereClause.edges[0];
+    const writtenFactIndexes = new Set<number>(outerFactIndexes);
+    const firstJoin: string[] = [];
+    const whereClause: string[] = [];
+    if (writtenFactIndexes.has(firstEdge.predecessorFactIndex)) {
+        if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
+            throw new Error("Not yet implemented");
+        }
+        else {
+            whereClause.push(
+                `e${firstEdge.edgeIndex}.predecessor_fact_id = f${firstEdge.predecessorFactIndex}.fact_id` +
+                ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
+            );
+            firstJoin.push(
+                ` JOIN public.fact f${firstEdge.successorFactIndex}` +
+                ` ON f${firstEdge.successorFactIndex}.fact_id = e${firstEdge.edgeIndex}.successor_fact_id`
+            );
+            writtenFactIndexes.add(firstEdge.successorFactIndex);
+        }
+    }
+    else if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
+        whereClause.push(
+            `e${firstEdge.edgeIndex}.successor_fact_id = f${firstEdge.successorFactIndex}.fact_id` +
+            ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
+        );
+        firstJoin.push(
+            ` JOIN public.fact f${firstEdge.predecessorFactIndex}` +
+            ` ON f${firstEdge.predecessorFactIndex}.fact_id = e${firstEdge.edgeIndex}.predecessor_fact_id`
+        );
+        writtenFactIndexes.add(firstEdge.predecessorFactIndex);
+    }
+    else {
+        throw new Error("Neither predecessor nor successor fact has been written");
+    }
+    const tailJoins: string[] = generateJoins(notExistsWhereClause.edges.slice(1), writtenFactIndexes);
+    const joins = firstJoin.concat(tailJoins);
+    return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
+}
+
+function parseBookmark(bookmark: string): number[] {
+    if (bookmark === undefined || bookmark === null || bookmark === "") {
+        return [];
+    }
+    else {
+        return bookmark.split(".").map(str => parseInt(str));
+    }
+}
+
+class DescriptionBuilder {
+    constructor(
+        private factTypes: FactTypeMap,
+        private roleMap: RoleMap
+    ) { }
+
+    isSatisfiable(feed: Feed, edges: FeedEdgeDescription[]): boolean {
+        for (const edge of edges) {
+            const successor = feed.facts.find(f => f.factIndex === edge.successorFactIndex);
+            if (!successor) {
+                return false;
+            }
+
+            const predecessor = feed.facts.find(f => f.factIndex === edge.predecessorFactIndex);
+            if (!predecessor) {
+                return false;
+            }
+
+            const successorFactTypeId = getFactTypeId(this.factTypes, successor.factType);
+            if (!successorFactTypeId) {
+                return false;
+            }
+
+            if (!getRoleId(this.roleMap, successorFactTypeId, edge.roleName)) {
+                return false;
+            }
+
+            const predecessorFactTypeId = getFactTypeId(this.factTypes, predecessor.factType);
+            if (!predecessorFactTypeId) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    buildDescription(feed: Feed): QueryDescription {
+        const parameters: (string | number)[] = [];
+        function addParameter(value: string | number) {
+            parameters.push(value);
+            return parameters.length;
+        }
+
+        // Allocate parameters for the inputs.
+        const inputs: InputDescription[] = feed.inputs.map(input =>
+            this.buildInputDescription(feed, input, addParameter)
+        );
+
+        // Allocate parameters for the edge roles.
+        const edges: EdgeDescription[] = feed.edges.map(edge =>
+            this.buildEdgeDescription(feed, edge, addParameter)
+        );
+
+        // Allocate parameters for the conditional roles.
+        const satisfiableNotExistsConditions = feed.notExistsConditions.filter(condition =>
+            this.isSatisfiable(feed, condition.edges)
+        );
+        const notExistsConditions: NotExistsConditionDescription[] = satisfiableNotExistsConditions.map(condition =>
+            this.buildNotExistsConditionDescription(feed, condition, addParameter)
+        );
+
+        const outputs: OutputDescription[] = feed.outputs.map(output =>
+            this.buildOutputDescription(feed, output)
+        );
+
+        return new QueryDescription(
+            inputs,
+            parameters,
+            outputs,
+            edges,
+            notExistsConditions
+        );
+    }
+
+    private buildInputDescription(feed: Feed, input: FeedInputDescription, addParameter: (value: string | number) => number): InputDescription {
+        const fact = feed.facts.find(f => f.factIndex === input.factIndex);
+        if (!fact) {
+            throw new Error(`Fact not found: ${input.factIndex}`);
+        }
+
+        const factTypeId = getFactTypeId(this.factTypes, fact.factType);
+        if (!factTypeId) {
+            throw new Error(`Fact type not found: ${fact.factType}`);
+        }
+
+        const factTypeParameter = addParameter(factTypeId);
+        const factHashParameter = addParameter(input.factHash);
+        return {
+            factIndex: input.factIndex,
+            factTypeId,
+            factTypeParameter,
+            factHash: input.factHash,
+            factHashParameter
+        };
+    }
+
+    private buildEdgeDescription(feed: Feed, edge: FeedEdgeDescription, addParameter: (value: string | number) => number) {
+        const fact = feed.facts.find(f => f.factIndex === edge.successorFactIndex);
+        if (!fact) {
+            throw new Error(`Fact not found: ${edge.successorFactIndex}`);
+        }
+
+        const factTypeId = getFactTypeId(this.factTypes, fact.factType);
+        if (!factTypeId) {
+            throw new Error(`Fact type not found: ${fact.factType}`);
+        }
+
+        const roleId = getRoleId(this.roleMap, factTypeId, edge.roleName);
+        if (!roleId) {
+            throw new Error(`Role not found: ${fact.factType}.${edge.roleName}`);
+        }
+
+        const roleParameter = addParameter(roleId);
+        return <EdgeDescription>{
+            edgeIndex: edge.edgeIndex,
+            predecessorFactIndex: edge.predecessorFactIndex,
+            successorFactIndex: edge.successorFactIndex,
+            roleParameter
+        };
+    }
+
+    private buildOutputDescription(feed: Feed, output: FeedOutputDescription) {
+        const fact = feed.facts.find(f => f.factIndex === output.factIndex);
+        if (!fact) {
+            throw new Error(`Fact not found: ${output.factIndex}`);
+        }
+
+        return <OutputDescription>{
+            factIndex: output.factIndex,
+            type: fact.factType
+        };
+    }
+
+    private buildNotExistsConditionDescription(feed: Feed, condition: FeedNotExistsConditionDescription, addParameter: (value: string | number) => number): NotExistsConditionDescription {
+        const edges = condition.edges.map(edge =>
+            this.buildEdgeDescription(feed, edge, addParameter)
+        );
+        const notExistsConditions = condition.notExistsConditions.map(condition =>
+            this.buildNotExistsConditionDescription(feed, condition, addParameter)
+        );
+
+        return {
+            edges,
+            notExistsConditions
+        }
+    }
+}
+
+export function sqlFromSpecification(start: FactReference[], bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
+    const feeds = buildFeeds(start, specification);
+    const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
+    const feedAndBookmark = feeds.map((feed, index) => ({
+        feed,
+        bookmark: bookmarks[index]
+    }));
+    const satisfiableFeedsAndBookmarks = feedAndBookmark.filter(fb =>
+        descriptionBuilder.isSatisfiable(fb.feed, fb.feed.edges));
+    const sqlQueries = satisfiableFeedsAndBookmarks.map(fb => {
+        const description = descriptionBuilder.buildDescription(fb.feed);
+        const sql = description.generateSqlQuery(fb.bookmark, limit);
+        return sql;
+    });
+    return sqlQueries;
+}
+
+export function sqlFromFeed(feed: Feed, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
+    const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
+    if (!descriptionBuilder.isSatisfiable(feed, feed.edges)) {
+        return null;
+    }
+    const description = descriptionBuilder.buildDescription(feed);
+    const sql = description.generateSqlQuery(bookmark, limit);
+    return sql;
 }

@@ -8,10 +8,12 @@ import {
     Feed,
     LoginResponse,
     Observable,
+    ObservableSource,
     Query,
     Specification,
     UserIdentity,
 } from "jinaga";
+import { FactFeed } from "jinaga/dist/storage";
 
 import { Keystore } from "../keystore";
 import { Authentication } from "./authentication";
@@ -20,7 +22,7 @@ export class AuthenticationSession implements Authentication {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private inner: Feed,
+        private inner: ObservableSource,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null,
         private userIdentity: UserIdentity,
@@ -65,7 +67,9 @@ export class AuthenticationSession implements Authentication {
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         const userFact = await this.keystore.getUserFact(this.userIdentity);
         const facts = envelopes.map(envelope => envelope.fact);
-        const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
+        const authorizedFacts = this.authorizationEngine
+            ? await this.authorizationEngine.authorizeFacts(facts, userFact)
+            : facts;
         const signedFacts = await this.keystore.signFacts(this.userIdentity, authorizedFacts);
         return await this.inner.save(signedFacts);
     }
@@ -78,6 +82,10 @@ export class AuthenticationSession implements Authentication {
         return this.inner.read(start, specification);
     }
 
+    feed(feed: Feed, bookmark: string): Promise<FactFeed> {
+        return this.inner.feed(feed, bookmark);
+    }
+
     whichExist(references: FactReference[]): Promise<FactReference[]> {
         throw new Error("WhichExist method not implemented on AuthenticationSession.");
     }
@@ -87,7 +95,7 @@ export class AuthenticationSession implements Authentication {
     }
 
     addChannel(fact: FactReference, query: Query): Channel {
-        return null;
+        return new Channel(async () => {});
     }
 
     removeChannel(channel: Channel): void {

@@ -1,13 +1,22 @@
-import { FactEnvelope, FactRecord, FactReference, Feed, Observable, Query, Specification, WebClient } from "jinaga";
+import {
+    FactEnvelope,
+    FactRecord,
+    FactReference,
+    Feed,
+    Observable,
+    ObservableSource,
+    Query,
+    Specification,
+    WebClient,
+} from "jinaga";
+import { FactFeed } from "jinaga/dist/storage";
 
 export class Principal {
     
 }
 
-export class Authentication implements Feed {
-    private principal: Principal;
-
-    constructor(private inner: Feed, private client: WebClient) {
+export class Authentication implements ObservableSource {
+    constructor(private inner: ObservableSource, private client: WebClient) {
     }
 
     async close(): Promise<void> {
@@ -29,6 +38,10 @@ export class Authentication implements Feed {
 
     read(start: FactReference[], specification: Specification): Promise<any[]> {
         return this.inner.read(start, specification);
+    }
+
+    feed(feed: Feed, bookmark: string): Promise<FactFeed> {
+        return this.inner.feed(feed, bookmark);
     }
 
     whichExist(references: FactReference[]): Promise<FactReference[]> {
