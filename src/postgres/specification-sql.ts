@@ -19,13 +19,12 @@ import {
     QueryDescription,
     SpecificationSqlQuery,
 } from "./query-description";
-import { QueryDescriptionBuilder } from "./query-description-builder";
 
-class DescriptionBuilder extends QueryDescriptionBuilder {
+class DescriptionBuilder {
     constructor(
-        factTypes: FactTypeMap,
-        roleMap: RoleMap
-    ) { super(factTypes, roleMap); }
+        private factTypes: FactTypeMap,
+        private roleMap: RoleMap
+    ) { }
 
     isSatisfiable(feed: Feed, edges: FeedEdgeDescription[]): boolean {
         for (const edge of edges) {
