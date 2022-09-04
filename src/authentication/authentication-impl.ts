@@ -7,8 +7,6 @@ export class Principal {
 }
 
 export class AuthenticationImpl implements Authentication {
-    private principal: Principal;
-
     constructor(private inner: Fork, private client: WebClient) {
     }
 

@@ -63,7 +63,7 @@ export class NodeHttpConnection implements HttpConnection {
                     if (res.statusCode === 403) {
                         reject(response);
                     }
-                    else if (res.statusCode>= 400) {
+                    else if (!res.statusCode || res.statusCode>= 400) {
                         resolve({
                             result: "retry",
                             error: response
@@ -100,7 +100,10 @@ export class NodeHttpConnection implements HttpConnection {
     }
 }
 
-function isJsonResult(contentType: string) {
+function isJsonResult(contentType: string | undefined) {
+    if (!contentType) {
+        return false;
+    }
     const json = contentType.split(";").indexOf("application/json");
     return json >= 0;
 }

@@ -51,7 +51,7 @@ describe('Postgres', () => {
   });
 
   it('should parse successor query with type', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.predecessor F.type="IntegrationTest.Successor"');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.predecessor F.type="IntegrationTest.Successor"')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -66,7 +66,7 @@ describe('Postgres', () => {
   });
 
   it('should parse predecessor query with type', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('P.parent F.type="Parent"');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('P.parent F.type="Parent"')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -81,7 +81,7 @@ describe('Postgres', () => {
   });
 
   it('should parse successor query with existential', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.predecessor F.type="IntegrationTest.Successor" E(S.successor F.type="IntegrationTest.Grandchild")');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.predecessor F.type="IntegrationTest.Successor" E(S.successor F.type="IntegrationTest.Grandchild")')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -100,7 +100,7 @@ describe('Postgres', () => {
   });
 
   it('should parse successor query with negative existential', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.predecessor F.type="IntegrationTest.Successor" N(S.successor F.type="IntegrationTest.Grandchild")');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.predecessor F.type="IntegrationTest.Successor" N(S.successor F.type="IntegrationTest.Grandchild")')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -119,7 +119,7 @@ describe('Postgres', () => {
   });
 
   it('should parse successor query with existential predecessor', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.parent F.type="Child" E(P.uncle F.type="Uncle")');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.parent F.type="Child" E(P.uncle F.type="Uncle")')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -138,7 +138,7 @@ describe('Postgres', () => {
   });
 
   it('should parse successor query with negative existential predecessor', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.parent F.type="Child" N(P.uncle F.type="Uncle")');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.parent F.type="Child" N(P.uncle F.type="Uncle")')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -157,7 +157,7 @@ describe('Postgres', () => {
   });
 
   it('should parse consecutive existential queries', () => {
-    const { sql, parameters, factTypes, roleMap } = sqlFor('S.parent F.type="Child" N(S.condition F.type="Condition") N(S.other F.type="Other")');
+    const { sql, parameters, factTypes, roleMap } = sqlFor('S.parent F.type="Child" N(S.condition F.type="Condition") N(S.other F.type="Other")')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
       'FROM public.fact f1 ' +
@@ -181,7 +181,7 @@ describe('Postgres', () => {
   });
 
   it('should parse existential query form predecessor', () => {
-    const { sql, parameters, factTypes, roleMap } = sqlFor('S.root F.type="Identifier" N(S.prior F.type="Identifier") P.identified F.type="Identified" N(S.identified F.type="Delete")');
+    const { sql, parameters, factTypes, roleMap } = sqlFor('S.root F.type="Identifier" N(S.prior F.type="Identifier") P.identified F.type="Identified" N(S.identified F.type="Delete")')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2, f3.hash as hash3 ' +
       'FROM public.fact f1 ' +
@@ -213,7 +213,7 @@ describe('Postgres', () => {
   });
 
   it('should parse zig-zag pipeline', () => {
-    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.user F.type="Assignment" P.project F.type="Project" S.project F.type="Task" S.task F.type="Task.Title"');
+    const { sql, parameters, pathLength, factTypes, roleMap } = sqlFor('S.user F.type="Assignment" P.project F.type="Project" S.project F.type="Task" S.task F.type="Task.Title"')!;
     expect(sql).toEqual(
       'SELECT f2.hash as hash2, f3.hash as hash3, f4.hash as hash4, f5.hash as hash5 ' +
       'FROM public.fact f1 ' +
@@ -239,37 +239,37 @@ describe('Postgres', () => {
   });
 
   it('should parse query with unknown successor type', () => {
-    const { empty } = sqlFor('S.root F.type="Unknown"');
+    const { empty } = sqlFor('S.root F.type="Unknown"')!;
     expect(empty).toBeTruthy();
   });
 
   it('should parse query with unknown predecessor type', () => {
-    const { empty } = sqlFor('S.root F.type="Assignment" P.pred F.type="Unknown" P.user F.type="Jinaga.User"');
+    const { empty } = sqlFor('S.root F.type="Assignment" P.pred F.type="Unknown" P.user F.type="Jinaga.User"')!;
     expect(empty).toBeTruthy();
   });
 
   it('should parse query with some unknown types', () => {
-    const { empty } = sqlFor('S.root F.type="Unknown" P.user F.type="Jinaga.User"');
+    const { empty } = sqlFor('S.root F.type="Unknown" P.user F.type="Jinaga.User"')!;
     expect(empty).toBeTruthy();
   });
 
   it('should parse query with unknown successor role', () => {
-    const { empty } = sqlFor('S.unknown F.type="Successor"');
+    const { empty } = sqlFor('S.unknown F.type="Successor"')!;
     expect(empty).toBeTruthy();
   });
 
   it('should parse query with unknown predecessor role', () => {
-    const { empty } = sqlFor('S.root F.type="Assignment" P.unknown F.type="Jinaga.User"');
+    const { empty } = sqlFor('S.root F.type="Assignment" P.unknown F.type="Jinaga.User"')!;
     expect(empty).toBeTruthy();
   });
 
   it('should parse query with some unknown predecessor roles', () => {
-    const { empty } = sqlFor('S.root F.type="Assignment" P.predecessor F.type="Predecessor" P.unknown F.type="Jinaga.User"');
+    const { empty } = sqlFor('S.root F.type="Assignment" P.predecessor F.type="Predecessor" P.unknown F.type="Jinaga.User"')!;
     expect(empty).toBeTruthy();
   });
 
   it('should ignore negative existential with unknown type', () => {
-    const { empty, sql, parameters, factTypes, roleMap } = sqlFor('S.root F.type="Assignment" N(S.assignment F.type="Unknown")');
+    const { empty, sql, parameters, factTypes, roleMap } = sqlFor('S.root F.type="Assignment" N(S.assignment F.type="Unknown")')!;
     expect(empty).toBeFalsy();
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
@@ -286,7 +286,7 @@ describe('Postgres', () => {
   });
 
   it('should ignore negative existential with unknown role', () => {
-    const { empty, sql, parameters, factTypes, roleMap } = sqlFor('S.root F.type="Assignment" N(S.unknown F.type="Assignment.Delete")');
+    const { empty, sql, parameters, factTypes, roleMap } = sqlFor('S.root F.type="Assignment" N(S.unknown F.type="Assignment.Delete")')!;
     expect(empty).toBeFalsy();
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
@@ -303,17 +303,17 @@ describe('Postgres', () => {
   });
 
   it('should elevate positive existential with unknown type', () => {
-    const { empty } = sqlFor('S.root F.type="Assignment" E(S.assignment F.type="Unknown")');
+    const { empty } = sqlFor('S.root F.type="Assignment" E(S.assignment F.type="Unknown")')!;
     expect(empty).toBeTruthy();
   });
 
   it('should elevate positive existential with unknown role', () => {
-    const { empty } = sqlFor('S.root F.type="Assignment" E(S.unknown F.type="Assignment.Delete")');
+    const { empty } = sqlFor('S.root F.type="Assignment" E(S.unknown F.type="Assignment.Delete")')!;
     expect(empty).toBeTruthy();
   });
 
   it('should parse nested existential condition', () => {
-    const { sql, parameters, factTypes, roleMap } = sqlFor('S.catalog F.type="ImprovingU.Idea" N(S.idea F.type="ImprovingU.Idea.Deletion" N(S.ideaDeletion F.type="ImprovingU.Idea.Restore"))');
+    const { sql, parameters, factTypes, roleMap } = sqlFor('S.catalog F.type="ImprovingU.Idea" N(S.idea F.type="ImprovingU.Idea.Deletion" N(S.ideaDeletion F.type="ImprovingU.Idea.Restore"))')!;
 
     expect(sql).toEqual(
       'SELECT f2.hash as hash2 ' +
@@ -353,22 +353,26 @@ function allFactTypes(steps: Step[]): string[] {
 
 function allRoles(steps: Step[], initialType: string) {
   let roles: { type: string; role: string }[] = [];
-  let type: string = initialType;
-  let role: string = undefined;
+  let type: string | undefined = initialType;
+  let role: string | undefined = undefined;
 
   for (const step of steps) {
     if (step instanceof PropertyCondition) {
       if (step.name === 'type') {
         type = step.value;
         if (role) {
-          roles.push({ type, role });
+          if (type) {
+            roles.push({ type, role });
+          }
           role = undefined;
         }
       }
     }
     else if (step instanceof Join) {
       if (step.direction === Direction.Predecessor) {
-        roles.push({ type, role: step.role });
+        if (type) {
+          roles.push({ type, role: step.role });
+        }
         role = undefined;
       }
       else {
@@ -377,7 +381,9 @@ function allRoles(steps: Step[], initialType: string) {
       type = undefined;
     }
     else if (step instanceof ExistentialCondition) {
-      roles = roles.concat(allRoles(step.steps, type));
+      if (type) {
+        roles = roles.concat(allRoles(step.steps, type));
+      }
     }
   }
 

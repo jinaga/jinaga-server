@@ -65,7 +65,9 @@ export class AuthenticationSession implements Authentication {
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         const userFact = await this.keystore.getUserFact(this.userIdentity);
         const facts = envelopes.map(envelope => envelope.fact);
-        const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
+        const authorizedFacts = this.authorizationEngine
+            ? await this.authorizationEngine.authorizeFacts(facts, userFact)
+            : facts;
         const signedFacts = await this.keystore.signFacts(this.userIdentity, authorizedFacts);
         return await this.inner.save(signedFacts);
     }
@@ -87,7 +89,7 @@ export class AuthenticationSession implements Authentication {
     }
 
     addChannel(fact: FactReference, query: Query): Channel {
-        return null;
+        return new Channel(async () => {});
     }
 
     removeChannel(channel: Channel): void {

@@ -14,8 +14,6 @@ export class Principal {
 }
 
 export class Authentication implements ObservableSource {
-    private principal: Principal;
-
     constructor(private inner: ObservableSource, private client: WebClient) {
     }
 
