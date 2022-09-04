@@ -47,8 +47,8 @@ export class AuthorizationKeystore implements Authorization {
         return this.observableSource.read(start, specification);
     }
 
-    feed(userIdentity: UserIdentity, feed: Feed, bookmark: string, limit: number): Promise<FactFeed> {
-        return this.observableSource.feed(feed, bookmark, limit);
+    feed(userIdentity: UserIdentity, feed: Feed, bookmark: string): Promise<FactFeed> {
+        return this.observableSource.feed(feed, bookmark);
     }
 
     load(userIdentity: UserIdentity, references: FactReference[]) {

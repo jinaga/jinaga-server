@@ -327,7 +327,7 @@ export class HttpRouter {
         }
 
         const userIdentity = serializeUserIdentity(user);
-        const results = await this.authorization.feed(userIdentity, feed, "", 100);
+        const results = await this.authorization.feed(userIdentity, feed, "");
         const references = results.tuples.flatMap(t => t.facts);
         const response: FeedResponse = {
             references,
