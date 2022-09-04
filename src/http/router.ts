@@ -24,10 +24,12 @@ import { FeedResponse, FeedsResponse } from "jinaga/dist/http/messages";
 
 import { FeedCache } from "./feed-cache";
 
-function get<U>(method: ((req: RequestUser, params?: { [key: string]: string }) => Promise<U>)): Handler {
+interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
+
+function get<U>(method: ((req: RequestUser, params?: { [key: string]: string }, query?: ParsedQs) => Promise<U>)): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        method(user, req.params)
+        method(user, req.params, req.query)
             .then(response => {
                 if (!response) {
                     res.sendStatus(404);
@@ -224,7 +226,7 @@ export class HttpRouter {
         router.post('/read', postString((user, input: string) => this.read(user, input)));
         router.post('/write', postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', post((user, input: string) => this.feeds(user, input)));
-        router.get('/feeds/:hash', get((user, params) => this.feed(user, params)));
+        router.get('/feeds/:hash', get((user, params, query) => this.feed(user, params, query)));
 
         this.handler = router;
     }
@@ -315,7 +317,7 @@ export class HttpRouter {
         }
     }
 
-    private async feed(user: RequestUser, params: { [key: string]: string }): Promise<FeedResponse | null> {
+    private async feed(user: RequestUser, params: { [key: string]: string }, query: ParsedQs): Promise<FeedResponse | null> {
         const feedHash = params["hash"];
         if (!feedHash) {
             return null;
@@ -326,9 +328,14 @@ export class HttpRouter {
             return null;
         }
 
+        const bookmark = query["b"] as string ?? "";
+
         const userIdentity = serializeUserIdentity(user);
-        const results = await this.authorization.feed(userIdentity, feed, "");
-        const references = results.tuples.flatMap(t => t.facts);
+        const results = await this.authorization.feed(userIdentity, feed, bookmark);
+        // Return distinct fact references from all the tuples.
+        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
+            self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+        );
         const response: FeedResponse = {
             references,
             bookmark: results.bookmark
