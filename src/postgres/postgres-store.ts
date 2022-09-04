@@ -7,10 +7,12 @@ import {
     FactRecord,
     FactReference,
     factReferenceEquals,
-    FactStream,
     FactTuple,
+    Feed,
     getAllFactTypes,
+    getAllFactTypesFromFeed,
     getAllRoles,
+    getAllRolesFromFeed,
     Join,
     PredecessorCollection,
     PropertyCondition,
@@ -19,6 +21,7 @@ import {
     Step,
     Storage,
 } from "jinaga";
+import { FactFeed } from "jinaga/dist/storage";
 import { PoolClient } from "pg";
 
 import { distinct, flatten } from "../util/fn";
@@ -47,7 +50,7 @@ import {
     RoleMap,
 } from "./maps";
 import { ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
-import { sqlFromSpecification } from "./specification-sql";
+import { sqlFromFeed } from "./specification-sql";
 import { sqlFromSteps } from "./sql";
 
 interface FactTypeResult {
@@ -243,29 +246,19 @@ export class PostgresStore implements Storage {
         return composer.compose(resultSets);
     }
 
-    async streamsFromSpecification(start: FactReference[], bookmarks: string[], limit: number, specification: Specification): Promise<FactStream[]> {
-        const factTypes = await this.loadFactTypesFromSpecification(specification);
-        const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
+    async feed(feed: Feed, bookmark: string, limit: number): Promise<FactFeed> {
+        const factTypes: FactTypeMap = await this.loadFactTypesFromFeed(feed);
+        const roleMap: RoleMap = await this.loadRolesFromFeed(feed, factTypes);
+        const sql = sqlFromFeed(feed, bookmark, limit, factTypes, roleMap);
 
-        const sqlQueries = sqlFromSpecification(start, bookmarks, limit, specification, factTypes, roleMap);
-        const streams = await this.connectionFactory.with(async (connection) => {
-            const streams: FactStream[] = [];
-            for (const sqlQuery of sqlQueries) {
-                try {
-                    const { rows } = await connection.query(sqlQuery.sql, sqlQuery.parameters);
-                    const tuples = rows.map(row => loadFactTuple(sqlQuery.labels, row));
-                    streams.push({
-                        tuples,
-                        bookmark: tuples.length > 0 ? tuples[tuples.length - 1].bookmark : sqlQuery.bookmark
-                    });
-                }
-                catch (error) {
-                    throw new Error(`Could not execute query "${sqlQuery.sql}", parameters ${sqlQuery.parameters}:\n${error}`);
-                }
-            }
-            return streams;
+        const { rows } = await this.connectionFactory.with(async (connection) => {
+            return await connection.query(sql.sql, sql.parameters);
         });
-        return streams;
+        const tuples = rows.map(row => loadFactTuple(sql.labels, row));
+        return {
+            tuples,
+            bookmark: tuples.length > 0 ? tuples[tuples.length - 1].bookmark : bookmark
+        };
     }
 
     private async loadFactTypesFromSteps(steps: Step[], startType: string): Promise<FactTypeMap> {
@@ -273,6 +266,21 @@ export class PostgresStore implements Storage {
         const unknownFactTypes = [...allFactTypes(steps), startType]
             .filter(factType => !factTypes.has(factType))
             .filter(distinct);
+        if (unknownFactTypes.length > 0) {
+            const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
+                return await loadFactTypes(unknownFactTypes, connection);
+            });
+            const merged = mergeFactTypes(this.factTypeMap, loadedFactTypes);
+            this.factTypeMap = merged;
+            return merged;
+        }
+        return factTypes;
+    }
+
+    async loadFactTypesFromFeed(feed: Feed): Promise<FactTypeMap> {
+        const factTypes = this.factTypeMap;
+        const unknownFactTypes = getAllFactTypesFromFeed(feed)
+            .filter(factType => !factTypes.has(factType));
         if (unknownFactTypes.length > 0) {
             const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
                 return await loadFactTypes(unknownFactTypes, connection);
@@ -317,6 +325,25 @@ export class PostgresStore implements Storage {
     async loadRolesFromSpecification(specification: Specification, factTypes: FactTypeMap): Promise<RoleMap> {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRoles(specification)
+            .map(r => ({
+                defining_fact_type_id: getFactTypeId(factTypes, r.definingFactType),
+                role: r.name
+            }))
+            .filter(r => !hasRole(roleMap, r.defining_fact_type_id, r.role));
+        if (unknownRoles.length > 0) {
+            const loadedRoles = await this.connectionFactory.with(async (connection) => {
+                return await loadRoles(unknownRoles, roleMap, connection);
+            });
+            const merged = mergeRoleMaps(this.roleMap, loadedRoles);
+            this.roleMap = merged;
+            return merged;
+        }
+        return roleMap;
+    }
+
+    async loadRolesFromFeed(feed: Feed, factTypes: FactTypeMap): Promise<RoleMap> {
+        const roleMap = this.roleMap;
+        const unknownRoles = getAllRolesFromFeed(feed)
             .map(r => ({
                 defining_fact_type_id: getFactTypeId(factTypes, r.definingFactType),
                 role: r.name

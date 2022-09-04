@@ -6,6 +6,7 @@ import {
     Declaration,
     FactRecord,
     FactReference,
+    Feed,
     Forbidden,
     fromDescriptiveString,
     LoadMessage,
@@ -14,23 +15,46 @@ import {
     QueryMessage,
     QueryResponse,
     SaveMessage,
-    SaveResponse,
     Specification,
     SpecificationParser,
     Trace,
     UserIdentity,
 } from "jinaga";
-import { FeedsResponse } from "jinaga/dist/http/messages";
+import { FeedResponse, FeedsResponse } from "jinaga/dist/http/messages";
+
 import { FeedCache } from "./feed-cache";
 
-function get<U>(method: ((req: RequestUser) => Promise<U>)): Handler {
+function get<U>(method: ((req: RequestUser, params?: { [key: string]: string }) => Promise<U>)): Handler {
+    return (req, res, next) => {
+        const user = <RequestUser>req.user;
+        method(user, req.params)
+            .then(response => {
+                if (!response) {
+                    res.sendStatus(404);
+                    next();
+                }
+                else {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.send(JSON.stringify(response));
+                    next();
+                }
+            })
+            .catch(error => {
+                Trace.error(error);
+                res.sendStatus(500);
+                next();
+            });
+    };
+}
+
+function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]: string }) => Promise<U>)): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         if (!user) {
             res.sendStatus(401);
         }
         else {
-            method(user)
+            method(user, req.params)
                 .then(response => {
                     res.setHeader('Content-Type', 'application/json');
                     res.send(JSON.stringify(response));
@@ -45,18 +69,24 @@ function get<U>(method: ((req: RequestUser) => Promise<U>)): Handler {
     };
 }
 
-function post<T, U>(method: (user: RequestUser, message: T) => Promise<U>): Handler {
+function post<T, U>(method: (user: RequestUser, message: T, params?: { [key: string]: string }) => Promise<U>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         const message = <T>req.body;
         if (!message) {
             throw new Error('Ensure that you have called app.use(express.json()).');
         }
-        method(user, message)
+        method(user, message, req.params)
             .then(response => {
-                res.setHeader('Content-Type', 'application/json');
-                res.send(JSON.stringify(response));
-                next();
+                if (!response) {
+                    res.sendStatus(404);
+                    next();
+                }
+                else {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.send(JSON.stringify(response));
+                    next();
+                }
             })
             .catch(error => {
                 if (error instanceof Forbidden) {
@@ -186,7 +216,7 @@ export class HttpRouter {
 
     constructor(private authorization: Authorization, private feedCache: FeedCache) {
         const router = Router();
-        router.get('/login', get(user => this.login(user)));
+        router.get('/login', getAuthenticate(user => this.login(user)));
         router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
         router.post('/load', post((user, loadMessage: LoadMessage) => this.load(user, loadMessage)));
         router.post('/save', postCreate((user, saveMessage: SaveMessage) => this.save(user, saveMessage)));
@@ -194,6 +224,7 @@ export class HttpRouter {
         router.post('/read', postString((user, input: string) => this.read(user, input)));
         router.post('/write', postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', post((user, input: string) => this.feeds(user, input)));
+        router.get('/feeds/:hash', get((user, params) => this.feed(user, params)));
 
         this.handler = router;
     }
@@ -271,7 +302,7 @@ export class HttpRouter {
         const start = this.selectStart(specification, declaration);
 
         const feedDefinitions = buildFeeds(start, specification).map(feed => ({
-            hash: computeObjectHash(feed),
+            hash: urlSafeHash(feed),
             feed
         }));
         // Store all feeds in the cache.
@@ -282,6 +313,27 @@ export class HttpRouter {
         return {
             feeds: feedDefinitions.map(f => f.hash)
         }
+    }
+
+    private async feed(user: RequestUser, params: { [key: string]: string }): Promise<FeedResponse | null> {
+        const feedHash = params["hash"];
+        if (!feedHash) {
+            return null;
+        }
+
+        const feed = await this.feedCache.getFeed(feedHash);
+        if (!feed) {
+            return null;
+        }
+
+        const userIdentity = serializeUserIdentity(user);
+        const results = await this.authorization.feed(userIdentity, feed, "", 100);
+        const references = results.tuples.flatMap(t => t.facts);
+        const response: FeedResponse = {
+            references,
+            bookmark: results.bookmark
+        };
+        return response;
     }
 
     private async getKnownFacts(user: RequestUser): Promise<Declaration> {
@@ -318,4 +370,9 @@ export class HttpRouter {
             return declaredFact.declared.reference;
         });
     }
+}
+
+function urlSafeHash(feed: Feed): string {
+    const base64 = computeObjectHash(feed);
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }

@@ -5,11 +5,13 @@ import {
     FactEnvelope,
     FactRecord,
     FactReference,
+    Feed,
     ObservableSource,
     Query,
     Specification,
     UserIdentity,
 } from "jinaga";
+import { FactFeed } from "jinaga/dist/storage";
 
 import { Keystore } from "../keystore";
 
@@ -17,12 +19,12 @@ export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private feed: ObservableSource,
+        private observableSource: ObservableSource,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null) {
 
         this.authorizationEngine = authorizationRules &&
-            new AuthorizationEngine(authorizationRules, feed);
+            new AuthorizationEngine(authorizationRules, observableSource);
     }
 
     async getOrCreateUserFact(userIdentity: UserIdentity) {
@@ -33,25 +35,29 @@ export class AuthorizationKeystore implements Authorization {
                 signatures: []
             }
         ];
-        await this.feed.save(envelopes);
+        await this.observableSource.save(envelopes);
         return userFact;
     }
 
     query(userIdentity: UserIdentity, start: FactReference, query: Query) {
-        return this.feed.query(start, query);
+        return this.observableSource.query(start, query);
     }
 
     read(userIdentity: UserIdentity, start: FactReference[], specification: Specification) {
-        return this.feed.read(start, specification);
+        return this.observableSource.read(start, specification);
+    }
+
+    feed(userIdentity: UserIdentity, feed: Feed, bookmark: string, limit: number): Promise<FactFeed> {
+        return this.observableSource.feed(feed, bookmark, limit);
     }
 
     load(userIdentity: UserIdentity, references: FactReference[]) {
-        return this.feed.load(references);
+        return this.observableSource.load(references);
     }
 
     async save(userIdentity: UserIdentity, facts: FactRecord[]) {
         if (!this.authorizationEngine) {
-            const envelopes = await this.feed.save(facts.map(fact => ({
+            const envelopes = await this.observableSource.save(facts.map(fact => ({
                 fact,
                 signatures: []
             })));
@@ -61,7 +67,7 @@ export class AuthorizationKeystore implements Authorization {
         const userFact = await this.keystore.getUserFact(userIdentity);
         const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
         const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
-        const envelopes = await this.feed.save(signedFacts);
+        const envelopes = await this.observableSource.save(signedFacts);
         return envelopes.map(envelope => envelope.fact);
     }
 }

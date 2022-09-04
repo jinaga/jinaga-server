@@ -3,6 +3,7 @@ import {
     FactEnvelope,
     FactRecord,
     FactReference,
+    Feed,
     Fork,
     LoginResponse,
     Observable,
@@ -10,6 +11,7 @@ import {
     Specification,
     UserIdentity,
 } from "jinaga";
+import { FactFeed } from "jinaga/dist/storage";
 
 import { Keystore } from "../keystore";
 import { Authentication } from "./authentication";
@@ -48,6 +50,10 @@ export class AuthenticationDevice implements Authentication {
 
     read(start: FactReference[], specification: Specification): Promise<any[]> {
         return this.inner.read(start, specification);
+    }
+
+    feed(feed: Feed, bookmark: string, limit: number): Promise<FactFeed> {
+        return this.inner.feed(feed, bookmark, limit);
     }
 
     whichExist(references: FactReference[]): Promise<FactReference[]> {
