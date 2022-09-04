@@ -1,4 +1,4 @@
-import { dehydrateReference, FactBookmark, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
+import { dehydrateReference, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
 
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, getFactTypeId, getRoleId } from "../../src/postgres/maps";
 import { SpecificationSqlQuery } from "../../src/postgres/query-description";

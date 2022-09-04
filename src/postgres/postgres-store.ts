@@ -2,7 +2,6 @@ import {
     canonicalPredecessors,
     Direction,
     ExistentialCondition,
-    FactBookmark,
     FactEnvelope,
     FactPath,
     FactRecord,
@@ -247,7 +246,7 @@ export class PostgresStore implements Storage {
         return composer.compose(resultSets);
     }
 
-    async streamsFromSpecification(start: FactReference[], bookmarks: FactBookmark[], limit: number, specification: Specification): Promise<FactStream[]> {
+    async streamsFromSpecification(start: FactReference[], bookmarks: string[], limit: number, specification: Specification): Promise<FactStream[]> {
         const factTypes = await this.loadFactTypesFromSpecification(specification);
         const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
 

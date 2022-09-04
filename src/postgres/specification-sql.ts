@@ -1,4 +1,13 @@
-import { buildFeeds, FactBookmark, FactReference, Feed, Specification } from "jinaga";
+import {
+    buildFeeds,
+    EdgeDescription as FeedEdgeDescription,
+    FactReference,
+    Feed,
+    InputDescription as FeedInputDescription,
+    NotExistsConditionDescription as FeedNotExistsConditionDescription,
+    OutputDescription as FeedOutputDescription,
+    Specification,
+} from "jinaga";
 
 import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 import {
@@ -11,7 +20,6 @@ import {
     SpecificationSqlQuery,
 } from "./query-description";
 import { QueryDescriptionBuilder } from "./query-description-builder";
-import { InputDescription as FeedInputDescription, EdgeDescription as FeedEdgeDescription, FactDescription as FeedFactDescription, OutputDescription as FeedOutputDescription, NotExistsConditionDescription as FeedNotExistsConditionDescription } from "jinaga";
 
 class DescriptionBuilder extends QueryDescriptionBuilder {
     constructor(

@@ -1,5 +1,3 @@
-import { FactBookmark } from "jinaga";
-
 export interface SpecificationLabel {
     name: string;
     type: string;
