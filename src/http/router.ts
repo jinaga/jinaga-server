@@ -1,8 +1,11 @@
 import { Handler, Router } from "express";
 import {
     Authorization,
+    buildFeeds,
+    computeObjectHash,
     Declaration,
     FactRecord,
+    FactReference,
     Forbidden,
     fromDescriptiveString,
     LoadMessage,
@@ -12,10 +15,13 @@ import {
     QueryResponse,
     SaveMessage,
     SaveResponse,
+    Specification,
     SpecificationParser,
     Trace,
     UserIdentity,
 } from "jinaga";
+import { FeedsResponse } from "jinaga/dist/http/messages";
+import { FeedCache } from "./feed-cache";
 
 function get<U>(method: ((req: RequestUser) => Promise<U>)): Handler {
     return (req, res, next) => {
@@ -119,7 +125,7 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private authorization: Authorization) {
+    constructor(private authorization: Authorization, private feedCache: FeedCache) {
         const router = Router();
         router.get('/login', get(user => this.login(user)));
         router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
@@ -128,7 +134,7 @@ export class HttpRouter {
 
         router.post('/read', postString((user, input: string) => this.read(user, input)));
         router.post('/write', post((user, input: string) => this.write(user, input)));
-        router.post('/feed', post((user, input: string) => this.feed(user, input)));
+        router.post('/feeds', post((user, input: string) => this.feeds(user, input)));
 
         this.handler = router;
     }
@@ -171,17 +177,9 @@ export class HttpRouter {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
-        var declaration = parser.parseDeclaration(knownFacts);
-        var specification = parser.parseSpecification();
-
-        // Select starting facts that match the inputs
-        const start = specification.given.map(input => {
-            const declaredFact = declaration.find(d => d.name === input.name);
-            if (!declaredFact) {
-                throw new Error(`No fact named ${input.name} was declared`);
-            }
-            return declaredFact.declared.reference;
-        });
+        const declaration = parser.parseDeclaration(knownFacts);
+        const specification = parser.parseSpecification();
+        const start = this.selectStart(specification, declaration);
 
         const userIdentity = serializeUserIdentity(user);
         const results = await this.authorization.read(userIdentity, start, specification);
@@ -207,8 +205,26 @@ export class HttpRouter {
         return {};
     }
 
-    private feed(user: RequestUser, input: string): Promise<string> {
-        throw new Error("Method not implemented.");
+    private async feeds(user: RequestUser, input: string): Promise<FeedsResponse> {
+        const knownFacts = await this.getKnownFacts(user);
+        const parser = new SpecificationParser(input);
+        parser.skipWhitespace();
+        const declaration = parser.parseDeclaration(knownFacts);
+        const specification = parser.parseSpecification();
+        const start = this.selectStart(specification, declaration);
+
+        const feedDefinitions = buildFeeds(start, specification).map(feed => ({
+            hash: computeObjectHash(feed),
+            feed
+        }));
+        // Store all feeds in the cache.
+        for (const feedDefinition of feedDefinitions) {
+            await this.feedCache.storeFeed(feedDefinition.hash, feedDefinition.feed);
+        }
+
+        return {
+            feeds: feedDefinitions.map(f => f.hash)
+        }
     }
 
     private async getKnownFacts(user: RequestUser): Promise<Declaration> {
@@ -233,5 +249,16 @@ export class HttpRouter {
         else {
             return [];
         }
+    }
+
+    private selectStart(specification: Specification, declaration: Declaration) : FactReference[] {
+        // Select starting facts that match the inputs
+        return specification.given.map(input => {
+            const declaredFact = declaration.find(d => d.name === input.name);
+            if (!declaredFact) {
+                throw new Error(`No fact named ${input.name} was declared`);
+            }
+            return declaredFact.declared.reference;
+        });
     }
 }

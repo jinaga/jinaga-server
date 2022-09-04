@@ -23,6 +23,7 @@ import { AuthorizationKeystore } from "./authorization/authorization-keystore";
 import { NodeHttpConnection } from "./http/node-http";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
+import { MemoryFeedCache } from "./memory/memory-feed-cache";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
 import { PostgresStore } from "./postgres/postgres-store";
 
@@ -56,7 +57,8 @@ export class JinagaServer {
         const keystore = new PostgresKeystore(config.pgKeystore);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules()) : null;
         const authorization = createAuthorization(authorizationRules, fork, keystore);
-        const router = new HttpRouter(authorization);
+        const feedCache = new MemoryFeedCache();
+        const router = new HttpRouter(authorization, feedCache);
         const authentication = new AuthenticationDevice(fork, keystore, localDeviceIdentity);
         const memory = new MemoryStore();
         const j: Jinaga = new Jinaga(authentication, memory, syncStatusNotifier);
