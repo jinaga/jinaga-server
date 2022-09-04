@@ -347,8 +347,11 @@ export function sqlFromSpecification(start: FactReference[], bookmarks: string[]
     return sqlQueries;
 }
 
-export function sqlFromFeed(feed: Feed, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery {
+export function sqlFromFeed(feed: Feed, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
+    if (!descriptionBuilder.isSatisfiable(feed, feed.edges)) {
+        return null;
+    }
     const description = descriptionBuilder.buildDescription(feed);
     const sql = description.generateSqlQuery(bookmark, limit);
     return sql;

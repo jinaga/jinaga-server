@@ -250,6 +250,12 @@ export class PostgresStore implements Storage {
         const factTypes: FactTypeMap = await this.loadFactTypesFromFeed(feed);
         const roleMap: RoleMap = await this.loadRolesFromFeed(feed, factTypes);
         const sql = sqlFromFeed(feed, bookmark, limit, factTypes, roleMap);
+        if (!sql) {
+            return {
+                tuples: [],
+                bookmark
+            };
+        }
 
         const { rows } = await this.connectionFactory.with(async (connection) => {
             return await connection.query(sql.sql, sql.parameters);
