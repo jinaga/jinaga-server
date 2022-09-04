@@ -46,7 +46,6 @@ import {
     PublicKeyMap,
     RoleMap,
 } from "./maps";
-import { SpecificationLabel } from "./query-description";
 import { ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromSpecification } from "./specification-sql";
 import { sqlFromSteps } from "./sql";
@@ -97,11 +96,9 @@ interface AncestorResult {
     }[];
 }
 
-function loadFactReference(r: Row): FactReference {
-    return {
-        type: r.type,
-        hash: r.hash
-    };
+interface SpecificationLabel {
+    type: string;
+    index: number;
 }
 
 function loadFactTuple(labels: SpecificationLabel[], row: Row): FactTuple {
@@ -258,7 +255,6 @@ export class PostgresStore implements Storage {
                     const { rows } = await connection.query(sqlQuery.sql, sqlQuery.parameters);
                     const tuples = rows.map(row => loadFactTuple(sqlQuery.labels, row));
                     streams.push({
-                        labels: sqlQuery.labels.map(l => l.name),
                         tuples,
                         bookmark: tuples.length > 0 ? tuples[tuples.length - 1].bookmark : sqlQuery.bookmark
                     });

@@ -1,7 +1,6 @@
 import { dehydrateReference, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
 
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, getFactTypeId, getRoleId } from "../../src/postgres/maps";
-import { SpecificationSqlQuery } from "../../src/postgres/query-description";
 import { sqlFromSpecification } from "../../src/postgres/specification-sql";
 
 const root = dehydrateReference({ type: 'Root' });
@@ -45,7 +44,7 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
         }
         throw new Error(`Unknown input type ${input.type}`);
     });
-    const sqlQueries: SpecificationSqlQuery[] = sqlFromSpecification(start, bookmarks, 100, specification, factTypes, roleMap);
+    const sqlQueries = sqlFromSpecification(start, bookmarks, 100, specification, factTypes, roleMap);
     return { sqlQueries, factTypes, roleMap };
 }
 
@@ -91,7 +90,6 @@ describe("Postgres query generator", () => {
         ]);
         expect(query.labels).toEqual([
             {
-                name: 'f2',
                 type: 'IntegrationTest.Successor',
                 index: 2
             }
@@ -134,12 +132,10 @@ describe("Postgres query generator", () => {
             ]);
             expect(sqlQueries[0].labels).toEqual([
                 {
-                    name: "f2",
                     type: "IntegrationTest.Successor",
                     index: 2
                 },
                 {
-                    name: "f3",
                     type: "IntegrationTest.OtherPredecessor",
                     index: 3
                 }
@@ -185,12 +181,10 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             },
             {
-                name: "f3",
                 type: "MyApplication.Assignment",
                 index: 3
             }
@@ -236,12 +230,10 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             },
             {
-                name: "f3",
                 type: "MyApplication.Project.Deleted",
                 index: 3
             }
@@ -274,7 +266,6 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[1].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             }
@@ -325,12 +316,10 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             },
             {
-                name: "f3",
                 type: "MyApplication.Assignment",
                 index: 3
             }
@@ -381,12 +370,10 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             },
             {
-                name: "f3",
                 type: "MyApplication.Assignment",
                 index: 3
             }
@@ -428,7 +415,6 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             }
@@ -456,12 +442,10 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[1].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             },
             {
-                name: "f3",
                 type: "MyApplication.Project.Name",
                 index: 3
             }
@@ -512,7 +496,6 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             }
@@ -551,7 +534,6 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             }
@@ -724,7 +706,6 @@ describe("Postgres query generator", () => {
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
-                name: "f2",
                 type: "MyApplication.Project",
                 index: 2
             }
