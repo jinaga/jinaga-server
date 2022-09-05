@@ -69,6 +69,12 @@ export class NodeHttpConnection implements HttpConnection {
                             error: response
                         });
                     }
+                    else if (res.statusCode === 201) {
+                        resolve({
+                            result: "success",
+                            response: {}
+                        });
+                    }
                     else if (isJsonResult(res.headers["content-type"])) {
                         try {
                             const json = JSON.parse(response);
