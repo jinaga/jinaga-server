@@ -36,14 +36,14 @@ function get<U>(method: ((req: RequestUser, params?: { [key: string]: string }, 
                     next();
                 }
                 else {
-                    res.setHeader('Content-Type', 'application/json');
+                    res.type("json");
                     res.send(JSON.stringify(response));
                     next();
                 }
             })
             .catch(error => {
                 Trace.error(error);
-                res.sendStatus(500);
+                res.status(500).send(error.message);
                 next();
             });
     };
@@ -58,7 +58,7 @@ function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]
         else {
             method(user, req.params)
                 .then(response => {
-                    res.setHeader('Content-Type', 'application/json');
+                    res.type("json");
                     res.send(JSON.stringify(response));
                     next();
                 })
@@ -85,7 +85,7 @@ function post<T, U>(method: (user: RequestUser, message: T, params?: { [key: str
                     next();
                 }
                 else {
-                    res.setHeader('Content-Type', 'application/json');
+                    res.type("json");
                     res.send(JSON.stringify(response));
                     next();
                 }
@@ -93,13 +93,13 @@ function post<T, U>(method: (user: RequestUser, message: T, params?: { [key: str
             .catch(error => {
                 if (error instanceof Forbidden) {
                     Trace.warn(error.message);
-                    res.setHeader('Content-Type', 'text/plain');
+                    res.type("text");
                     res.status(403).send(error.message);
                 }
                 else {
                     Trace.error(error);
-                    res.setHeader('Content-Type', 'text/plain');
-                    res.sendStatus(500).send(error.message);
+                    res.type("text");
+                    res.status(500).send(error.message);
                 }
                 next();
             });
@@ -111,25 +111,25 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
         const user = <RequestUser>req.user;
         const input = <string>req.body;
         if (!input || typeof(input) !== 'string') {
-            res.setHeader('Content-Type', 'text/plain');
+            res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
         else {
             method(user, input)
                 .then(response => {
-                    res.setHeader('Content-Type', 'application/json');
+                    res.type("text");
                     res.send(JSON.stringify(response, null, 2));
                     next();
                 })
                 .catch(error => {
                     if (error instanceof Forbidden) {
                         Trace.warn(error.message);
-                        res.setHeader('Content-Type', 'text/plain');
+                        res.type("text");
                         res.status(403).send(error.message);
                     }
                     else {
                         Trace.error(error);
-                        res.setHeader('Content-Type', 'text/plain');
+                        res.type("text");
                         res.status(400).send(error.message);
                     }
                     next();
@@ -153,13 +153,13 @@ function postCreate<T>(method: (user: RequestUser, message: T) => Promise<void>)
             .catch(error => {
                 if (error instanceof Forbidden) {
                     Trace.warn(error.message);
-                    res.setHeader('Content-Type', 'text/plain');
+                    res.type("text");
                     res.status(403).send(error.message);
                 }
                 else {
                     Trace.error(error);
-                    res.setHeader('Content-Type', 'text/plain');
-                    res.sendStatus(500).send(error.message);
+                    res.type("text");
+                    res.status(500).send(error.message);
                 }
                 next();
             });
@@ -171,7 +171,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
         const user = <RequestUser>req.user;
         const input = <string>req.body;
         if (!input || typeof(input) !== 'string') {
-            res.setHeader('Content-Type', 'text/plain');
+            res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
         else {
@@ -183,12 +183,12 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
                 .catch(error => {
                     if (error instanceof Forbidden) {
                         Trace.warn(error.message);
-                        res.setHeader('Content-Type', 'text/plain');
+                        res.type("text");
                         res.status(403).send(error.message);
                     }
                     else {
                         Trace.error(error);
-                        res.setHeader('Content-Type', 'text/plain');
+                        res.type("text");
                         res.status(400).send(error.message);
                     }
                     next();
