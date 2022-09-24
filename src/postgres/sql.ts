@@ -455,6 +455,15 @@ class QueryBuilder {
     }
 
     private pushExistentialCondition(typeId: number, typeName: string, state: QueryBuilderState, step: ExistentialCondition): QueryBuilderState {
+        if (this.queryParts.joins.length === 0) {
+            // We cannot apply a condition until we have some joins.
+            return state;
+        }
+        const lastJoin = this.queryParts.joins[this.queryParts.joins.length - 1];
+        if (lastJoin.table !== 'edge') {
+            throw new Error(`Existential condition on non-edge table ${lastJoin.table}`);
+        }
+
         const nested = this.buildNestedSql(typeId, typeName, step.steps);
         if (!nested) {
             if (step.quantifier === Quantifier.Exists) {
@@ -467,10 +476,6 @@ class QueryBuilder {
                 // An empty negative existential condition cannot exclude any facts.
                 return state;
             }
-        }
-        const lastJoin = this.queryParts.joins[this.queryParts.joins.length - 1];
-        if (lastJoin.table !== 'edge') {
-            throw new Error(`Existential condition on non-edge table ${lastJoin.table}`);
         }
         this.queryParts.existentialClauses.push({
             quantifier: step.quantifier,
