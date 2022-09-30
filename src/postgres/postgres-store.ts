@@ -20,6 +20,7 @@ import {
     Specification,
     Step,
     Storage,
+    TopologicalSorter,
 } from "jinaga";
 import { FactFeed } from "jinaga/dist/storage";
 import { PoolClient } from "pg";
@@ -431,7 +432,8 @@ export class PostgresStore implements Storage {
             emptyFactTypeMap()
         );
         this.factTypeMap = mergeFactTypes(this.factTypeMap, resultFactTypes);
-        return result.rows.map((r) => {
+        const sorter = new TopologicalSorter<FactRecord>();
+        const records = result.rows.map((r) => {
             const { fields, predecessors }: { fields: {}, predecessors: PredecessorCollection } = r.data as any;
             return <FactRecord>{
                 type: r.name,
@@ -440,6 +442,7 @@ export class PostgresStore implements Storage {
                 predecessors
             }
         });
+        return sorter.sort(records, (p, r) => r);
     }
 
     private async loadFactTypesFromReferences(references: FactReference[]): Promise<FactTypeMap> {
