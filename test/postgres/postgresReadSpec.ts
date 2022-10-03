@@ -1,6 +1,6 @@
 import { dehydrateReference, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
-import { addFactType, emptyFactTypeMap, getFactTypeId, addRole, emptyRoleMap, getRoleId } from "../../src/postgres/maps";
-import { ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "../../src/postgres/specification-result-sql";
+import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, getFactTypeId, getRoleId } from "../../src/postgres/maps";
+import { resultSqlFromSpecification } from "../../src/postgres/specification-result-sql";
 
 const company = dehydrateReference({ type: "Company" });
 const companyHash = company.hash;

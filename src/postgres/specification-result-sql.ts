@@ -28,9 +28,10 @@ interface EdgeDescription {
     successorFactIndex: number;
     roleParameter: number;
 }
-interface NotExistsConditionDescription {
+interface ExistentialConditionDescription {
+    exists: boolean;
     edges: EdgeDescription[];
-    notExistsConditions: NotExistsConditionDescription[];
+    existentialConditions: ExistentialConditionDescription[];
 }
 interface SpecificationSqlQuery {
     sql: string;
@@ -52,8 +53,8 @@ interface OutputDescription {
     factIndex: number;
 }
 
-function countEdges(notExistsConditions: NotExistsConditionDescription[]): number {
-    return notExistsConditions.reduce((count, c) => count + c.edges.length + countEdges(c.notExistsConditions),
+function countEdges(existentialConditions: ExistentialConditionDescription[]): number {
+    return existentialConditions.reduce((count, c) => count + c.edges.length + countEdges(c.existentialConditions),
         0);
 }
 
@@ -69,7 +70,7 @@ class QueryDescription {
         private readonly outputs: OutputDescription[],
         private readonly facts: FactDescription[],
         private readonly edges: EdgeDescription[],
-        private readonly notExistsConditions: NotExistsConditionDescription[] = []
+        private readonly existentialConditions: ExistentialConditionDescription[] = []
     ) {}
 
     public withParameter(parameter: string | number): { query: QueryDescription; parameterIndex: number; } {
@@ -80,7 +81,7 @@ class QueryDescription {
             this.outputs,
             this.facts,
             this.edges,
-            this.notExistsConditions
+            this.existentialConditions
         );
         return { query, parameterIndex };
     }
@@ -99,7 +100,7 @@ class QueryDescription {
             this.outputs,
             this.facts,
             this.edges,
-            this.notExistsConditions
+            this.existentialConditions
         );
     }
 
@@ -112,7 +113,7 @@ class QueryDescription {
             this.outputs,
             this.facts.concat(fact),
             this.edges,
-            this.notExistsConditions
+            this.existentialConditions
         );
         return { query, factIndex };
     }
@@ -125,14 +126,14 @@ class QueryDescription {
             this.outputs.concat(output),
             this.facts,
             this.edges,
-            this.notExistsConditions
+            this.existentialConditions
         );
         return query;
     }
 
     public withEdge(predecessorFactIndex: number, successorFactIndex: number, roleParameter: number, path: number[]) {
         const edge = {
-            edgeIndex: this.edges.length + countEdges(this.notExistsConditions) + 1,
+            edgeIndex: this.edges.length + countEdges(this.existentialConditions) + 1,
             predecessorFactIndex,
             successorFactIndex,
             roleParameter
@@ -144,7 +145,7 @@ class QueryDescription {
                 this.outputs,
                 this.facts,
                 this.edges.concat(edge),
-                this.notExistsConditions
+                this.existentialConditions
             )
             : new QueryDescription(
                 this.inputs,
@@ -152,20 +153,20 @@ class QueryDescription {
                 this.outputs,
                 this.facts,
                 this.edges,
-                notExistsWithEdge(this.notExistsConditions, edge, path)
+                existentialsWithEdge(this.existentialConditions, edge, path)
             );
         return query;
     }
 
-    public withNotExistsCondition(path: number[]): { query: QueryDescription; path: number[]; } {
-        const { notExistsConditions: newNotExistsConditions, path: newPath } = notExistsWithCondition(this.notExistsConditions, path);
+    public withExistentialCondition(path: number[]): { query: QueryDescription; path: number[]; } {
+        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(this.existentialConditions, path);
         const query = new QueryDescription(
             this.inputs,
             this.parameters,
             this.outputs,
             this.facts,
             this.edges,
-            newNotExistsConditions
+            newExistentialConditions
         );
         return { query, path: newPath };
     }
@@ -200,13 +201,13 @@ class QueryDescription {
             .filter(input => input.factTypeParameter !== 0)
             .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
             .join(" AND ");
-        const notExistsWhereClauses = this.notExistsConditions
-            .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(notExistsWhereClause, writtenFactIndexes)})`)
+        const existentialWhereClauses = this.existentialConditions
+            .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes)})`)
             .join("");
         const orderByClause = this.outputs
             .map(output => `f${output.factIndex}.fact_id ASC`)
             .join(", ");
-        const sql = `SELECT ${columns} FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} ORDER BY ${orderByClause}`;
+        const sql = `SELECT ${columns} FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
         return {
             sql,
             parameters: this.parameters,
@@ -220,50 +221,54 @@ class QueryDescription {
     }
 }
 
-function notExistsWithEdge(notExistsConditions: NotExistsConditionDescription[], edge: { edgeIndex: number; predecessorFactIndex: number; successorFactIndex: number; roleParameter: number; }, path: number[]): NotExistsConditionDescription[] {
+function existentialsWithEdge(existentialConditions: ExistentialConditionDescription[], edge: { edgeIndex: number; predecessorFactIndex: number; successorFactIndex: number; roleParameter: number; }, path: number[]): ExistentialConditionDescription[] {
     if (path.length === 1) {
-        return notExistsConditions.map((c, i) => i === path[0] ?
+        return existentialConditions.map((c, i) => i === path[0] ?
             {
+                exists: c.exists,
                 edges: [...c.edges, edge],
-                notExistsConditions: c.notExistsConditions
+                existentialConditions: c.existentialConditions
             } :
             c
         );
     }
     else {
-        return notExistsConditions.map((c, i) => i === path[0] ?
+        return existentialConditions.map((c, i) => i === path[0] ?
             {
+                exists: c.exists,
                 edges: c.edges,
-                notExistsConditions: notExistsWithEdge(c.notExistsConditions, edge, path.slice(1))
+                existentialConditions: existentialsWithEdge(c.existentialConditions, edge, path.slice(1))
             } :
             c
         );
     }
 }
 
-function notExistsWithCondition(notExistsConditions: NotExistsConditionDescription[], path: number[]): { notExistsConditions: NotExistsConditionDescription[]; path: number[]; } {
+function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
     if (path.length === 0) {
-        path = [notExistsConditions.length];
-        notExistsConditions = [
-            ...notExistsConditions,
+        path = [existentialConditions.length];
+        existentialConditions = [
+            ...existentialConditions,
             {
+                exists: false,
                 edges: [],
-                notExistsConditions: []
+                existentialConditions: []
             }
         ];
-        return { notExistsConditions, path };
+        return { existentialConditions: existentialConditions, path };
     }
     else {
-        const { notExistsConditions: newNotExistsConditions, path: newPath } = notExistsWithCondition(notExistsConditions[path[0]].notExistsConditions, path.slice(1));
-        notExistsConditions = notExistsConditions.map((c, i) => i === path[0] ?
+        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(existentialConditions[path[0]].existentialConditions, path.slice(1));
+        existentialConditions = existentialConditions.map((c, i) => i === path[0] ?
             {
+                exists: c.exists,
                 edges: c.edges,
-                notExistsConditions: newNotExistsConditions
+                existentialConditions: newExistentialConditions
             } :
             c
         );
         path = [path[0], ...newPath];
-        return { notExistsConditions, path };
+        return { existentialConditions: existentialConditions, path };
     }
 }
 
@@ -311,8 +316,8 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
     return joins;
 }
 
-function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDescription, outerFactIndexes: Set<number>): string {
-    const firstEdge = notExistsWhereClause.edges[0];
+function generateExistentialWhereClause(existentialCondition: ExistentialConditionDescription, outerFactIndexes: Set<number>): string {
+    const firstEdge = existentialCondition.edges[0];
     const writtenFactIndexes = new Set<number>(outerFactIndexes);
     const firstJoin: string[] = [];
     const whereClause: string[] = [];
@@ -346,7 +351,7 @@ function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDe
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const tailJoins: string[] = generateJoins(notExistsWhereClause.edges.slice(1), writtenFactIndexes);
+    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
     return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
 }
@@ -645,8 +650,8 @@ class ResultDescriptionBuilder {
                         // Apply the where clause and continue with the tuple where it is true.
                         // The path describes which not-exists condition we are currently building on.
                         // Because the path is not empty, labeled facts will be included in the output.
-                        const { query: queryDescriptionWithNotExist, path: conditionalPath } = queryDescription.withNotExistsCondition(path);
-                        const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithNotExist, knownFacts, conditionalPath, condition.matches);
+                        const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(path);
+                        const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithExistential, knownFacts, conditionalPath, condition.matches);
 
                         // If the negative existential condition is not satisfiable, then
                         // that means that the condition will always be true.
