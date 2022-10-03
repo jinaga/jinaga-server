@@ -15,7 +15,6 @@ import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
 interface SpecificationLabel {
     name: string;
-    type: string;
     index: number;
 }
 interface FactDescription {
@@ -43,8 +42,6 @@ interface SpecificationSqlQuery {
 interface InputDescription {
     label: string;
     factIndex: number;
-    factTypeId: number;
-    factHash: string;
     factTypeParameter: number;
     factHashParameter: number;
 }
@@ -102,8 +99,6 @@ class QueryDescription {
         const input: InputDescription = {
             label: label.name,
             factIndex,
-            factTypeId,
-            factHash,
             factTypeParameter,
             factHashParameter
         };
@@ -231,7 +226,6 @@ class QueryDescription {
         const writtenFactIndexes = new Set<number>().add(firstFactIndex);
         const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
         const inputWhereClauses = this.inputs
-            .filter(input => input.factTypeParameter !== 0)
             .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
             .join(" AND ");
         const existentialWhereClauses = this.existentialConditions
@@ -408,7 +402,6 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
     const inputWhereClauses = existentialCondition.inputs
-        .filter(input => input.factTypeParameter !== 0)
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join("");
     const existentialWhereClauses = existentialCondition.existentialConditions
