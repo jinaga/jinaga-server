@@ -257,13 +257,14 @@ describe("Postgres read", () => {
                     `JOIN public.fact f5 ` +
                         `ON f5.fact_id = e3.successor_fact_id ` +
                     `WHERE e3.predecessor_fact_id = f4.fact_id ` +
-                        `AND e3.role_id = $5` +
-                // `) AND NOT EXISTS (` +
-                //     `SELECT 1 ` +
-                //     `FROM public.edge e7 ` +
-                //     `JOIN public.fact f8 ` +
-                //         `ON f8.fact_id = e7.successor_fact_id ` +
-                //     `WHERE e7.predecessor_fact_id = f7.fact_id AND e7.role_id = $11` +
+                        `AND e3.role_id = $5 ` +
+                        `AND NOT EXISTS (` +
+                            `SELECT 1 ` +
+                            `FROM public.edge e4 ` +
+                            `JOIN public.fact f6 ` +
+                                `ON f6.fact_id = e4.successor_fact_id ` +
+                            `WHERE e4.predecessor_fact_id = f5.fact_id AND e4.role_id = $6` +
+                        `)` +
                 `) AND EXISTS (` +
                     `SELECT 1 ` +
                     `FROM public.edge e5 ` +
@@ -274,7 +275,14 @@ describe("Postgres read", () => {
                         `AND e6.role_id = $10 ` +
                     `JOIN public.fact f2 ` +
                         `ON f2.fact_id = e6.predecessor_fact_id ` +
-                    `WHERE e5.predecessor_fact_id = f4.fact_id AND e5.role_id = $7` +
+                    `WHERE e5.predecessor_fact_id = f4.fact_id AND e5.role_id = $7 ` +
+                        `AND NOT EXISTS (` +
+                            `SELECT 1 ` +
+                            `FROM public.edge e7 ` +
+                            `JOIN public.fact f8 ` +
+                                `ON f8.fact_id = e7.successor_fact_id ` +
+                            `WHERE e7.predecessor_fact_id = f7.fact_id AND e7.role_id = $11` +
+                        `)` +
                 `) ` +
             `ORDER BY f4.fact_id ASC, f9.fact_id ASC`);
     });

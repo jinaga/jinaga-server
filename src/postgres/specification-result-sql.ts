@@ -353,7 +353,10 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     }
     const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
-    return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
+    const existentialWhereClauses = existentialCondition.existentialConditions
+        .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes)})`)
+        .join("");
+return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${existentialWhereClauses}`;
 }
 
 type FactByIdentifier = {
