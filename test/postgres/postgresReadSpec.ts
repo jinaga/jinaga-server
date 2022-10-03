@@ -132,6 +132,55 @@ describe("Postgres read", () => {
         ]);
     });
 
+    it("should apply positive existential conditions", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                project: Project [
+                    project->department: Department->company: Company = company
+                    E {
+                        deleted: Project.Deleted [
+                            deleted->project: Project = project
+                        ]
+                    }
+                ]
+            }
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT f3.hash as hash3, f3.fact_id as id3, f3.data as data3 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `JOIN public.edge e2 ` +
+                `ON e2.predecessor_fact_id = f2.fact_id ` +
+                `AND e2.role_id = $4 ` +
+            `JOIN public.fact f3 ` +
+                `ON f3.fact_id = e2.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `AND EXISTS (` +
+                `SELECT 1 ` +
+                `FROM public.edge e3 ` +
+                `JOIN public.fact f4 ` +
+                    `ON f4.fact_id = e3.successor_fact_id ` +
+                `WHERE e3.predecessor_fact_id = f3.fact_id ` +
+                    `AND e3.role_id = $5` +
+            `) ` +
+            `ORDER BY f3.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company'),
+            roleParameter(roleMap, factTypes, 'Project', 'department'),
+            roleParameter(roleMap, factTypes, 'Project.Deleted', 'project')
+        ]);
+    });
+
     it("should read complex specifications", () => {
         const { composer, factTypes, roleMap } = sqlFor(`
             (company: Company, user: Jinaga.User) {
@@ -183,7 +232,6 @@ describe("Postgres read", () => {
         expect(queries.sqlQuery.sql).toEqual(
             `SELECT ` +
                 `f4.hash as hash4, f4.fact_id as id4, f4.data as data4, ` +
-                `f7.hash as hash7, f7.fact_id as id7, f7.data as data7, ` +
                 `f9.hash as hash9, f9.fact_id as id9, f9.data as data9 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
@@ -196,16 +244,6 @@ describe("Postgres read", () => {
                 `AND e2.role_id = $4 ` +
             `JOIN public.fact f4 ` +
                 `ON f4.fact_id = e2.successor_fact_id ` +
-            `JOIN public.edge e5 ` +
-                `ON e5.predecessor_fact_id = f4.fact_id ` +
-                `AND e5.role_id = $7 ` +
-            `JOIN public.fact f7 ` +
-                `ON f7.fact_id = e5.successor_fact_id ` +
-            `JOIN public.edge e6 ` +
-                `ON e6.successor_fact_id = f7.fact_id ` +
-                `AND e6.role_id = $10 ` +
-            `JOIN public.fact f2 ` +
-                `ON f2.fact_id = e6.predecessor_fact_id ` +
             `JOIN public.edge e8 ` +
                 `ON e8.predecessor_fact_id = f4.fact_id ` +
                 `AND e8.role_id = $12 ` +
@@ -220,13 +258,24 @@ describe("Postgres read", () => {
                         `ON f5.fact_id = e3.successor_fact_id ` +
                     `WHERE e3.predecessor_fact_id = f4.fact_id ` +
                         `AND e3.role_id = $5` +
-                `) AND NOT EXISTS (` +
+                // `) AND NOT EXISTS (` +
+                //     `SELECT 1 ` +
+                //     `FROM public.edge e7 ` +
+                //     `JOIN public.fact f8 ` +
+                //         `ON f8.fact_id = e7.successor_fact_id ` +
+                //     `WHERE e7.predecessor_fact_id = f7.fact_id AND e7.role_id = $11` +
+                `) AND EXISTS (` +
                     `SELECT 1 ` +
-                    `FROM public.edge e7 ` +
-                    `JOIN public.fact f8 ` +
-                        `ON f8.fact_id = e7.successor_fact_id ` +
-                    `WHERE e7.predecessor_fact_id = f7.fact_id AND e7.role_id = $11` +
+                    `FROM public.edge e5 ` +
+                    `JOIN public.fact f7 ` +
+                        `ON f7.fact_id = e5.successor_fact_id ` +
+                    `JOIN public.edge e6 ` +
+                        `ON e6.successor_fact_id = f7.fact_id ` +
+                        `AND e6.role_id = $10 ` +
+                    `JOIN public.fact f2 ` +
+                        `ON f2.fact_id = e6.predecessor_fact_id ` +
+                    `WHERE e5.predecessor_fact_id = f4.fact_id AND e5.role_id = $7` +
                 `) ` +
-            `ORDER BY f4.fact_id ASC, f7.fact_id ASC, f9.fact_id ASC`);
+            `ORDER BY f4.fact_id ASC, f9.fact_id ASC`);
     });
 });

@@ -158,8 +158,8 @@ class QueryDescription {
         return query;
     }
 
-    public withExistentialCondition(path: number[]): { query: QueryDescription; path: number[]; } {
-        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(this.existentialConditions, path);
+    public withExistentialCondition(exists: boolean, path: number[]): { query: QueryDescription; path: number[]; } {
+        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(this.existentialConditions, exists, path);
         const query = new QueryDescription(
             this.inputs,
             this.parameters,
@@ -244,13 +244,13 @@ function existentialsWithEdge(existentialConditions: ExistentialConditionDescrip
     }
 }
 
-function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
+function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], exists: boolean, path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
     if (path.length === 0) {
         path = [existentialConditions.length];
         existentialConditions = [
             ...existentialConditions,
             {
-                exists: false,
+                exists: exists,
                 edges: [],
                 existentialConditions: []
             }
@@ -258,7 +258,7 @@ function existentialsWithNewCondition(existentialConditions: ExistentialConditio
         return { existentialConditions: existentialConditions, path };
     }
     else {
-        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(existentialConditions[path[0]].existentialConditions, path.slice(1));
+        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(existentialConditions[path[0]].existentialConditions, exists, path.slice(1));
         existentialConditions = existentialConditions.map((c, i) => i === path[0] ?
             {
                 exists: c.exists,
@@ -641,24 +641,17 @@ class ResultDescriptionBuilder {
                     ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, knownFacts, path, match.unknown, "", condition));
                 }
                 else if (condition.type === "existential") {
-                    if (condition.exists) {
-                        // Include the edges of the existential condition into the current
-                        // query description.
-                        ({ queryDescription } = this.addEdges(queryDescription, knownFacts, path, condition.matches));
-                    }
-                    else {
-                        // Apply the where clause and continue with the tuple where it is true.
-                        // The path describes which not-exists condition we are currently building on.
-                        // Because the path is not empty, labeled facts will be included in the output.
-                        const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(path);
-                        const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithExistential, knownFacts, conditionalPath, condition.matches);
+                    // Apply the where clause and continue with the tuple where it is true.
+                    // The path describes which not-exists condition we are currently building on.
+                    // Because the path is not empty, labeled facts will be included in the output.
+                    const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, path);
+                    const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithExistential, knownFacts, conditionalPath, condition.matches);
 
-                        // If the negative existential condition is not satisfiable, then
-                        // that means that the condition will always be true.
-                        // We can therefore skip the branch for the negative existential condition.
-                        if (queryDescriptionConditional.isSatisfiable()) {
-                            queryDescription = queryDescriptionConditional;
-                        }
+                    // If the negative existential condition is not satisfiable, then
+                    // that means that the condition will always be true.
+                    // We can therefore skip the branch for the negative existential condition.
+                    if (queryDescriptionConditional.isSatisfiable()) {
+                        queryDescription = queryDescriptionConditional;
                     }
                 }
                 if (!queryDescription.isSatisfiable()) {
