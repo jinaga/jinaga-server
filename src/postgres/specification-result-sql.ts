@@ -30,6 +30,7 @@ interface EdgeDescription {
 }
 interface ExistentialConditionDescription {
     exists: boolean;
+    inputs: InputDescription[];
     edges: EdgeDescription[];
     existentialConditions: ExistentialConditionDescription[];
 }
@@ -86,22 +87,54 @@ class QueryDescription {
         return { query, parameterIndex };
     }
 
-    public withInputParameter(label: string): QueryDescription {
+    public withInputParameter(label: Label, factTypeId: number, factHash: string, path: number[]): { queryDescription: QueryDescription, factDescription: FactDescription } {
         const factTypeParameter = this.parameters.length + 1;
         const factHashParameter = factTypeParameter + 1;
-        const input = this.inputs.find(i => i.label === label);
-        const inputs = this.inputs.map(input => input.label === label
-            ? { ...input, factTypeParameter, factHashParameter }
-            : input
-        );
-        return new QueryDescription(
-            inputs,
-            this.parameters.concat(input.factTypeId, input.factHash),
-            this.outputs,
-            this.facts,
-            this.edges,
-            this.existentialConditions
-        );
+        const factIndex = this.facts.length + 1;
+        const factDescription: FactDescription = {
+            factIndex: factIndex,
+            type: label.type
+        };
+        const facts = [
+            ...this.facts,
+            factDescription
+        ]
+        const input: InputDescription = {
+            label: label.name,
+            factIndex,
+            factTypeId,
+            factHash,
+            factTypeParameter,
+            factHashParameter
+        };
+        const parameters = this.parameters.concat(factTypeId, factHash);
+        if (path.length === 0) {
+            const inputs = [
+                ...this.inputs,
+                input
+            ];
+            const queryDescription = new QueryDescription(
+                inputs,
+                parameters,
+                this.outputs,
+                facts,
+                this.edges,
+                this.existentialConditions
+            );
+            return { queryDescription, factDescription };
+        }
+        else {
+            const existentialConditions = existentialsWithInput(this.existentialConditions, input, path);
+            const queryDescription = new QueryDescription(
+                this.inputs,
+                parameters,
+                this.outputs,
+                facts,
+                this.edges,
+                existentialConditions
+            );
+            return { queryDescription, factDescription };
+        }
     }
 
     public withFact(type: string): { query: QueryDescription; factIndex: number; } {
@@ -221,13 +254,12 @@ class QueryDescription {
     }
 }
 
-function existentialsWithEdge(existentialConditions: ExistentialConditionDescription[], edge: { edgeIndex: number; predecessorFactIndex: number; successorFactIndex: number; roleParameter: number; }, path: number[]): ExistentialConditionDescription[] {
+function existentialsWithInput(existentialConditions: ExistentialConditionDescription[], input: InputDescription, path: number[]): ExistentialConditionDescription[] {
     if (path.length === 1) {
         return existentialConditions.map((c, i) => i === path[0] ?
             {
-                exists: c.exists,
-                edges: [...c.edges, edge],
-                existentialConditions: c.existentialConditions
+                ...c,
+                inputs: [...c.inputs, input]
             } :
             c
         );
@@ -235,8 +267,28 @@ function existentialsWithEdge(existentialConditions: ExistentialConditionDescrip
     else {
         return existentialConditions.map((c, i) => i === path[0] ?
             {
-                exists: c.exists,
-                edges: c.edges,
+                ...c,
+                existentialConditions: existentialsWithInput(c.existentialConditions, input, path.slice(1))
+            } :
+            c
+        );
+    }
+}
+
+function existentialsWithEdge(existentialConditions: ExistentialConditionDescription[], edge: EdgeDescription, path: number[]): ExistentialConditionDescription[] {
+    if (path.length === 1) {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                edges: [...c.edges, edge]
+            } :
+            c
+        );
+    }
+    else {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
                 existentialConditions: existentialsWithEdge(c.existentialConditions, edge, path.slice(1))
             } :
             c
@@ -251,6 +303,7 @@ function existentialsWithNewCondition(existentialConditions: ExistentialConditio
             ...existentialConditions,
             {
                 exists: exists,
+                inputs: [],
                 edges: [],
                 existentialConditions: []
             }
@@ -262,6 +315,7 @@ function existentialsWithNewCondition(existentialConditions: ExistentialConditio
         existentialConditions = existentialConditions.map((c, i) => i === path[0] ?
             {
                 exists: c.exists,
+                inputs: c.inputs,
                 edges: c.edges,
                 existentialConditions: newExistentialConditions
             } :
@@ -353,10 +407,14 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     }
     const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
+    const inputWhereClauses = existentialCondition.inputs
+        .filter(input => input.factTypeParameter !== 0)
+        .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+        .join("");
     const existentialWhereClauses = existentialCondition.existentialConditions
         .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes)})`)
         .join("");
-return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${existentialWhereClauses}`;
+return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${existentialWhereClauses}`;
 }
 
 type FactByIdentifier = {
@@ -570,37 +628,16 @@ class ResultDescriptionBuilder {
             }
         }
 
-        // Allocate a fact table for each given.
-        // While the fact type and hash parameters are zero, the join will not be written.
-        const inputs: InputDescription[] = specification.given
-            .map((label, i) => ({
-                label: label.name,
-                factIndex: i+1,
-                factTypeId: getFactTypeId(this.factTypes, label.type),
-                factHash: start[i].hash,
-                factTypeParameter: 0,
-                factHashParameter: 0
-            }));
-        const facts: FactDescription[] = specification.given
-            .map((label, i) => ({
-                factIndex: i+1,
-                type: label.type
-            }));
-        const givenFacts = specification.given.reduce((knownFacts, label, i) => ({
-            ...knownFacts,
-            [label.name]: facts[i]
-        }), {} as FactByIdentifier);
-
         // The QueryDescription is an immutable data type.
         // Initialize it with the inputs and facts.
         // The DescriptionBuilder will branch at various points, and
         // build on the current query description along each branch.
-        const initialQueryDescription = new QueryDescription(inputs, [], [], facts, [], []);
-        return this.createResultDescription(initialQueryDescription, specification.matches, specification.childProjections, givenFacts, []);
+        const initialQueryDescription = new QueryDescription([], [], [], [], [], []);
+        return this.createResultDescription(initialQueryDescription, specification.given, start, specification.matches, specification.childProjections, {}, []);
     }
 
-    private createResultDescription(queryDescription: QueryDescription, matches: Match[], childProjections: ChildProjections, knownFacts: FactByIdentifier, path: number[]): ResultDescription {
-        ({ queryDescription, knownFacts } = this.addEdges(queryDescription, knownFacts, path, matches));
+    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], childProjections: ChildProjections, knownFacts: FactByIdentifier, path: number[]): ResultDescription {
+        ({ queryDescription, knownFacts } = this.addEdges(queryDescription, given, start, knownFacts, path, matches));
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
             return {
@@ -616,7 +653,7 @@ class ResultDescriptionBuilder {
             const elementProjections = childProjections
                 .filter(projection => projection.type === "field" || projection.type === "hash") as ElementProjection[];
             for (const child of specificationProjections) {
-                const childResultDescription = this.createResultDescription(queryDescription, child.matches, child.childProjections, knownFacts, []);
+                const childResultDescription = this.createResultDescription(queryDescription, given, start, child.matches, child.childProjections, knownFacts, []);
                 childResultDescriptions.push({
                     name: child.name,
                     ...childResultDescription
@@ -637,18 +674,18 @@ class ResultDescriptionBuilder {
         }
     }
 
-    private addEdges(queryDescription: QueryDescription, knownFacts: FactByIdentifier, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
+    private addEdges(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByIdentifier, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
         for (const match of matches) {
             for (const condition of match.conditions) {
                 if (condition.type === "path") {
-                    ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, knownFacts, path, match.unknown, "", condition));
+                    ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, given, start, knownFacts, path, match.unknown, "", condition));
                 }
                 else if (condition.type === "existential") {
                     // Apply the where clause and continue with the tuple where it is true.
                     // The path describes which not-exists condition we are currently building on.
                     // Because the path is not empty, labeled facts will be included in the output.
                     const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, path);
-                    const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithExistential, knownFacts, conditionalPath, condition.matches);
+                    const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithExistential, given, start, knownFacts, conditionalPath, condition.matches);
 
                     // If the negative existential condition is not satisfiable, then
                     // that means that the condition will always be true.
@@ -671,11 +708,24 @@ class ResultDescriptionBuilder {
         };
     }
 
-    private addPathCondition(queryDescription: QueryDescription, knownFacts: FactByIdentifier, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
+    private addPathCondition(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByIdentifier, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
         // If no input parameter has been allocated, allocate one now.
-        const input = queryDescription.inputByLabel(condition.labelRight);
-        if (input && input.factTypeParameter === 0) {
-            queryDescription = queryDescription.withInputParameter(input.label);
+        if (!knownFacts.hasOwnProperty(condition.labelRight)) {
+            const givenIndex = given.findIndex(given => given.name === condition.labelRight);
+            if (givenIndex < 0) {
+                throw new Error(`No input parameter found for label ${condition.labelRight}`);
+            }
+            const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
+                given[givenIndex],
+                getFactTypeId(this.factTypes, start[givenIndex].type),
+                start[givenIndex].hash,
+                path
+            );
+            queryDescription = newQueryDescription;
+            knownFacts = {
+                ...knownFacts,
+                [condition.labelRight]: factDescription
+            };
         }
 
         // Determine whether we have already written the output.
