@@ -1,5 +1,5 @@
 import { dehydrateReference, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
-import { addFactType, emptyFactTypeMap, getFactTypeId, addRole, emptyRoleMap } from "../../src/postgres/maps";
+import { addFactType, emptyFactTypeMap, getFactTypeId, addRole, emptyRoleMap, getRoleId } from "../../src/postgres/maps";
 import { ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "../../src/postgres/specification-result-sql";
 
 const company = dehydrateReference({ type: "Company" });
@@ -47,8 +47,92 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
     return { composer, factTypes, roleMap };
 }
 
+function roleParameter(roleMap: Map<number, Map<string, number>>, factTypes: Map<string, number>, factTypeName: string, roleName: string): number {
+    const factTypeId = getFactTypeId(factTypes, factTypeName);
+    if (!factTypeId) {
+        throw new Error(`Unknown fact type ${factTypeName}`);
+    }
+    const roleId = getRoleId(roleMap, factTypeId, roleName);
+    if (!roleId) {
+        throw new Error(`Unknown role ${roleName} in fact type ${factTypeName}`);
+    }
+    return roleId;
+}
+
 describe("Postgres read", () => {
-    it.only("should read complex specifications", () => {
+    it("should join successors", () => {
+        const { composer } = sqlFor(`
+            (company: Company) {
+                department: Department [
+                    department->company: Company = company
+                ]
+            }
+        `);
+
+        const sql = composer.getSqlQueries().sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `ORDER BY f2.fact_id ASC`
+        );
+    });
+
+    it("should apply negative existential conditions", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                project: Project [
+                    project->department: Department->company: Company = company
+                    !E {
+                        deleted: Project.Deleted [
+                            deleted->project: Project = project
+                        ]
+                    }
+                ]
+            }
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT f3.hash as hash3, f3.fact_id as id3, f3.data as data3 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `JOIN public.edge e2 ` +
+                `ON e2.predecessor_fact_id = f2.fact_id ` +
+                `AND e2.role_id = $4 ` +
+            `JOIN public.fact f3 ` +
+                `ON f3.fact_id = e2.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `AND NOT EXISTS (` +
+                `SELECT 1 ` +
+                `FROM public.edge e3 ` +
+                `JOIN public.fact f4 ` +
+                    `ON f4.fact_id = e3.successor_fact_id ` +
+                `WHERE e3.predecessor_fact_id = f3.fact_id ` +
+                    `AND e3.role_id = $5` +
+            `) ` +
+            `ORDER BY f3.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company'),
+            roleParameter(roleMap, factTypes, 'Project', 'department'),
+            roleParameter(roleMap, factTypes, 'Project.Deleted', 'project')
+        ]);
+    });
+
+    it("should read complex specifications", () => {
         const { composer, factTypes, roleMap } = sqlFor(`
             (company: Company, user: Jinaga.User) {
                 project: Project [
