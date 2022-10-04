@@ -51,6 +51,13 @@ In this walkthrough, we will be using a complex specification that demonstrates 
 }
 ```
 
+The model for this specification looks like this:
+
+![Model](model.png)
+
+The blue facts are givens.
+The thick black facts are the top-level unknowns.
+
 ## Projecting Current State
 
 Jinaga projects current state when executing `j.query` or `j.watch`.
@@ -83,49 +90,9 @@ The composers match their results to their parent based on a list of fact IDs.
 The tree is constructed in [`specification-result-sql`](../../src/postgres/specification-result-sql.ts), starting in the `resultSqlFromSpecification` function.
 It uses `ResultDescriptionBuilder.buildDescription` to walk the specification.
 
-It first creates a `QueryDescription` from the givens.
-It allocates a `InputDescription` and `FactDescription` for each given.
-The query description that the example specification produces is:
-
-```json
-{
-  "inputs": [
-    {
-      "label": "company",
-      "factIndex": 1,
-      "factTypeId": 1,
-      "factHash": "fSS1hK7OGAeSX4ocN3acuFF87jvzCdPN3vLFUtcej0lOAsVV859UIYZLRcHUoMbyd/J31TdVn5QuE7094oqUPg==",
-      "factTypeParameter": 0,
-      "factHashParameter": 0
-    },
-    {
-      "label": "user",
-      "factIndex": 2,
-      "factTypeId": 2,
-      "factHash": "zpAD2wuTIWa/3Bfshc+VZFDLqrlvFiVBdnSAX6pg4dDuKfKxhwIEV4kSfhzJ4ZNP65sfHTnJZUh7sjowrFuFPA==",
-      "factTypeParameter": 0,
-      "factHashParameter": 0
-    }
-  ],
-  "parameters": [],
-  "outputs": [],
-  "facts": [
-    {
-      "factIndex": 1,
-      "type": "Company"
-    },
-    {
-      "factIndex": 2,
-      "type": "Jinaga.User"
-    }
-  ],
-  "edges": [],
-  "existentialConditions": []
-}
-```
-
-The two inputs do not yet have type or hash parameters allocated.
-They will therefore not be written out.
+It first creates an empty `QueryDescription`.
+This is an immutable data structure.
+As the builder visits parts of the specification, it will operate on the query description to create new, more complete query descriptions.
 
 Next, the result description builder adds edges to the result description.
 It calls `addEdges`, which walks the matches and conditions.
@@ -136,23 +103,43 @@ Conditions are either path conditions or existential conditions
 A path condition connects an unknown on the left to a previously defined label on the right.
 For each path condition, the builder calls `addPathCondition`.
 The function first evaluates the label on the right.
-If this represents a given that has not yet been allocated parameters, it allocates them now.
+If this represents a given that has not yet been added, it adds the input now.
 
-In this example, the first path connects the unknown to the given `company`.
-It therefore allocates the parameters, producing the following `InputDescription`:
+In this example, the first path connects the unknown `project` to the given `company`.
+It makes up just this part of the model:
+
+![First path](first-path.png)
+
+The lavel `company` refers to a given that has not yet been added.
+It therefore allocates the fact, input, and parameter, producing the following `QueryDescription`:
 
 ```json
 {
-  "label": "company",
-  "factIndex": 1,
-  "factTypeId": 1,
-  "factHash": "fSS1hK7OGAeSX4ocN3acuFF87jvzCdPN3vLFUtcej0lOAsVV859UIYZLRcHUoMbyd/J31TdVn5QuE7094oqUPg==",
-  "factTypeParameter": 1,
-  "factHashParameter": 2
+  "inputs": [
+    {
+      "label": "company",
+      "factIndex": 1,
+      "factTypeParameter": 1,
+      "factHashParameter": 2
+    }
+  ],
+  "parameters": [
+    1,
+    "fSS1hK7OGAeSX4ocN3acuFF87jvzCdPN3vLFUtcej0lOAsVV859UIYZLRcHUoMbyd/J31TdVn5QuE7094oqUPg=="
+  ],
+  "outputs": [],
+  "facts": [
+    {
+      "factIndex": 1,
+      "type": "Company"
+    }
+  ],
+  "edges": [],
+  "existentialConditions": []
 }
 ```
 
-It then looks up the label on the right-hand-side, thus identifying its type and index.
+It then identifies the type and index of the right-hand label.
 In this case, the type is "Company" and the index is 1.
 Then, it walks up the predecessor roles on the right, adding edges as it goes.
 In this case, there are no roles, so it adds no edges on this pass.
@@ -181,6 +168,7 @@ It reverses that array of edges, then adds them to the query description.
 For each one, it allocates a parameter for the role ID.
 Then it allocates a new fact index if necessary, and then a new edge.
 
+When it has finished with the edges, it adds the unknown as an output.
 At this point, the example query description looks like this:
 
 ```json
@@ -189,18 +177,8 @@ At this point, the example query description looks like this:
     {
       "label": "company",
       "factIndex": 1,
-      "factTypeId": 1,
-      "factHash": "fSS1hK7OGAeSX4ocN3acuFF87jvzCdPN3vLFUtcej0lOAsVV859UIYZLRcHUoMbyd/J31TdVn5QuE7094oqUPg==",
       "factTypeParameter": 1,
       "factHashParameter": 2
-    },
-    {
-      "label": "user",
-      "factIndex": 2,
-      "factTypeId": 2,
-      "factHash": "zpAD2wuTIWa/3Bfshc+VZFDLqrlvFiVBdnSAX6pg4dDuKfKxhwIEV4kSfhzJ4ZNP65sfHTnJZUh7sjowrFuFPA==",
-      "factTypeParameter": 0,
-      "factHashParameter": 0
     }
   ],
   "parameters": [
@@ -213,7 +191,7 @@ At this point, the example query description looks like this:
     {
       "label": "project",
       "type": "Project",
-      "factIndex": 4
+      "factIndex": 3
     }
   ],
   "facts": [
@@ -223,14 +201,10 @@ At this point, the example query description looks like this:
     },
     {
       "factIndex": 2,
-      "type": "Jinaga.User"
-    },
-    {
-      "factIndex": 3,
       "type": "Department"
     },
     {
-      "factIndex": 4,
+      "factIndex": 3,
       "type": "Project"
     }
   ],
@@ -238,13 +212,13 @@ At this point, the example query description looks like this:
     {
       "edgeIndex": 1,
       "predecessorFactIndex": 1,
-      "successorFactIndex": 3,
+      "successorFactIndex": 2,
       "roleParameter": 3
     },
     {
       "edgeIndex": 2,
-      "predecessorFactIndex": 3,
-      "successorFactIndex": 4,
+      "predecessorFactIndex": 2,
+      "successorFactIndex": 3,
       "roleParameter": 4
     }
   ],
@@ -255,25 +229,22 @@ At this point, the example query description looks like this:
 This corresponds to the following SQL:
 
 ```sql
-SELECT f4.hash as hash4, f4.fact_id as id4, f4.data as data4  -- project
+SELECT f3.hash AS hash3, f3.fact_id AS id3, f3.data AS data3
   FROM public.fact f1  -- company
   JOIN public.edge e1  -- department->company
     ON e1.predecessor_fact_id = f1.fact_id
-   AND e1.role_id = $3
-  JOIN public.fact f3  -- department
-    ON f3.fact_id = e1.successor_fact_id
+  AND e1.role_id = $3
+  JOIN public.fact f2  -- department
+    ON f2.fact_id = e1.successor_fact_id
   JOIN public.edge e2  -- project->department
-    ON e2.predecessor_fact_id = f3.fact_id
-   AND e2.role_id = $4
-  JOIN public.fact f4  -- project
-    ON f4.fact_id = e2.successor_fact_id
+    ON e2.predecessor_fact_id = f2.fact_id
+  AND e2.role_id = $4
+  JOIN public.fact f3  -- project
+    ON f3.fact_id = e2.successor_fact_id
 WHERE f1.fact_type_id = $1
   AND f1.hash = $2
-ORDER BY f4.fact_id ASC
+ORDER BY f3.fact_id ASC
 ```
-
-Notice that fact index 2 (user) is not represented.
-It has not yet been referenced by a path, and is therefore not connected to the graph.
 
 #### Existential conditions
 
@@ -285,7 +256,7 @@ It adds the existential condition to the query description, and then records the
 This first existential condition is at index 0 of the top-level query description, so it is at path `[ 0 ]`.
 When we get to the existential condition *inside* of this one, it will have path `[ 0, 0 ]`.
 
-The reason for building the query definitions this way is that the inputs, parameters, and facts all exist only at the top level.
+The reason for building the query definitions this way is that the parameters and facts all exist only at the top level.
 We need one consistent set of indexes so that every alias in the SQL query is distinct.
 We also need one consistent set of parameters to pass to the query.
 
@@ -297,18 +268,8 @@ By the time the builder has finished adding the edges for the existential condit
     {
       "label": "company",
       "factIndex": 1,
-      "factTypeId": 1,
-      "factHash": "fSS1hK7OGAeSX4ocN3acuFF87jvzCdPN3vLFUtcej0lOAsVV859UIYZLRcHUoMbyd/J31TdVn5QuE7094oqUPg==",
       "factTypeParameter": 1,
       "factHashParameter": 2
-    },
-    {
-      "label": "user",
-      "factIndex": 2,
-      "factTypeId": 2,
-      "factHash": "zpAD2wuTIWa/3Bfshc+VZFDLqrlvFiVBdnSAX6pg4dDuKfKxhwIEV4kSfhzJ4ZNP65sfHTnJZUh7sjowrFuFPA==",
-      "factTypeParameter": 0,
-      "factHashParameter": 0
     }
   ],
   "parameters": [
@@ -323,7 +284,7 @@ By the time the builder has finished adding the edges for the existential condit
     {
       "label": "project",
       "type": "Project",
-      "factIndex": 4
+      "factIndex": 3
     }
   ],
   "facts": [
@@ -333,22 +294,18 @@ By the time the builder has finished adding the edges for the existential condit
     },
     {
       "factIndex": 2,
-      "type": "Jinaga.User"
-    },
-    {
-      "factIndex": 3,
       "type": "Department"
     },
     {
-      "factIndex": 4,
+      "factIndex": 3,
       "type": "Project"
     },
     {
-      "factIndex": 5,
+      "factIndex": 4,
       "type": "Project.Deleted"
     },
     {
-      "factIndex": 6,
+      "factIndex": 5,
       "type": "Project.Restored"
     }
   ],
@@ -356,33 +313,37 @@ By the time the builder has finished adding the edges for the existential condit
     {
       "edgeIndex": 1,
       "predecessorFactIndex": 1,
-      "successorFactIndex": 3,
+      "successorFactIndex": 2,
       "roleParameter": 3
     },
     {
       "edgeIndex": 2,
-      "predecessorFactIndex": 3,
-      "successorFactIndex": 4,
+      "predecessorFactIndex": 2,
+      "successorFactIndex": 3,
       "roleParameter": 4
     }
   ],
   "existentialConditions": [
     {
+      "exists": false,
+      "inputs": [],
       "edges": [
         {
           "edgeIndex": 3,
-          "predecessorFactIndex": 4,
-          "successorFactIndex": 5,
+          "predecessorFactIndex": 3,
+          "successorFactIndex": 4,
           "roleParameter": 5
         }
       ],
       "existentialConditions": [
         {
+          "exists": false,
+          "inputs": [],
           "edges": [
             {
               "edgeIndex": 4,
-              "predecessorFactIndex": 5,
-              "successorFactIndex": 6,
+              "predecessorFactIndex": 4,
+              "successorFactIndex": 5,
               "roleParameter": 6
             }
           ],
@@ -395,58 +356,39 @@ By the time the builder has finished adding the edges for the existential condit
 ```
 
 This corresponds to the following SQL:
-(This SQL is incorrect)
 
 ```sql
-     SELECT f4.hash AS hash4, f4.fact_id AS id4, f4.data AS data4
-       FROM public.fact f1
-       JOIN public.edge e1
-         ON e1.predecessor_fact_id = f1.fact_id
-        AND e1.role_id = $3
-       JOIN public.fact f3
-         ON f3.fact_id = e1.successor_fact_id
-       JOIN public.edge e2
-         ON e2.predecessor_fact_id = f3.fact_id
-        AND e2.role_id = $4
-       JOIN public.fact f4
-         ON f4.fact_id = e2.successor_fact_id
-       JOIN public.edge e5
-         ON e5.predecessor_fact_id = f4.fact_id
-        AND e5.role_id = $7
-       JOIN public.fact f7
-         ON f7.fact_id = e5.successor_fact_id
-       JOIN public.edge e6
-         ON e6.successor_fact_id = f7.fact_id
-        AND e6.role_id = $10
-       JOIN public.fact f2
-         ON f2.fact_id = e6.predecessor_fact_id
-       JOIN public.edge e8
-         ON e8.predecessor_fact_id = f4.fact_id
-        AND e8.role_id = $12
-       JOIN public.fact f9
-         ON f9.fact_id = e8.successor_fact_id
-      WHERE 1=1
-       AND f1.fact_type_id = $1
-        AND f1.hash = $2
-        AND f2.fact_type_id = $8
-        AND f2.hash = $9
-        AND NOT EXISTS (SELECT 1
-                          FROM public.edge e3
-                          JOIN public.fact f5
-                            ON f5.fact_id = e3.successor_fact_id
-                         WHERE 1=1
-                           AND e3.predecessor_fact_id = f4.fact_id
-                           AND e3.role_id = $5)
-        AND NOT EXISTS (SELECT 1
-                          FROM public.edge e7
-                          JOIN public.fact f8
-                            ON f8.fact_id = e7.successor_fact_id
-                         WHERE 1=1
-                           AND e7.predecessor_fact_id = f7.fact_id
-                           AND e7.role_id = $11)
-   ORDER BY f4.fact_id ASC
-          , f7.fact_id ASC
-          , f9.fact_id ASC
+SELECT f3.hash AS hash3, f3.fact_id AS id3, f3.data AS data3
+  FROM public.fact f1  -- company
+  JOIN public.edge e1  -- department->company
+    ON e1.predecessor_fact_id = f1.fact_id
+  AND e1.role_id = $3
+  JOIN public.fact f2  -- department
+    ON f2.fact_id = e1.successor_fact_id
+  JOIN public.edge e2  -- project->department
+    ON e2.predecessor_fact_id = f2.fact_id
+  AND e2.role_id = $4
+  JOIN public.fact f3  -- project
+    ON f3.fact_id = e2.successor_fact_id
+WHERE f1.fact_type_id = $1
+  AND f1.hash = $2
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.edge e3  -- deleted->project
+    JOIN public.fact f4  -- deleted
+      ON f4.fact_id = e3.successor_fact_id
+    WHERE e3.predecessor_fact_id = f3.fact_id
+      AND e3.role_id = $5
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.edge e4  -- restored->deleted
+        JOIN public.fact f5  -- restored
+          ON f5.fact_id = e4.successor_fact_id
+        WHERE e4.predecessor_fact_id = f4.fact_id
+          AND e4.role_id = $6
+      )
+  )
+ORDER BY f3.fact_id ASC
 ```
 
 ### Compose projection
