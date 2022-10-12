@@ -1,0 +1,9 @@
+digraph {
+    rankdir=BT
+
+    Project -> Department -> Company [penwidth=2]
+
+    Company [penwidth=2, color=blue]
+    
+    Project [penwidth=2]
+}

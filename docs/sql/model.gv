@@ -1,0 +1,20 @@
+digraph {
+    rankdir=BT
+
+    Project -> Department -> Company [penwidth=2]
+    "Project.Assignment.Revoked" -> "Project.Assignment"
+    "Project.Assignment" -> Project
+    "Project.Assignment" -> "Jinaga.User"
+    "Project.Deleted" -> Project
+    "Project.Restored" -> "Project.Deleted"
+    Deliverable -> Project [penwidth=2]
+    Task -> Deliverable
+    "Task.Assigned" -> Task
+    "Task.Assigned" -> "Jinaga.User"
+
+    Company [penwidth=2, color=blue]
+    "Jinaga.User" [penwidth=2, color=blue]
+    
+    Project [penwidth=2]
+    Deliverable [penwidth=2]
+}
