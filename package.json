@@ -9,6 +9,7 @@
     "build": "tsc",
     "test": "jest",
     "test:watch": "jest --watch",
+    "debug": "node ./dist/debug.js", 
     "prepublishOnly": "npm run clean && npm run build && npm run test",
     "integration": "npm run build && cd ./integration-test && ./run.sh",
     "interactive": "nodemon -w docs/specification.txt -x \"cat docs/specification.txt | node interactive\"",
