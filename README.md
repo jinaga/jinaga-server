@@ -104,7 +104,8 @@ npm test
 
 
 ## Debugging - Walking through the code
-- If not yet build, do so using the instructions above.
+- Adapt the database connection string in src/debug.ts
+- Build the code using the instructions above.
 - Set breakpoints in the typescript source code.
 - Open a "Javascript Debug Terminal" in VSCode and execute:
 ```bash
