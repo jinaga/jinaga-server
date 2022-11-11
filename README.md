@@ -101,3 +101,14 @@ npm ci
 npm run build
 npm test
 ```
+
+
+## Debugging - Walking through the code
+- If not yet build, do so using the instructions above.
+- Set breakpoints in the typescript source code.
+- Open a "Javascript Debug Terminal" in VSCode and execute:
+```bash
+npm run debug
+```
+- Use Postman to "post" facts to http://localhost:8080/jinaga/write or to "post" specifications to  http://localhost:8080/jinaga/read .   
+- The debugger will break when it reaches a breakpoint.
