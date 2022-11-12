@@ -80,6 +80,8 @@ First it produces a tree of `ResultComposer`s, each of which has a SQL query and
 Then it executes the SQL in the tree, producing a `ResultSetTree`.
 Finally, the `ResultComposer`s compose that tree into an array of projections.
 
+![Class structure](./SQL%20Generator%20(projection).png)
+
 ### Generate SQL for a ResultComposer
 
 The tree of `ResultComposer` objects mirrors the tree of specifications inside of projections.
