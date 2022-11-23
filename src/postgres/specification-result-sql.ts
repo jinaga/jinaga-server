@@ -410,8 +410,8 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
 return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${existentialWhereClauses}`;
 }
 
-type FactByIdentifier = {
-    [identifier: string]: FactDescription;
+type FactByLabel = {
+    [label: string]: FactDescription;
 };
 
 interface ResultDescription {
@@ -629,7 +629,7 @@ class ResultDescriptionBuilder {
         return this.createResultDescription(initialQueryDescription, specification.given, start, specification.matches, specification.childProjections, {}, []);
     }
 
-    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], childProjections: ChildProjections, knownFacts: FactByIdentifier, path: number[]): ResultDescription {
+    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], childProjections: ChildProjections, knownFacts: FactByLabel, path: number[]): ResultDescription {
         ({ queryDescription, knownFacts } = this.addEdges(queryDescription, given, start, knownFacts, path, matches));
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
@@ -667,7 +667,7 @@ class ResultDescriptionBuilder {
         }
     }
 
-    private addEdges(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByIdentifier, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
+    private addEdges(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
         for (const match of matches) {
             for (const condition of match.conditions) {
                 if (condition.type === "path") {
@@ -701,7 +701,7 @@ class ResultDescriptionBuilder {
         };
     }
 
-    private addPathCondition(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByIdentifier, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByIdentifier } {
+    private addPathCondition(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
         // If no input parameter has been allocated, allocate one now.
         if (!knownFacts.hasOwnProperty(condition.labelRight)) {
             const givenIndex = given.findIndex(given => given.name === condition.labelRight);
