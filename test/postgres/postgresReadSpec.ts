@@ -27,7 +27,7 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
     // Filter out the roles named "unknown", and those of unknown fact types.
     let roleMap = getAllRoles(specification).filter(r => r.name !== 'unknown').reduce(
         (r, role, i) => {
-            const factTypeId = getFactTypeId(factTypes, role.definingFactType);
+            const factTypeId = getFactTypeId(factTypes, role.successorType);
             if (!factTypeId) {
                 return r;
             }
