@@ -60,8 +60,7 @@ export class JinagaServer {
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
         const authentication = new AuthenticationDevice(fork, keystore, localDeviceIdentity);
-        const memory = new MemoryStore();
-        const j: Jinaga = new Jinaga(authentication, memory, syncStatusNotifier);
+        const j: Jinaga = new Jinaga(authentication, syncStatusNotifier);
 
         async function close() {
             await keystore.close();
@@ -122,6 +121,6 @@ async function withSession(feed: ObservableSource, keystore: Keystore, authoriza
     }
     const authentication = new AuthenticationSession(feed, keystore, authorizationRules, userIdentity, user.profile.displayName, localDeviceIdentity);
     const syncStatusNotifier = new SyncStatusNotifier();
-    const j = new Jinaga(authentication, new MemoryStore(), syncStatusNotifier);
+    const j = new Jinaga(authentication, syncStatusNotifier);
     await callback(j);
 }
