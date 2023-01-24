@@ -333,7 +333,7 @@ export class PostgresStore implements Storage {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRoles(specification)
             .map(r => ({
-                defining_fact_type_id: getFactTypeId(factTypes, r.definingFactType),
+                defining_fact_type_id: getFactTypeId(factTypes, r.successorType),
                 role: r.name
             }))
             .filter(r => !hasRole(roleMap, r.defining_fact_type_id, r.role));
@@ -352,7 +352,7 @@ export class PostgresStore implements Storage {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRolesFromFeed(feed)
             .map(r => ({
-                defining_fact_type_id: getFactTypeId(factTypes, r.definingFactType),
+                defining_fact_type_id: getFactTypeId(factTypes, r.successorType),
                 role: r.name
             }))
             .filter(r => !hasRole(roleMap, r.defining_fact_type_id, r.role));
