@@ -1,15 +1,17 @@
 import {
     FactEnvelope,
+    FactFeed,
     FactRecord,
     FactReference,
     Feed,
     Observable,
     ObservableSource,
+    ProjectedResult,
     Query,
     Specification,
-    WebClient,
+    SpecificationListener,
+    WebClient
 } from "jinaga";
-import { FactFeed } from "jinaga/dist/storage";
 
 export class Principal {
     
@@ -54,5 +56,13 @@ export class Authentication implements ObservableSource {
 
     from(fact: FactReference, query: Query): Observable {
         return this.inner.from(fact, query);
+    }
+
+    addSpecificationListener(specification: Specification, onResult: (results: ProjectedResult[]) => Promise<void>): SpecificationListener {
+        return this.inner.addSpecificationListener(specification, onResult);
+    }
+
+    removeSpecificationListener(listener: SpecificationListener): void {
+        this.inner.removeSpecificationListener(listener);
     }
 }

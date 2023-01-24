@@ -1,5 +1,4 @@
-import { Channel, FactEnvelope, FactRecord, FactReference, Feed, Fork, Observable, Query, Specification, WebClient } from "jinaga";
-import { FactFeed } from "jinaga/dist/storage";
+import { Channel, FactEnvelope, FactFeed, FactRecord, FactReference, Feed, Fork, Observable, ProjectedResult, Query, Specification, SpecificationListener, WebClient } from "jinaga";
 
 import { Authentication } from "./authentication";
 
@@ -50,6 +49,14 @@ export class AuthenticationImpl implements Authentication {
 
     from(fact: FactReference, query: Query): Observable {
         return this.inner.from(fact, query);
+    }
+
+    addSpecificationListener(specification: Specification, onResult: (results: ProjectedResult[]) => Promise<void>): SpecificationListener {
+        return this.inner.addSpecificationListener(specification, onResult);
+    }
+
+    removeSpecificationListener(listener: SpecificationListener): void {
+        this.inner.removeSpecificationListener(listener);
     }
 
     addChannel(fact: FactReference, query: Query): Channel {
