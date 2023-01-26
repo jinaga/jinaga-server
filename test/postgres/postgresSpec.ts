@@ -10,7 +10,7 @@ import {
   Step,
 } from "jinaga";
 
-import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, getFactTypeId, getRoleId } from "../../src/postgres/maps";
+import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, ensureGetFactTypeId, getFactTypeId, getRoleId } from "../../src/postgres/maps";
 import { sqlFromSteps } from "../../src/postgres/sql";
 import { distinct } from "../../src/util/fn";
 
@@ -25,7 +25,7 @@ describe('Postgres', () => {
       (f, factType, i) => addFactType(f, factType, i + 1),
       emptyFactTypeMap());
     let roleMap = allRoles(query.steps, 'Root').filter(r => r.role !== 'unknown').reduce(
-      (r, role, i) => addRole(r, getFactTypeId(factTypes, role.type), role.role, i + 1),
+      (r, role, i) => addRole(r, ensureGetFactTypeId(factTypes, role.type), role.role, i + 1),
       emptyRoleMap());
     const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap);
     return sqlQuery ? { sql: sqlQuery.sql, parameters: sqlQuery.parameters, pathLength: sqlQuery.pathLength, empty: sqlQuery.empty, factTypes, roleMap } : null;
@@ -61,7 +61,7 @@ describe('Postgres', () => {
     );
     expect(parameters[0]).toEqual(getFactTypeId(factTypes, 'Root'));
     expect(parameters[1]).toEqual(startHash);
-    expect(parameters[2]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'IntegrationTest.Successor'), 'predecessor'));
+    expect(parameters[2]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'IntegrationTest.Successor'), 'predecessor'));
     expect(pathLength).toEqual(1);
   });
 
@@ -76,7 +76,7 @@ describe('Postgres', () => {
     );
     expect(parameters[0]).toEqual(getFactTypeId(factTypes, 'Root'));
     expect(parameters[1]).toEqual(startHash);
-    expect(parameters[2]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'Root'), 'parent'));
+    expect(parameters[2]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Root'), 'parent'));
     expect(pathLength).toEqual(1);
   });
 
@@ -94,8 +94,8 @@ describe('Postgres', () => {
     );
       expect(parameters[0]).toEqual(getFactTypeId(factTypes, 'Root'));
       expect(parameters[1]).toEqual(startHash);
-      expect(parameters[2]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'IntegrationTest.Successor'), 'predecessor'));
-      expect(parameters[3]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'IntegrationTest.Grandchild'), 'successor'));
+      expect(parameters[2]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'IntegrationTest.Successor'), 'predecessor'));
+      expect(parameters[3]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'IntegrationTest.Grandchild'), 'successor'));
       expect(pathLength).toEqual(1);
   });
 
@@ -113,8 +113,8 @@ describe('Postgres', () => {
     );
     expect(parameters[0]).toEqual(getFactTypeId(factTypes, 'Root'));
     expect(parameters[1]).toEqual(startHash);
-    expect(parameters[2]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'IntegrationTest.Successor'), 'predecessor'));
-    expect(parameters[3]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'IntegrationTest.Grandchild'), 'successor'));
+    expect(parameters[2]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'IntegrationTest.Successor'), 'predecessor'));
+    expect(parameters[3]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'IntegrationTest.Grandchild'), 'successor'));
     expect(pathLength).toEqual(1);
   });
 
@@ -132,8 +132,8 @@ describe('Postgres', () => {
     );
     expect(parameters[0]).toEqual(getFactTypeId(factTypes, 'Root'));
     expect(parameters[1]).toEqual(startHash);
-    expect(parameters[2]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'Child'), 'parent'));
-    expect(parameters[3]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'Child'), 'uncle'));
+    expect(parameters[2]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Child'), 'parent'));
+    expect(parameters[3]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Child'), 'uncle'));
     expect(pathLength).toEqual(1);
   });
 
@@ -151,8 +151,8 @@ describe('Postgres', () => {
     );
     expect(parameters[0]).toEqual(getFactTypeId(factTypes, 'Root'));
     expect(parameters[1]).toEqual(startHash);
-    expect(parameters[2]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'Child'), 'parent'));
-    expect(parameters[3]).toEqual(getRoleId(roleMap, getFactTypeId(factTypes, 'Child'), 'uncle'));
+    expect(parameters[2]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Child'), 'parent'));
+    expect(parameters[3]).toEqual(getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Child'), 'uncle'));
     expect(pathLength).toEqual(1);
   });
 
@@ -174,9 +174,9 @@ describe('Postgres', () => {
     expect(parameters).toEqual([
       getFactTypeId(factTypes, 'Root'),
       startHash,
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Child'), 'parent'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Condition'), 'condition'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Other'), 'other')
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Child'), 'parent'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Condition'), 'condition'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Other'), 'other')
     ]);
   });
 
@@ -200,10 +200,10 @@ describe('Postgres', () => {
     expect(parameters).toEqual([
       getFactTypeId(factTypes, 'Root'),
       startHash,
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Identifier'), 'root'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Identifier'), 'prior'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Identifier'), 'identified'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Delete'), 'identified')
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Identifier'), 'root'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Identifier'), 'prior'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Identifier'), 'identified'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Delete'), 'identified')
     ]);
   });
 
@@ -230,10 +230,10 @@ describe('Postgres', () => {
     expect(parameters).toEqual([
       getFactTypeId(factTypes, 'Root'),
       startHash,
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Assignment'), 'user'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Assignment'), 'project'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Task'), 'project'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Task.Title'), 'task')
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Assignment'), 'user'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Assignment'), 'project'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Task'), 'project'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Task.Title'), 'task')
     ]);
     expect(pathLength).toEqual(4);
   });
@@ -281,7 +281,7 @@ describe('Postgres', () => {
     expect(parameters).toEqual([
       getFactTypeId(factTypes, 'Root'),
       startHash,
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Assignment'), 'root')
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Assignment'), 'root')
     ]);
   });
 
@@ -298,7 +298,7 @@ describe('Postgres', () => {
     expect(parameters).toEqual([
       getFactTypeId(factTypes, 'Root'),
       startHash,
-      getRoleId(roleMap, getFactTypeId(factTypes, 'Assignment'), 'root')
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'Assignment'), 'root')
     ]);
   });
 
@@ -334,9 +334,9 @@ describe('Postgres', () => {
     expect(parameters).toEqual([
       getFactTypeId(factTypes, 'Catalog'),
       startHash,
-      getRoleId(roleMap, getFactTypeId(factTypes, 'ImprovingU.Idea'), 'catalog'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'ImprovingU.Idea.Deletion'), 'idea'),
-      getRoleId(roleMap, getFactTypeId(factTypes, 'ImprovingU.Idea.Restore'), 'ideaDeletion')
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'ImprovingU.Idea'), 'catalog'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'ImprovingU.Idea.Deletion'), 'idea'),
+      getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'ImprovingU.Idea.Restore'), 'ideaDeletion')
     ]);
   });
 });
