@@ -236,6 +236,11 @@ export class PostgresStore implements Storage {
         const factTypes = await this.loadFactTypesFromSpecification(specification);
         const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
 
+        // If any of the start facts are not known types, the specification cannot be satisfied.
+        if (start.filter(f => getFactTypeId(factTypes, f.type) === undefined).length > 0) {
+            return [];
+        }
+
         const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap);
         if (composer === null) {
             return [];
@@ -333,6 +338,7 @@ export class PostgresStore implements Storage {
     async loadRolesFromSpecification(specification: Specification, factTypes: FactTypeMap): Promise<RoleMap> {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRoles(specification)
+            .filter(r => getFactTypeId(factTypes, r.successorType))
             .map(r => ({
                 successor_type_id: ensureGetFactTypeId(factTypes, r.successorType),
                 role: r.name

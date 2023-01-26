@@ -2,11 +2,11 @@
   "name": "jinaga-replicator",
   "version": "1.0.0",
   "description": "A unit of fact storage and distribution within a Jinaga network",
-  "main": "dist/index.js",
+  "main": "dist/replicator/index.js",
   "scripts": {
     "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node dist"
+    "start": "node dist/replicator"
   },
   "keywords": [
     "Jinaga",
