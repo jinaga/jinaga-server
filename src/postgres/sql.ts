@@ -1,6 +1,6 @@
 import { Direction, ExistentialCondition, FactReference, Join, PropertyCondition, Quantifier, Step } from "jinaga";
 
-import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
+import { ensureGetFactTypeId, FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
 export type SqlQuery = {
     empty: boolean,
@@ -10,7 +10,7 @@ export type SqlQuery = {
     factTypeNames: string[]
 };
 
-export function sqlFromSteps(start: FactReference, steps: Step[], factTypes: FactTypeMap, roleMap: RoleMap) : SqlQuery {
+export function sqlFromSteps(start: FactReference, steps: Step[], factTypes: FactTypeMap, roleMap: RoleMap) : SqlQuery | null {
     const builder = new QueryBuilder(factTypes, roleMap);
 
     return builder.buildQuery(start, steps);
@@ -90,18 +90,18 @@ class QueryBuilder {
     constructor(private factTypes: FactTypeMap, private roleMap: RoleMap) {
     }
 
-    buildQuery(start: FactReference, steps: Step[]): SqlQuery {
+    buildQuery(start: FactReference, steps: Step[]): SqlQuery | null {
         if (steps.length === 0) {
             return null;
         }
 
-        const startTypeId = getFactTypeId(this.factTypes, start.type);
+        const startTypeId = ensureGetFactTypeId(this.factTypes, start.type);
         const startState: QueryBuilderState = {
             state: 'start',
             typeId: startTypeId,
             typeName: start.type
         };
-        const finalState = steps.reduce((state, step) => {
+        const finalState = steps.reduce((state: QueryBuilderState, step) => {
             return this.matchStep(state, step);
         }, startState);
         this.end(finalState);
@@ -134,6 +134,14 @@ class QueryBuilder {
     }
 
     private buildJoins(joins: QueryJoin[], priorFactId: string) {
+        interface Joins {
+            priorFactId: string,
+            clauses: string[]
+        };
+        const initialJoins: Joins = {
+            priorFactId,
+            clauses: []
+        };
         const clauses = joins.reduce((joins, join) => {
             if (join.table === 'edge') {
                 if (join.direction === 'successor') {
@@ -161,10 +169,7 @@ class QueryBuilder {
                     clauses: [...joins.clauses, clause]
                 };
             }
-        }, {
-            priorFactId,
-            clauses: []
-        }).clauses;
+        }, initialJoins).clauses;
         return clauses.join('');
     }
 
@@ -209,7 +214,7 @@ class QueryBuilder {
             typeId: typeId,
             typeName: typeName
         };
-        const finalState = steps.reduce((state, step) => {
+        const finalState = steps.reduce((state: QueryBuilderState, step) => {
             return this.matchStep(state, step);
         }, startState);
         this.end(finalState);
@@ -270,11 +275,14 @@ class QueryBuilder {
                     position: `${state.typeName}.${step.role}`
                 }
             }
-            if (step.direction === Direction.Successor) {
+            else if (step.direction === Direction.Successor) {
                 return {
                     state: 'successor-join',
                     role: step.role
                 }
+            }
+            else {
+                throw new Error(`Unknown direction ${step.direction}`);
             }
         }
         else if (step instanceof ExistentialCondition) {
@@ -311,12 +319,15 @@ class QueryBuilder {
                     position: `${state.typeName}.${step.role}`
                 }
             }
-            if (step.direction === Direction.Successor) {
+            else if (step.direction === Direction.Successor) {
                 this.emitFact(state.typeName);
                 return {
                     state: 'successor-join',
                     role: step.role
                 }
+            }
+            else {
+                throw new Error(`Unknown direction ${step.direction}`);
             }
         }
         else if (step instanceof ExistentialCondition) {

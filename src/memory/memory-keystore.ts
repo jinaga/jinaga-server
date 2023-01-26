@@ -36,9 +36,6 @@ export class MemoryKeystore implements Keystore {
     }
 
     private getOrCreateIdentityFact(type: string, identity: UserIdentity): FactRecord {
-        if (!identity) {
-            return null;
-        }
         const publicKey = this.getOrCreatePublicKey(identity);
         const predecessors: PredecessorCollection = {};
         const fields = {
@@ -49,9 +46,6 @@ export class MemoryKeystore implements Keystore {
     }
 
     private getIdentityFact(type: string, identity: UserIdentity): FactRecord {
-        if (!identity) {
-            return null;
-        }
         const publicKey = this.getPublicKey(identity);
         const predecessors: PredecessorCollection = {};
         const fields = {

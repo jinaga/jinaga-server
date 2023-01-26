@@ -31,7 +31,7 @@ export class ConnectionFactory {
         })
     }
 
-    async with<T>(callback: (connection: PoolClient) => Promise<T>) {
+    async with<T>(callback: (connection: PoolClient) => Promise<T>) : Promise<T> {
         let attempt = 0;
         const pause = [0, 0, 1000, 5000, 15000, 30000];
         while (attempt < pause.length) {
@@ -57,6 +57,7 @@ export class ConnectionFactory {
                 await delay(pause[attempt]);
             }
         }
+        throw new Error("Number of attempts exceeded");
     }
 
     private async createClient() {

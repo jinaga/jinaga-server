@@ -11,7 +11,7 @@ import {
     SpecificationProjection
 } from "jinaga";
 
-import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
+import { ensureGetFactTypeId, FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
 interface SpecificationLabel {
     name: string;
@@ -222,7 +222,7 @@ class QueryDescription {
         const firstEdge = this.edges[0];
         const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
         const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
-        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact.factIndex;
+        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
         const writtenFactIndexes = new Set<number>().add(firstFactIndex);
         const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
         const inputWhereClauses = this.inputs
@@ -721,7 +721,7 @@ class ResultDescriptionBuilder {
             }
             const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
                 given[givenIndex],
-                getFactTypeId(this.factTypes, start[givenIndex].type),
+                ensureGetFactTypeId(this.factTypes, start[givenIndex].type),
                 start[givenIndex].hash,
                 path
             );
@@ -834,7 +834,7 @@ function idsEqual(a: number[], b: number[]) {
     return a.every((value, index) => value === b[index]);
 }
 
-export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap): ResultComposer {
+export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap): ResultComposer | null {
     const descriptionBuilder = new ResultDescriptionBuilder(factTypes, roleMap);
     const description = descriptionBuilder.buildDescription(start, specification);
 

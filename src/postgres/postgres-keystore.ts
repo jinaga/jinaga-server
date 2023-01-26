@@ -50,9 +50,6 @@ export class PostgresKeystore implements Keystore {
     }
 
     private async getOrCreateIdentityFact(type: string, identity: UserIdentity): Promise<FactRecord> {
-        if (!identity) {
-            return null;
-        }
         const { publicPem } = await this.getOrGenerateKeyPair(identity);
         const predecessors: PredecessorCollection = {};
         const fields = {
@@ -63,9 +60,6 @@ export class PostgresKeystore implements Keystore {
     }
 
     private async getIdentityFact(type: string, identity: UserIdentity): Promise<FactRecord> {
-        if (!identity) {
-            return null;
-        }
         const { publicPem } = await this.getKeyPair(identity);
         const predecessors: PredecessorCollection = {};
         const fields = {
@@ -78,7 +72,7 @@ export class PostgresKeystore implements Keystore {
     private async getKeyPair(userIdentity: UserIdentity): Promise<KeyPair> {
         const key = getUserIdentityKey(userIdentity);
         if (this.cache.has(key)) {
-            return this.cache.get(key);
+            return this.cache.get(key)!;
         }
         const keyPair = await this.connectionFactory.with(connection =>
             this.selectKeyPair(connection, userIdentity));
@@ -105,7 +99,7 @@ export class PostgresKeystore implements Keystore {
     private async getOrGenerateKeyPair(userIdentity: UserIdentity): Promise<KeyPair> {
         const key = getUserIdentityKey(userIdentity);
         if (this.cache.has(key)) {
-            return this.cache.get(key);
+            return this.cache.get(key)!;
         }
         const keyPair = await this.connectionFactory.withTransaction(connection =>
             this.selectOrInsertKeyPair(connection, userIdentity));

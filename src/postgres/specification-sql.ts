@@ -63,7 +63,7 @@ class QueryDescription {
         const firstEdge = this.edges[0];
         const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
         const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
-        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact.factIndex;
+        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
         const writtenFactIndexes = new Set<number>().add(firstFactIndex);
         const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
         const inputWhereClauses = this.inputs

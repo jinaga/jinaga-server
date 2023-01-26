@@ -26,7 +26,7 @@ import { FeedCache } from "./feed-cache";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
-function get<U>(method: ((req: RequestUser, params?: { [key: string]: string }, query?: ParsedQs) => Promise<U>)): Handler {
+function get<U>(method: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<U>)): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         method(user, req.params, req.query)
@@ -197,7 +197,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     };
 }
 
-function serializeUserIdentity(user: RequestUser) : UserIdentity {
+function serializeUserIdentity(user: RequestUser) : UserIdentity | null {
     if (!user) {
         return null;
     }
