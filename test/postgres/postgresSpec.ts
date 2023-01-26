@@ -24,7 +24,7 @@ describe('Postgres', () => {
     const factTypes = allFactTypes(query.steps).filter(t => t !== 'Unknown').reduce(
       (f, factType, i) => addFactType(f, factType, i + 1),
       emptyFactTypeMap());
-    let roleMap = allRoles(query.steps, 'Root').filter(r => r.role !== 'unknown').reduce(
+    let roleMap = allRoles(query.steps, 'Root').filter(r => r.type !== 'Unknown' && r.role !== 'unknown').reduce(
       (r, role, i) => addRole(r, ensureGetFactTypeId(factTypes, role.type), role.role, i + 1),
       emptyRoleMap());
     const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap);
@@ -332,7 +332,7 @@ describe('Postgres', () => {
         ')' +
       ')');
     expect(parameters).toEqual([
-      getFactTypeId(factTypes, 'Catalog'),
+      getFactTypeId(factTypes, 'Root'),
       startHash,
       getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'ImprovingU.Idea'), 'catalog'),
       getRoleId(roleMap, ensureGetFactTypeId(factTypes, 'ImprovingU.Idea.Deletion'), 'idea'),
@@ -348,7 +348,7 @@ function allFactTypes(steps: Step[]): string[] {
   const childFactTypes = steps
     .filter(step => step instanceof ExistentialCondition)
     .flatMap(step => allFactTypes((step as ExistentialCondition).steps));
-  return [...factTypes, ...childFactTypes].filter(distinct);
+  return ["Root", ...factTypes, ...childFactTypes].filter(distinct);
 }
 
 function allRoles(steps: Step[], initialType: string) {
