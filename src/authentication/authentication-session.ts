@@ -3,17 +3,19 @@ import {
     AuthorizationRules,
     Channel,
     FactEnvelope,
+    FactFeed,
     FactRecord,
     FactReference,
     Feed,
     LoginResponse,
     Observable,
     ObservableSource,
+    ProjectedResult,
     Query,
     Specification,
+    SpecificationListener,
     UserIdentity,
 } from "jinaga";
-import { FactFeed } from "jinaga/dist/storage";
 
 import { Keystore } from "../keystore";
 import { Authentication } from "./authentication";
@@ -62,6 +64,14 @@ export class AuthenticationSession implements Authentication {
 
     from(fact: FactReference, query: Query): Observable {
         return this.inner.from(fact, query);
+    }
+
+    addSpecificationListener(specification: Specification, onResult: (results: ProjectedResult[]) => Promise<void>): SpecificationListener {
+        return this.inner.addSpecificationListener(specification, onResult);
+    }
+
+    removeSpecificationListener(listener: SpecificationListener): void {
+        this.inner.removeSpecificationListener(listener);
     }
 
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {

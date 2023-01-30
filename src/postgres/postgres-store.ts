@@ -3,6 +3,7 @@ import {
     Direction,
     ExistentialCondition,
     FactEnvelope,
+    FactFeed,
     FactPath,
     FactRecord,
     FactReference,
@@ -20,9 +21,8 @@ import {
     Specification,
     Step,
     Storage,
-    TopologicalSorter,
+    TopologicalSorter
 } from "jinaga";
-import { FactFeed } from "jinaga/dist/storage";
 import { PoolClient } from "pg";
 
 import { distinct, flatten } from "../util/fn";
@@ -37,6 +37,7 @@ import {
     emptyFactTypeMap,
     emptyPublicKeyMap,
     emptyRoleMap,
+    ensureGetFactTypeId,
     FactMap,
     FactTypeMap,
     getFactId,
@@ -48,7 +49,7 @@ import {
     mergeFactTypes,
     mergeRoleMaps,
     PublicKeyMap,
-    RoleMap,
+    RoleMap
 } from "./maps";
 import { ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
@@ -167,7 +168,7 @@ export class PostgresStore implements Storage {
             } = await this.connectionFactory.withTransaction(async (connection) => {
                 const factTypes = await storeFactTypes(facts, this.factTypeMap, connection);
                 const existingFacts = await findExistingFacts(facts, factTypes, connection);
-                const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, factTypes.get(f.type)));
+                const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
                 if (newFacts.length === 0) {
                     return {
                         newEnvelopes: [],
@@ -234,6 +235,11 @@ export class PostgresStore implements Storage {
     async read(start: FactReference[], specification: Specification): Promise<any[]> {
         const factTypes = await this.loadFactTypesFromSpecification(specification);
         const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
+
+        // If any of the start facts are not known types, the specification cannot be satisfied.
+        if (start.filter(f => getFactTypeId(factTypes, f.type) === undefined).length > 0) {
+            return [];
+        }
 
         const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap);
         if (composer === null) {
@@ -317,7 +323,7 @@ export class PostgresStore implements Storage {
     private async loadRolesFromSteps(steps: Step[], factTypes: FactTypeMap, initialType: string) {
         const roleMap = this.roleMap;
         const unknownRoles = allRoles(steps, factTypes, getFactTypeId(factTypes, initialType))
-            .filter(r => !hasRole(roleMap, r.defining_fact_type_id, r.role));
+            .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
                 return await loadRoles(unknownRoles, roleMap, connection);
@@ -332,11 +338,12 @@ export class PostgresStore implements Storage {
     async loadRolesFromSpecification(specification: Specification, factTypes: FactTypeMap): Promise<RoleMap> {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRoles(specification)
+            .filter(r => getFactTypeId(factTypes, r.successorType))
             .map(r => ({
-                defining_fact_type_id: getFactTypeId(factTypes, r.definingFactType),
+                successor_type_id: ensureGetFactTypeId(factTypes, r.successorType),
                 role: r.name
             }))
-            .filter(r => !hasRole(roleMap, r.defining_fact_type_id, r.role));
+            .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
                 return await loadRoles(unknownRoles, roleMap, connection);
@@ -352,10 +359,10 @@ export class PostgresStore implements Storage {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRolesFromFeed(feed)
             .map(r => ({
-                defining_fact_type_id: getFactTypeId(factTypes, r.definingFactType),
+                successor_type_id: ensureGetFactTypeId(factTypes, r.successorType),
                 role: r.name
             }))
-            .filter(r => !hasRole(roleMap, r.defining_fact_type_id, r.role));
+            .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
                 return await loadRoles(unknownRoles, roleMap, connection);
@@ -535,21 +542,21 @@ async function loadFactTypes(factTypeNames: string[], connection: PoolClient) {
 async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: RoleMap, connection: PoolClient) {
     // Find distinct roles
     const roles = flatten(facts, fact => {
-        const defining_fact_type_id = factTypes.get(fact.type);
+        const successor_type_id = ensureGetFactTypeId(factTypes, fact.type);
         return Object.keys(fact.predecessors).map(role => ({
             role,
-            defining_fact_type_id
+            successor_type_id
         }));
     }).filter((role, index, array) => array.findIndex(r =>
         r.role === role.role &&
-        r.defining_fact_type_id === role.defining_fact_type_id
+        r.successor_type_id === role.successor_type_id
     ) === index);
 
     if (roles.length > 0) {
         // Look up existing roles
         const roleIds = await loadRoles(roles, roleMap, connection);
         const remainingRoles = roles.filter(role => !hasRole(
-            roleIds, role.defining_fact_type_id, role.role));
+            roleIds, role.successor_type_id, role.role));
         if (remainingRoles.length === 0) {
             return roleIds;
         }
@@ -562,7 +569,7 @@ async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: 
             ' RETURNING role_id, name, defining_fact_type_id;';
         const remainingRoleParameters = flatten(remainingRoles, (role) => [
             role.role,
-            role.defining_fact_type_id
+            role.successor_type_id
         ]);
         const { rows: newRows }: RoleResult = await connection.query(insertSql, remainingRoleParameters);
         if (newRows.length !== remainingRoles.length) {
@@ -579,12 +586,12 @@ async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: 
     }
 }
 
-async function loadRoles(roles: { role: string; defining_fact_type_id: number; }[], roleMap: RoleMap, connection: PoolClient) {
+async function loadRoles(roles: { role: string; successor_type_id: number; }[], roleMap: RoleMap, connection: PoolClient) {
     const roleValues = roles.map((role, index) =>
         `($${index * 2 + 1}, $${index * 2 + 2}::integer)`);
     const roleParameters = flatten(roles, (role) => [
         role.role,
-        role.defining_fact_type_id
+        role.successor_type_id
     ]);
 
     const lookUpSql = 'SELECT role.name, role.defining_fact_type_id, role.role_id' +
@@ -646,7 +653,7 @@ async function insertFactsEdgesAndAncestors(facts: FactRecord[], factTypes: Fact
 
 function sqlInsertFacts(facts: FactRecord[], roles: RoleMap, factTypes: FactTypeMap) {
     const factValues = facts.map((f, i) => `(\$${i * 3 + 1}, \$${i * 3 + 2}::integer, \$${i * 3 + 3}::jsonb)`);
-    const factParameters = flatten(facts, (f) => [f.hash, factTypes.get(f.type), {
+    const factParameters = flatten(facts, (f) => [f.hash, ensureGetFactTypeId(factTypes, f.type), {
         fields: f.fields,
         predecessors: canonicalPredecessors(f.predecessors)
     }]);
@@ -669,8 +676,8 @@ function sqlInsertFactsEdgesAndAncestors(facts: FactRecord[], factParameters: (s
     let parameterOffset = factParameters.length;
     const edgeValues = edgeRecords.map((e, i) => `(\$${i * 5 + 1 + parameterOffset}, \$${i * 5 + 2 + parameterOffset}::integer, \$${i * 5 + 3 + parameterOffset}, \$${i * 5 + 4 + parameterOffset}::integer, \$${i * 5 + 5 + parameterOffset}::integer)`);
     const edgeParameters = flatten(edgeRecords, (e) => {
-        const successor_fact_type_id = getFactTypeId(factTypes, e.successor_type);
-        const predecessor_fact_type_id = getFactTypeId(factTypes, e.predecessor_type);
+        const successor_fact_type_id = ensureGetFactTypeId(factTypes, e.successor_type);
+        const predecessor_fact_type_id = ensureGetFactTypeId(factTypes, e.predecessor_type);
         return [
             e.successor_hash,
             successor_fact_type_id,
@@ -833,7 +840,7 @@ async function storePublicKeys(envelopes: FactEnvelope[], connection: PoolClient
 
 async function insertSignatures(envelopes: FactEnvelope[], allFacts: FactMap, factTypes: FactTypeMap, publicKey: PublicKeyMap, connection: PoolClient) {
     const signatureRecords = flatten(envelopes, envelope => envelope.signatures.map(signature => ({
-        factId: getFactId(allFacts, envelope.fact.hash, getFactTypeId(factTypes, envelope.fact.type)),
+        factId: getFactId(allFacts, envelope.fact.hash, ensureGetFactTypeId(factTypes, envelope.fact.type)),
         publicKeyId: getPublicKeyId(publicKey, signature.publicKey),
         signature: signature.signature
     })));
@@ -862,35 +869,35 @@ function allFactTypes(steps: Step[]): string[] {
     return [...factTypes, ...childFactTypes].filter(distinct);
 }
 
-function allRoles(steps: Step[], factTypes: FactTypeMap, initialTypeId: number) {
-    let roles: { defining_fact_type_id: number; role: string }[] = [];
-    let defining_fact_type_id = initialTypeId;
+function allRoles(steps: Step[], factTypes: FactTypeMap, initialTypeId: number | undefined) {
+    let roles: { successor_type_id: number; role: string }[] = [];
+    let successor_type_id = initialTypeId;
     let role: string | undefined = undefined;
 
     for (const step of steps) {
         if (step instanceof PropertyCondition) {
             if (step.name === 'type') {
-                defining_fact_type_id = getFactTypeId(factTypes, step.value);
-                if (defining_fact_type_id && role) {
-                    roles.push({ defining_fact_type_id, role });
+                successor_type_id = getFactTypeId(factTypes, step.value);
+                if (successor_type_id && role) {
+                    roles.push({ successor_type_id: successor_type_id, role });
                 }
                 role = undefined;
             }
         }
         else if (step instanceof Join) {
             if (step.direction === Direction.Predecessor) {
-                if (defining_fact_type_id) {
-                    roles.push({ defining_fact_type_id, role: step.role });
+                if (successor_type_id) {
+                    roles.push({ successor_type_id: successor_type_id, role: step.role });
                 }
                 role = undefined;
             }
             else {
                 role = step.role;
             }
-            defining_fact_type_id = undefined;
+            successor_type_id = undefined;
         }
         else if (step instanceof ExistentialCondition) {
-            roles = roles.concat(allRoles(step.steps, factTypes, defining_fact_type_id));
+            roles = roles.concat(allRoles(step.steps, factTypes, successor_type_id));
         }
     }
 

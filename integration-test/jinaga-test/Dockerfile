@@ -4,9 +4,9 @@ WORKDIR /root
 
 COPY package.json .
 COPY package-lock.json .
-RUN npm install
+RUN npm ci
 
-COPY jinaga/ jinaga/
+COPY jinaga-server/ jinaga-server/
 COPY jinaga.test.js .
 
 ENTRYPOINT [ "npm", "test" ]

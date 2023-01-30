@@ -1,17 +1,17 @@
 import {
-    ChildProjections,
-    ElementProjection,
+    ComponentProjection,
     FactReference,
+    FieldProjection,
     Label,
     Match,
     PathCondition,
-    ResultProjection,
+    Projection,
     SingularProjection,
     Specification,
-    SpecificationProjection,
+    SpecificationProjection
 } from "jinaga";
 
-import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
+import { ensureGetFactTypeId, FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
 
 interface SpecificationLabel {
     name: string;
@@ -222,7 +222,7 @@ class QueryDescription {
         const firstEdge = this.edges[0];
         const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
         const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
-        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact.factIndex;
+        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
         const writtenFactIndexes = new Set<number>().add(firstFactIndex);
         const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
         const inputWhereClauses = this.inputs
@@ -416,7 +416,7 @@ type FactByLabel = {
 
 interface ResultDescription {
     queryDescription: QueryDescription;
-    resultProjection: ResultProjection;
+    resultProjection: Projection;
     childResultDescriptions: NamedResultDescription[];
 }
 
@@ -455,7 +455,7 @@ interface NamedResultSetTree extends ResultSetTree {
 export class ResultComposer {
     constructor(
         private readonly sqlQuery: SpecificationSqlQuery,
-        private readonly resultProjection: ResultProjection,
+        private readonly resultProjection: Projection,
         private readonly parentFactIdLength: number,
         private readonly childResultComposers: NamedResultComposer[]
     ) { }
@@ -555,36 +555,41 @@ export class ResultComposer {
     }
 
     private projectionOf(row: any): any {
-        if (!Array.isArray(this.resultProjection)) {
-            return this.singularValue(this.resultProjection, row);
+        if (this.resultProjection.type === "field") {
+            return this.fieldValue(this.resultProjection, row);
         }
-        else if (this.resultProjection.length === 0 && this.childResultComposers.length === 0) {
-            return this.sqlQuery.labels
-                .slice(this.parentFactIdLength)
-                .reduce((acc, label) => ({
+        else if (this.resultProjection.type === "composite") {
+            if (
+                this.resultProjection.components.length === 0 &&
+                this.childResultComposers.length === 0) {
+                return this.sqlQuery.labels
+                    .slice(this.parentFactIdLength)
+                    .reduce((acc, label) => ({
+                        ...acc,
+                        [label.name]: row[`data${label.index}`].fields
+                    }), {})
+            }
+            else {
+                return this.resultProjection.components.reduce((acc, component) => ({
                     ...acc,
-                    [label.name]: row[`data${label.index}`].fields
-                }), {})
-        }
-        else {
-            return this.resultProjection.reduce((acc, elementProjection) => ({
-                ...acc,
-                [elementProjection.name]: this.elementValue(elementProjection, row)
-            }), {});
+                    [component.name]: this.elementValue(component, row)
+                }), {});
+            }
         }
     }
 
-    private elementValue(projection: ElementProjection, row: any): any {
-        const label = this.getLabel(projection.label);
+    private elementValue(projection: ComponentProjection, row: any): any {
         if (projection.type === "field") {
+            const label = this.getLabel(projection.label);
             return row[`data${label.index}`].fields[projection.field];
         }
         else if (projection.type === "hash") {
+            const label = this.getLabel(projection.label);
             return row[`hash${label.index}`];
         }
     }
 
-    private singularValue(projection: SingularProjection, row: any): any {
+    private fieldValue(projection: FieldProjection, row: any): any {
         const label = this.getLabel(projection.label);
         return row[`data${label.index}`].fields[projection.field];
     }
@@ -626,27 +631,30 @@ class ResultDescriptionBuilder {
         // The DescriptionBuilder will branch at various points, and
         // build on the current query description along each branch.
         const initialQueryDescription = new QueryDescription([], [], [], [], [], []);
-        return this.createResultDescription(initialQueryDescription, specification.given, start, specification.matches, specification.childProjections, {}, []);
+        return this.createResultDescription(initialQueryDescription, specification.given, start, specification.matches, specification.projection, {}, []);
     }
 
-    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], childProjections: ChildProjections, knownFacts: FactByLabel, path: number[]): ResultDescription {
+    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
         ({ queryDescription, knownFacts } = this.addEdges(queryDescription, given, start, knownFacts, path, matches));
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
             return {
                 queryDescription,
-                resultProjection: [],
+                resultProjection: {
+                    type: "composite",
+                    components: []
+                },
                 childResultDescriptions: []
             }
         }
         const childResultDescriptions: NamedResultDescription[] = [];
-        if (Array.isArray(childProjections)) {
-            const specificationProjections = childProjections
-                .filter(projection => projection.type === "specification") as SpecificationProjection[];
-            const elementProjections = childProjections
-                .filter(projection => projection.type === "field" || projection.type === "hash") as ElementProjection[];
+        if (projection.type === "composite") {
+            const specificationProjections = projection.components
+                .filter(projection => projection.type === "specification") as ({ name: string } & SpecificationProjection)[];
+            const singularProjections = projection.components
+                .filter(projection => projection.type === "field" || projection.type === "hash") as ({ name: string } & SingularProjection)[];
             for (const child of specificationProjections) {
-                const childResultDescription = this.createResultDescription(queryDescription, given, start, child.matches, child.childProjections, knownFacts, []);
+                const childResultDescription = this.createResultDescription(queryDescription, given, start, child.matches, child.projection, knownFacts, []);
                 childResultDescriptions.push({
                     name: child.name,
                     ...childResultDescription
@@ -654,14 +662,17 @@ class ResultDescriptionBuilder {
             }
             return {
                 queryDescription,
-                resultProjection: elementProjections,
+                resultProjection: {
+                    type: "composite",
+                    components: singularProjections
+                },
                 childResultDescriptions
             };
         }
         else {
             return {
                 queryDescription,
-                resultProjection: childProjections,
+                resultProjection: projection,
                 childResultDescriptions: []
             }
         }
@@ -710,7 +721,7 @@ class ResultDescriptionBuilder {
             }
             const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
                 given[givenIndex],
-                getFactTypeId(this.factTypes, start[givenIndex].type),
+                ensureGetFactTypeId(this.factTypes, start[givenIndex].type),
                 start[givenIndex].hash,
                 path
             );
@@ -753,11 +764,11 @@ class ResultDescriptionBuilder {
             }
             else {
                 // If we have not written the fact, we need to write it now.
-                const { query, factIndex: predecessorFactIndex } = queryWithParameter.withFact(role.targetType);
+                const { query, factIndex: predecessorFactIndex } = queryWithParameter.withFact(role.predecessorType);
                 queryDescription = query.withEdge(predecessorFactIndex, factIndex, roleParameter, path);
                 factIndex = predecessorFactIndex;
             }
-            type = role.targetType;
+            type = role.predecessorType;
         }
 
         const rightType = type;
@@ -785,7 +796,7 @@ class ResultDescriptionBuilder {
                 roleId,
                 declaringType: type
             });
-            type = role.targetType;
+            type = role.predecessorType;
         }
 
         if (type !== rightType) {
@@ -823,7 +834,7 @@ function idsEqual(a: number[], b: number[]) {
     return a.every((value, index) => value === b[index]);
 }
 
-export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap): ResultComposer {
+export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap): ResultComposer | null {
     const descriptionBuilder = new ResultDescriptionBuilder(factTypes, roleMap);
     const description = descriptionBuilder.buildDescription(start, specification);
 

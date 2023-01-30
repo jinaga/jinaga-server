@@ -7,9 +7,9 @@
   "scripts": {
     "clean": "rimraf dist/ && rimraf integration-test/jinaga-test/jinaga/ && rimraf integration-test/jinaga-test/node_modules/",
     "build": "tsc",
-    "test": "jest",
+    "test": "tsc --noEmit --project tsconfig.test.json && jest",
     "test:watch": "jest --watch",
-    "debug": "node ./dist/debug.js", 
+    "debug": "node ./dist/debug.js",
     "prepublishOnly": "npm run clean && npm run build && npm run test",
     "integration": "npm run build && cd ./integration-test && ./run.sh"
   },
@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "express": "^4.18.1",
-    "jinaga": "^4.1.0",
+    "jinaga": "^5.0.1",
     "node-forge": "^1.3.1",
     "passport": "^0.6.0",
     "pg": "^8.7.1"

@@ -1,6 +1,6 @@
-import { encode } from "@stablelib/base64";
-
-import { ensure, Jinaga, JinagaServer } from "./jinaga";
+const { encode } = require("@stablelib/base64");
+const { ensure, Jinaga } = require("jinaga");
+const { JinagaServer } = require("./jinaga-server");
 
 const host = "db";
 // const host = "localhost";

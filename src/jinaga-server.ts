@@ -18,6 +18,7 @@ import {
 } from "jinaga";
 
 import { AuthenticationDevice } from "./authentication/authentication-device";
+import { AuthenticationNoOp } from "./authentication/authentication-noop";
 import { AuthenticationSession } from "./authentication/authentication-session";
 import { AuthorizationKeystore } from "./authorization/authorization-keystore";
 import { NodeHttpConnection } from "./http/node-http";
@@ -54,17 +55,18 @@ export class JinagaServer {
         const store = createStore(config);
         const source = new ObservableSourceImpl(store);
         const fork = createFork(config, source, syncStatusNotifier);
-        const keystore = new PostgresKeystore(config.pgKeystore);
+        const keystore = createKeystore(config);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules()) : null;
         const authorization = createAuthorization(authorizationRules, fork, keystore);
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
-        const authentication = new AuthenticationDevice(fork, keystore, localDeviceIdentity);
-        const memory = new MemoryStore();
-        const j: Jinaga = new Jinaga(authentication, memory, syncStatusNotifier);
+        const authentication = createAuthentication(keystore, fork);
+        const j: Jinaga = new Jinaga(authentication, syncStatusNotifier);
 
         async function close() {
-            await keystore.close();
+            if (keystore) {
+                await keystore.close();
+            }
             await store.close();
         }
         return {
@@ -104,6 +106,10 @@ function createFork(config: JinagaServerConfig, feed: ObservableSource, syncStat
     }
 }
 
+function createKeystore(config: JinagaServerConfig) {
+    return config.pgKeystore ? new PostgresKeystore(config.pgKeystore) : null;
+}
+
 function createAuthorization(authorizationRules: AuthorizationRules | null, feed: ObservableSource, keystore: Keystore | null): Authorization {
     if (keystore) {
         const authorization = new AuthorizationKeystore(feed, keystore, authorizationRules);
@@ -114,14 +120,18 @@ function createAuthorization(authorizationRules: AuthorizationRules | null, feed
     }
 }
 
-async function withSession(feed: ObservableSource, keystore: Keystore, authorizationRules: AuthorizationRules | null, req: Request, callback: ((j: Jinaga) => Promise<void>)) {
+function createAuthentication(keystore: PostgresKeystore | null, fork: Fork) {
+    return keystore ? new AuthenticationDevice(fork, keystore, localDeviceIdentity) : new AuthenticationNoOp(fork);
+}
+
+async function withSession(feed: ObservableSource, keystore: Keystore | null, authorizationRules: AuthorizationRules | null, req: Request, callback: ((j: Jinaga) => Promise<void>)) {
     const user = <RequestUser>req.user;
     const userIdentity: UserIdentity = {
         provider: user.provider,
         id: user.id
     }
-    const authentication = new AuthenticationSession(feed, keystore, authorizationRules, userIdentity, user.profile.displayName, localDeviceIdentity);
+    const authentication = keystore ? new AuthenticationSession(feed, keystore, authorizationRules, userIdentity, user.profile.displayName, localDeviceIdentity) : new AuthenticationNoOp(feed);
     const syncStatusNotifier = new SyncStatusNotifier();
-    const j = new Jinaga(authentication, new MemoryStore(), syncStatusNotifier);
+    const j = new Jinaga(authentication, syncStatusNotifier);
     await callback(j);
 }

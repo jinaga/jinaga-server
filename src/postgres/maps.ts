@@ -16,6 +16,14 @@ export function getFactTypeId(map: FactTypeMap, name: string) {
     return map.get(name);
 }
 
+export function ensureGetFactTypeId(factTypes: FactTypeMap, name: string): number {
+    const factTypeId = getFactTypeId(factTypes, name);
+    if (factTypeId === undefined) {
+        throw new Error(`Unknown fact type ${name}`);
+    }
+    return factTypeId;
+}
+
 export function mergeFactTypes(map1: FactTypeMap, map2: FactTypeMap) {
     return new Map<string, number>([...map1, ...map2]);
 }

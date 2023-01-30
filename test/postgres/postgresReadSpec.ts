@@ -27,7 +27,7 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
     // Filter out the roles named "unknown", and those of unknown fact types.
     let roleMap = getAllRoles(specification).filter(r => r.name !== 'unknown').reduce(
         (r, role, i) => {
-            const factTypeId = getFactTypeId(factTypes, role.definingFactType);
+            const factTypeId = getFactTypeId(factTypes, role.successorType);
             if (!factTypeId) {
                 return r;
             }
@@ -44,6 +44,9 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
         throw new Error(`Unknown input type ${input.type}`);
     });
     const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap);
+    if (!composer) {
+        throw new Error("The specification is not satisfiable.");
+    }
     return { composer, factTypes, roleMap };
 }
 

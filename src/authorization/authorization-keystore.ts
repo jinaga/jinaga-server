@@ -3,15 +3,15 @@ import {
     AuthorizationEngine,
     AuthorizationRules,
     FactEnvelope,
+    FactFeed,
     FactRecord,
     FactReference,
     Feed,
     ObservableSource,
     Query,
     Specification,
-    UserIdentity,
+    UserIdentity
 } from "jinaga";
-import { FactFeed } from "jinaga/dist/storage";
 
 import { Keystore } from "../keystore";
 
@@ -55,7 +55,7 @@ export class AuthorizationKeystore implements Authorization {
         return this.observableSource.load(references);
     }
 
-    async save(userIdentity: UserIdentity, facts: FactRecord[]) {
+    async save(userIdentity: UserIdentity | null, facts: FactRecord[]) {
         if (!this.authorizationEngine) {
             const envelopes = await this.observableSource.save(facts.map(fact => ({
                 fact,
@@ -64,10 +64,15 @@ export class AuthorizationKeystore implements Authorization {
             return envelopes.map(envelope => envelope.fact);
         }
 
-        const userFact = await this.keystore.getUserFact(userIdentity);
+        const userFact = userIdentity ? await this.keystore.getUserFact(userIdentity) : null;
         const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
-        const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
-        const envelopes = await this.observableSource.save(signedFacts);
-        return envelopes.map(envelope => envelope.fact);
+        if (userIdentity) {
+            const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
+            const envelopes = await this.observableSource.save(signedFacts);
+            return envelopes.map(envelope => envelope.fact);
+        }
+        else {
+            return authorizedFacts;
+        }
     }
 }
