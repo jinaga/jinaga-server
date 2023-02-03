@@ -1,7 +1,9 @@
 import {
     ComponentProjection,
+    FactProjection,
     FactReference,
     FieldProjection,
+    HashProjection,
     Label,
     Match,
     PathCondition,
@@ -576,6 +578,16 @@ export class ResultComposer {
                 }), {});
             }
         }
+        else if (this.resultProjection.type === "hash") {
+            return this.hashValue(this.resultProjection, row);
+        }
+        else if (this.resultProjection.type === "fact") {
+            return this.factValue(this.resultProjection, row);
+        }
+        else {
+            const _exhaustiveCheck: never = this.resultProjection;
+            throw new Error(`Unknown projection type ${(this.resultProjection as any).type}`);
+        }
     }
 
     private elementValue(projection: ComponentProjection, row: any): any {
@@ -587,11 +599,33 @@ export class ResultComposer {
             const label = this.getLabel(projection.label);
             return row[`hash${label.index}`];
         }
+        else if (projection.type === "fact") {
+            const label = this.getLabel(projection.label);
+            return row[`data${label.index}`].fields;
+        }
+        else if (projection.type === "specification") {
+            // This should have already been taken care of
+            return null;
+        }
+        else {
+            const _exhaustiveCheck: never = projection;
+            throw new Error(`Unknown projection type ${(projection as any).type}`);
+        }
     }
 
     private fieldValue(projection: FieldProjection, row: any): any {
         const label = this.getLabel(projection.label);
         return row[`data${label.index}`].fields[projection.field];
+    }
+
+    private hashValue(projection: HashProjection, row: any): any {
+        const label = this.getLabel(projection.label);
+        return row[`hash${label.index}`];
+    }
+
+    private factValue(projection: FactProjection, row: any): any {
+        const label = this.getLabel(projection.label);
+        return row[`data${label.index}`].fields;
     }
 
     private getLabel(name: string) {
@@ -652,7 +686,7 @@ class ResultDescriptionBuilder {
             const specificationProjections = projection.components
                 .filter(projection => projection.type === "specification") as ({ name: string } & SpecificationProjection)[];
             const singularProjections = projection.components
-                .filter(projection => projection.type === "field" || projection.type === "hash") as ({ name: string } & SingularProjection)[];
+                .filter(projection => projection.type === "field" || projection.type === "hash" || projection.type === "fact") as ({ name: string } & SingularProjection)[];
             for (const child of specificationProjections) {
                 const childResultDescription = this.createResultDescription(queryDescription, given, start, child.matches, child.projection, knownFacts, []);
                 childResultDescriptions.push({
