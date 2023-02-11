@@ -4,10 +4,13 @@ import {
     Authorization,
     AuthorizationNoOp,
     AuthorizationRules,
-    Cache,
+    FactManager,
     Fork,
+    HttpNetwork,
     Jinaga,
     MemoryStore,
+    Network,
+    NetworkNoOp,
     ObservableSource,
     ObservableSourceImpl,
     PassThroughFork,
@@ -15,9 +18,8 @@ import {
     SyncStatusNotifier,
     TransientFork,
     UserIdentity,
-    WebClient,
+    WebClient
 } from "jinaga";
-import { FactManager } from "jinaga/dist/managers/factManager";
 
 import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
@@ -62,7 +64,8 @@ export class JinagaServer {
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
         const authentication = createAuthentication(keystore);
-        const factManager = new FactManager(authentication, fork, source, store);
+        const network = createNetwork(config);
+        const factManager = new FactManager(authentication, fork, source, store, network);
         const j: Jinaga = new Jinaga(factManager, syncStatusNotifier);
 
         async function close() {
@@ -85,8 +88,7 @@ export class JinagaServer {
 function createStore(config: JinagaServerConfig): Storage {
     if (config.pgStore) {
         const store = new PostgresStore(config.pgStore);
-        const cache = new Cache(store);
-        return cache;
+        return store;
     }
     else {
         return new MemoryStore();
@@ -126,6 +128,21 @@ function createAuthentication(keystore: PostgresKeystore | null) {
     return keystore ? new AuthenticationDevice(keystore, localDeviceIdentity) : new AuthenticationNoOp();
 }
 
+function createNetwork(config: JinagaServerConfig): Network {
+    if (config.httpEndpoint) {
+        const httpConnection = new NodeHttpConnection(config.httpEndpoint);
+        const httpTimeoutSeconds = config.httpTimeoutSeconds || 5;
+        const syncStatusNotifier = new SyncStatusNotifier();
+        const webClient = new WebClient(httpConnection, syncStatusNotifier, {
+            timeoutSeconds: httpTimeoutSeconds
+        });
+        return new HttpNetwork(webClient);
+    }
+    else {
+        return new NetworkNoOp();
+    }
+}
+
 async function withSession(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null, req: Request, callback: ((j: Jinaga) => Promise<void>)) {
     const user = <RequestUser>req.user;
     const userIdentity: UserIdentity = {
@@ -136,7 +153,8 @@ async function withSession(store: Storage, keystore: Keystore | null, authorizat
     const syncStatusNotifier = new SyncStatusNotifier();
     const fork = new PassThroughFork(store);
     const observableSource = new ObservableSource(store);
-    const factManager = new FactManager(authentication, fork, observableSource, store);
+    const network = new NetworkNoOp();
+    const factManager = new FactManager(authentication, fork, observableSource, store, network);
     const j = new Jinaga(factManager, syncStatusNotifier);
     await callback(j);
 }
