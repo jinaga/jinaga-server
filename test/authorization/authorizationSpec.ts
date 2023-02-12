@@ -5,8 +5,7 @@ import {
     FactRecord,
     hydrate,
     Jinaga as j,
-    MemoryStore,
-    ObservableSourceImpl,
+    MemoryStore
 } from "jinaga";
 
 import { AuthorizationKeystore } from "../../src/authorization/authorization-keystore";
@@ -161,7 +160,6 @@ function givenStorage() {
 function givenAuthorizationWithStorage(storage: MemoryStore) {
     const keystore = new MemoryKeystore();
     keystore.getOrCreateUserFact(givenMockUserIdentity());
-    const feed = new ObservableSourceImpl(storage);
     const authorizationRules = new AuthorizationRules()
         .any('Hashtag')
         .no('Jinaga.User')
@@ -169,7 +167,7 @@ function givenAuthorizationWithStorage(storage: MemoryStore) {
         .type('Like', j.for(likeUser))
         .type('Delete', j.for(deleteSender))
         ;
-    return new AuthorizationKeystore(feed, keystore, authorizationRules);
+    return new AuthorizationKeystore(storage, keystore, authorizationRules);
 }
 
 function givenOtherUser() {

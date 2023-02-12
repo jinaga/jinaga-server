@@ -468,6 +468,14 @@ export class PostgresStore implements Storage {
         }
         return factTypes;
     }
+
+    loadBookmark(feed: string): Promise<string> {
+        throw new Error("Method not implemented.");
+    }
+
+    saveBookmark(feed: string, bookmark: string): Promise<void> {
+        throw new Error("Method not implemented.");
+    }
 }
 
 async function executeQueryTree(sqlQueryTree: SqlQueryTree, connection: PoolClient): Promise<ResultSetTree> {

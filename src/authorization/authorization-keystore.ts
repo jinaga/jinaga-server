@@ -7,9 +7,9 @@ import {
     FactRecord,
     FactReference,
     Feed,
-    ObservableSource,
     Query,
     Specification,
+    Storage,
     UserIdentity
 } from "jinaga";
 
@@ -19,7 +19,7 @@ export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private observableSource: ObservableSource,
+        private observableSource: Storage,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null) {
 
