@@ -160,7 +160,7 @@ function givenStorage() {
 function givenAuthorizationWithStorage(storage: MemoryStore) {
     const keystore = new MemoryKeystore();
     keystore.getOrCreateUserFact(givenMockUserIdentity());
-    const authorizationRules = new AuthorizationRules()
+    const authorizationRules = new AuthorizationRules(undefined)
         .any('Hashtag')
         .no('Jinaga.User')
         .type('Tweet', j.for(tweetSender))
