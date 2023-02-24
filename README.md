@@ -113,3 +113,14 @@ npm run debug
 ```
 - Use Postman to "post" facts to http://localhost:8080/jinaga/write or to "post" specifications to  http://localhost:8080/jinaga/read .   
 - The debugger will break when it reaches a breakpoint.
+
+## Release
+
+To release a new version of Jinaga server, bump the version number, create a new release
+from the generated tag, and let GitHub Actions do the rest.
+
+```bash
+npm version patch
+git push --follow-tags
+gh release create v$(node -p "require('./package.json').version") --generate-notes --verify-tag
+```
