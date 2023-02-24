@@ -9,6 +9,7 @@ import {
     HttpNetwork,
     Jinaga,
     MemoryStore,
+    Model,
     Network,
     NetworkNoOp,
     ObservableSource,
@@ -36,6 +37,7 @@ export type JinagaServerConfig = {
     pgStore?: string,
     pgKeystore?: string,
     httpEndpoint?: string,
+    model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     httpTimeoutSeconds?: number
 };
@@ -59,7 +61,7 @@ export class JinagaServer {
         const source = new ObservableSourceImpl(store);
         const fork = createFork(config, store, syncStatusNotifier);
         const keystore = createKeystore(config);
-        const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules()) : null;
+        const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const authorization = createAuthorization(authorizationRules, store, keystore);
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
