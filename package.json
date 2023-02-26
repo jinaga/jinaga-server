@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "clean": "rimraf dist/ && rimraf integration-test/jinaga-test/jinaga/ && rimraf integration-test/jinaga-test/node_modules/",
+    "clean": "rimraf dist/ && rimraf integration-test/jinaga-test/jinaga-server/ && rimraf integration-test/jinaga-test/node_modules/",
     "build": "tsc",
     "test": "tsc --noEmit --project tsconfig.test.json && jest",
     "test:watch": "jest --watch",

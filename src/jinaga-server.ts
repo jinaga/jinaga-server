@@ -65,7 +65,7 @@ export class JinagaServer {
         const authorization = createAuthorization(authorizationRules, store, keystore);
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
-        const authentication = createAuthentication(keystore);
+        const authentication = createAuthentication(store, keystore, authorizationRules);
         const network = createNetwork(config);
         const factManager = new FactManager(authentication, fork, source, store, network);
         const j: Jinaga = new Jinaga(factManager, syncStatusNotifier);
@@ -126,8 +126,8 @@ function createAuthorization(authorizationRules: AuthorizationRules | null, stor
     }
 }
 
-function createAuthentication(keystore: PostgresKeystore | null) {
-    return keystore ? new AuthenticationDevice(keystore, localDeviceIdentity) : new AuthenticationNoOp();
+function createAuthentication(store: Storage, keystore: PostgresKeystore | null, authorizationRules: AuthorizationRules | null) {
+    return keystore ? new AuthenticationDevice(store, keystore, authorizationRules, localDeviceIdentity) : new AuthenticationNoOp();
 }
 
 function createNetwork(config: JinagaServerConfig): Network {
