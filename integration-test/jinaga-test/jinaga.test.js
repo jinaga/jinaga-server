@@ -10,11 +10,12 @@ describe("Jinaga as a device", () => {
     let j;
     let close;
 
-    beforeEach(() => {
+    beforeEach(async () => {
         ({ j, close } = JinagaServer.create({
             pgKeystore: connectionString,
             pgStore:    connectionString
         }));
+        await j.local();
     });
 
     afterEach(async () => {

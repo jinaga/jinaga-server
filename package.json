@@ -5,13 +5,13 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "clean": "rimraf dist/ && rimraf integration-test/jinaga-test/jinaga/ && rimraf integration-test/jinaga-test/node_modules/",
+    "clean": "rimraf dist/ && rimraf integration-test/jinaga-test/jinaga-server/ && rimraf integration-test/jinaga-test/node_modules/",
     "build": "tsc",
     "test": "tsc --noEmit --project tsconfig.test.json && jest",
     "test:watch": "jest --watch",
     "debug": "node ./dist/debug.js",
     "prepublishOnly": "npm run clean && npm run build && npm run test",
-    "integration": "npm run build && cd ./integration-test && ./run.sh",
+    "integration": "npm run clean && npm run build && cd ./integration-test && ./run.sh",
     "replicator": "npm run build && cd ./replicator && npm run build && npm run start && cd .."
   },
   "repository": {
