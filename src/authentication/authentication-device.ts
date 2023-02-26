@@ -24,10 +24,10 @@ export class AuthenticationDevice implements Authentication {
     }
 
     async authorize(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
-        const userFact = await this.keystore.getUserFact(this.localDeviceIdentity);
+        const deviceFact = await this.keystore.getOrCreateDeviceFact(this.localDeviceIdentity);
         const facts = envelopes.map(envelope => envelope.fact);
         const authorizedFacts = this.authorizationEngine
-            ? await this.authorizationEngine.authorizeFacts(facts, userFact)
+            ? await this.authorizationEngine.authorizeFacts(facts, deviceFact)
             : facts;
         const signedFacts = await this.keystore.signFacts(this.localDeviceIdentity, authorizedFacts);
         return signedFacts;

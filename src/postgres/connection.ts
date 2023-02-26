@@ -1,4 +1,4 @@
-import { Pool, PoolClient } from 'pg';
+import { DatabaseError, Pool, PoolClient } from 'pg';
 import { delay } from "../util/promise";
 
 export type Row = { [key: string]: any };
@@ -18,15 +18,27 @@ export class ConnectionFactory {
 
     withTransaction<T>(callback: (connection: PoolClient) => Promise<T>) {
         return this.with(async connection => {
-            try {
-                await connection.query('BEGIN');
-                const result = await callback(connection);
-                await connection.query('COMMIT');
-                return result;
-            }
-            catch (e) {
-                await connection.query('ROLLBACK');
-                throw e;
+            // If the insert throws a duplicate key error, then retry the select.
+            let attempts = 2;
+            while (true) {
+                try {
+                    await connection.query('BEGIN');
+                    const result = await callback(connection);
+                    await connection.query('COMMIT');
+                    return result;
+                }
+                catch (e) {
+                    await connection.query('ROLLBACK');
+                    if (e instanceof DatabaseError && e.code === '23505') {
+                        attempts--;
+                        if (attempts === 0) {
+                            throw e;
+                        }
+                    }
+                    else {
+                        throw e;
+                    }
+                }
             }
         })
     }
