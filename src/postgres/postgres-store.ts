@@ -359,10 +359,10 @@ export class PostgresStore implements Storage {
         const roleMap = this.roleMap;
         const unknownRoles = getAllRolesFromFeed(feed)
             .map(r => ({
-                successor_type_id: ensureGetFactTypeId(factTypes, r.successorType),
+                successor_type_id: getFactTypeId(factTypes, r.successorType)!,
                 role: r.name
             }))
-            .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
+            .filter(r => r.successor_type_id && !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
                 return await loadRoles(unknownRoles, roleMap, connection);
