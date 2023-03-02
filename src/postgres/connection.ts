@@ -1,3 +1,4 @@
+import { Trace } from 'jinaga';
 import { DatabaseError, Pool, PoolClient } from 'pg';
 import { delay } from "../util/promise";
 
@@ -28,14 +29,17 @@ export class ConnectionFactory {
                     return result;
                 }
                 catch (e) {
+                    Trace.warn("Postgres transaction error: " + describeError(e));
                     await connection.query('ROLLBACK');
                     if (e instanceof DatabaseError && e.code === '23505') {
+                        Trace.warn("Postgres duplicate key: retrying");
                         attempts--;
                         if (attempts === 0) {
                             throw e;
                         }
                     }
                     else {
+                        Trace.error(e);
                         throw e;
                     }
                 }
@@ -58,8 +62,10 @@ export class ConnectionFactory {
             }
             catch (e) {
                 if (!isTransientError(e)) {
+                    Trace.error(e);
                     throw e;
                 }
+                Trace.warn("Postgres transient error: " + describeError(e));
                 attempt++;
                 if (attempt === pause.length) {
                     throw e;
@@ -81,6 +87,13 @@ function isTransientError(e: any) {
     if (e.code === 'ECONNREFUSED') {
         return true;
     }
-    console.error("Postgres error:", e);
     return false;
+}
+
+function describeError(e: any) {
+    const error = {
+        code: e.code,
+        message: e.message,
+    };
+    return JSON.stringify(error);
 }
