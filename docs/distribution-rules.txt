@@ -1,0 +1,32 @@
+// Anybody can read approved comments
+
+(site: Blog.Site) {
+    post: Blog.Post [
+        post->site: Blog.Site = site
+        !E {
+            deleted: Blog.Post.Deleted [
+                deleted->post: Blog.Post = post
+            ]
+        }
+    ]
+    comment: Blog.Comment [
+        comment->post: Blog.Post = post
+        E {
+            approved: Blog.Comment.Approved [
+                approved->comment: Blog.Comment = comment
+            ]
+        }
+    ]
+}
+
+// The site owner can read all posts and comments
+
+(site: Blog.Site, user: Jinaga.User) {
+    post: Blog.Post [
+        post->site: Blog.Site = site
+        post->owner: Jinaga.User = user
+    ]
+    comment: Blog.Comment [
+        comment->post: Blog.Post = post
+    ]
+}

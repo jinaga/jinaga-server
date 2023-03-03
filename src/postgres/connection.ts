@@ -6,10 +6,24 @@ export type Row = { [key: string]: any };
 
 export class ConnectionFactory {
     private postgresPool: Pool;
+    private server: string;
 
     constructor (postgresUri: string) {
         this.postgresPool = new Pool({
             connectionString: postgresUri
+        });
+
+        // Parse the Postgres URI to find the host name.
+        if (postgresUri.startsWith('postgres://')) {
+            const host = postgresUri.split('@')[1].split(':')[0];
+            this.server = host;
+        }
+        else {
+            this.server = 'localhost';
+        }
+
+        this.postgresPool.on('error', (err, client) => {
+            Trace.error(err);
         });
     }
 
@@ -72,14 +86,17 @@ export class ConnectionFactory {
                 }
             }
             if (pause[attempt] > 0) {
+                Trace.warn("Postgres retrying in " + pause[attempt] + "ms");
                 await delay(pause[attempt]);
             }
         }
         throw new Error("Number of attempts exceeded");
     }
 
-    private async createClient() {
-        return await this.postgresPool.connect();
+    private createClient() {
+        return Trace.dependency('Postgres client', this.server, () => {
+            return this.postgresPool.connect();
+        });
     }
 }
 
