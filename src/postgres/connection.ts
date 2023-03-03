@@ -10,7 +10,10 @@ export class ConnectionFactory {
 
     constructor (postgresUri: string) {
         this.postgresPool = new Pool({
-            connectionString: postgresUri
+            connectionString: postgresUri,
+            log(...messages) {
+                Trace.info(messages.join(' '));
+            },
         });
 
         // Parse the Postgres URI to find the host name.
@@ -22,6 +25,15 @@ export class ConnectionFactory {
             this.server = 'localhost';
         }
 
+        let connectionCount = 0;
+        this.postgresPool.on('connect', (client) => {
+            connectionCount++;
+            Trace.metric(`Postgres connected ${this.server}`, { connections: connectionCount });
+        });
+        this.postgresPool.on('remove', (client) => {
+            connectionCount--;
+            Trace.metric(`Postgres disconnected ${this.server}`, { connections: connectionCount });
+        });
         this.postgresPool.on('error', (err, client) => {
             Trace.error(err);
         });
