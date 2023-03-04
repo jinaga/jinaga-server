@@ -23,7 +23,7 @@ import {
     Storage,
     TopologicalSorter
 } from "jinaga";
-import { PoolClient } from "pg";
+import { Pool, PoolClient } from "pg";
 
 import { distinct, flatten } from "../util/fn";
 import { ConnectionFactory, Row } from "./connection";
@@ -147,12 +147,12 @@ export class PostgresStore implements Storage {
     private factTypeMap: FactTypeMap = emptyFactTypeMap();
     private roleMap: RoleMap = emptyRoleMap();
 
-    constructor (postgresUri: string) {
-        this.connectionFactory = new ConnectionFactory(postgresUri);
+    constructor (pool: Pool) {
+        this.connectionFactory = new ConnectionFactory(pool);
     }
 
-    async close() {
-        await this.connectionFactory.close();
+    close() {
+        return Promise.resolve();
     }
     
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {

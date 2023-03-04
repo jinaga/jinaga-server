@@ -1,6 +1,6 @@
 import { canonicalizeFact, computeHash, FactEnvelope, FactRecord, PredecessorCollection, Trace, UserIdentity } from "jinaga";
 import { md, pki, util } from "node-forge";
-import { PoolClient } from "pg";
+import { Pool, PoolClient } from "pg";
 
 import { Keystore } from "../keystore";
 import { ConnectionFactory } from "./connection";
@@ -14,12 +14,8 @@ export class PostgresKeystore implements Keystore {
     private connectionFactory: ConnectionFactory;
     private cache: Map<string, KeyPair> = new Map();
 
-    constructor (postgresUri: string) {
-        this.connectionFactory = new ConnectionFactory(postgresUri);
-    }
-
-    async close() {
-        await this.connectionFactory.close();
+    constructor (pool: Pool) {
+        this.connectionFactory = new ConnectionFactory(pool);
     }
 
     getOrCreateUserFact(userIdentity: UserIdentity): Promise<FactRecord> {

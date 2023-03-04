@@ -6,10 +6,6 @@ import { Keystore } from "../keystore";
 export class MemoryKeystore implements Keystore {
     private keyPairs: { [key: string]: { publicKey: string, privateKey: string }} = {};
 
-    close(): Promise<void> {
-        return Promise.resolve();
-    }
-
     getOrCreateUserFact(userIdentity: UserIdentity): Promise<FactRecord> {
         return Promise.resolve(this.getOrCreateIdentityFact('Jinaga.User', userIdentity));
     }

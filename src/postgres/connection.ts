@@ -5,42 +5,7 @@ import { delay } from "../util/promise";
 export type Row = { [key: string]: any };
 
 export class ConnectionFactory {
-    private postgresPool: Pool;
-    private server: string;
-
-    constructor (postgresUri: string) {
-        this.postgresPool = new Pool({
-            connectionString: postgresUri,
-            log(...messages) {
-                Trace.info(messages.join(' '));
-            },
-        });
-
-        // Parse the Postgres URI to find the host name.
-        if (postgresUri.startsWith('postgres://')) {
-            const host = postgresUri.split('@')[1].split(':')[0];
-            this.server = host;
-        }
-        else {
-            this.server = 'localhost';
-        }
-
-        let connectionCount = 0;
-        this.postgresPool.on('connect', (client) => {
-            connectionCount++;
-            Trace.metric(`Postgres connected ${this.server}`, { connections: connectionCount });
-        });
-        this.postgresPool.on('remove', (client) => {
-            connectionCount--;
-            Trace.metric(`Postgres disconnected ${this.server}`, { connections: connectionCount });
-        });
-        this.postgresPool.on('error', (err, client) => {
-            Trace.error(err);
-        });
-    }
-
-    async close() {
-        await this.postgresPool.end();
+    constructor (private postgresPool: Pool) {
     }
 
     withTransaction<T>(callback: (connection: PoolClient) => Promise<T>) {
@@ -106,7 +71,7 @@ export class ConnectionFactory {
     }
 
     private createClient() {
-        return Trace.dependency('Postgres client', this.server, () => {
+        return Trace.dependency('Postgres client', '', () => {
             return this.postgresPool.connect();
         });
     }
