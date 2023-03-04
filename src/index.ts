@@ -1,1 +1,1 @@
-export { JinagaServer, JinagaServerConfig, JinagaServerInstance } from "./jinaga-server";
+export { JinagaServer, JinagaServerConfig, JinagaServerInstance, tracePool } from "./jinaga-server";
