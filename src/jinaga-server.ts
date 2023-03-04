@@ -17,10 +17,12 @@ import {
     PassThroughFork,
     Storage,
     SyncStatusNotifier,
+    Trace,
     TransientFork,
     UserIdentity,
     WebClient
 } from "jinaga";
+import { Pool } from "pg";
 
 import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
@@ -34,8 +36,8 @@ import { PostgresStore } from "./postgres/postgres-store";
 
 
 export type JinagaServerConfig = {
-    pgStore?: string,
-    pgKeystore?: string,
+    pgStore?: string | Pool,
+    pgKeystore?: string | Pool,
     httpEndpoint?: string,
     model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
@@ -57,10 +59,11 @@ const localDeviceIdentity = {
 export class JinagaServer {
     static create(config: JinagaServerConfig): JinagaServerInstance {
         const syncStatusNotifier = new SyncStatusNotifier();
-        const store = createStore(config);
+        const pools: { [uri: string]: Pool } = {};
+        const store = createStore(config, pools);
         const source = new ObservableSourceImpl(store);
         const fork = createFork(config, store, syncStatusNotifier);
-        const keystore = createKeystore(config);
+        const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const authorization = createAuthorization(authorizationRules, store, keystore);
         const feedCache = new MemoryFeedCache();
@@ -71,10 +74,9 @@ export class JinagaServer {
         const j: Jinaga = new Jinaga(factManager, syncStatusNotifier);
 
         async function close() {
-            if (keystore) {
-                await keystore.close();
+            for (const pool of Object.values(pools)) {
+                await pool.end();
             }
-            await store.close();
         }
         return {
             handler: router.handler,
@@ -87,9 +89,10 @@ export class JinagaServer {
     }
 }
 
-function createStore(config: JinagaServerConfig): Storage {
+function createStore(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Storage {
     if (config.pgStore) {
-        const store = new PostgresStore(config.pgStore);
+        const pool = getPool(config.pgStore, pools);
+        const store = new PostgresStore(pool);
         return store;
     }
     else {
@@ -112,8 +115,16 @@ function createFork(config: JinagaServerConfig, store: Storage, syncStatusNotifi
     }
 }
 
-function createKeystore(config: JinagaServerConfig) {
-    return config.pgKeystore ? new PostgresKeystore(config.pgKeystore) : null;
+function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Keystore | null {
+    const uriOrPool = config.pgKeystore;
+    if (uriOrPool) {
+        const pool = getPool(uriOrPool, pools);
+        const keystore = new PostgresKeystore(pool);
+        return keystore;
+    }
+    else {
+        return null;
+    }
 }
 
 function createAuthorization(authorizationRules: AuthorizationRules | null, store: Storage, keystore: Keystore | null): Authorization {
@@ -126,7 +137,7 @@ function createAuthorization(authorizationRules: AuthorizationRules | null, stor
     }
 }
 
-function createAuthentication(store: Storage, keystore: PostgresKeystore | null, authorizationRules: AuthorizationRules | null) {
+function createAuthentication(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null) {
     return keystore ? new AuthenticationDevice(store, keystore, authorizationRules, localDeviceIdentity) : new AuthenticationNoOp();
 }
 
@@ -142,6 +153,55 @@ function createNetwork(config: JinagaServerConfig): Network {
     }
     else {
         return new NetworkNoOp();
+    }
+}
+
+function getPool(uriOrPool: string | Pool, pools: { [uri: string]: Pool; }): Pool {
+    if (typeof uriOrPool === 'string') {
+        const uri = uriOrPool;
+        if (!pools[uri]) {
+            pools[uri] = createPool(uri);
+        }
+        return pools[uri];
+    }
+    else {
+        return uriOrPool;
+    }
+}
+
+function createPool(postgresUri: string): Pool {
+    const postgresPool = new Pool({
+        connectionString: postgresUri,
+        log(...messages) {
+            Trace.info(messages.join(' '));
+        },
+    });
+
+    tracePool(postgresPool);
+
+    return postgresPool;
+}
+
+export function tracePool(postgresPool: Pool) {
+    postgresPool.on('acquire', (client) => {
+        Trace.metric('Postgres acquired', poolMetrics());
+    });
+    postgresPool.on('connect', (client) => {
+        Trace.metric('Postgres connected', poolMetrics());
+    });
+    postgresPool.on('remove', (client) => {
+        Trace.metric('Postgres disconnected', poolMetrics());
+    });
+    postgresPool.on('error', (err, client) => {
+        Trace.error(err);
+    });
+
+    function poolMetrics() {
+        return {
+            total: postgresPool.totalCount,
+            idle: postgresPool.idleCount,
+            waiting: postgresPool.waitingCount
+        };
     }
 }
 

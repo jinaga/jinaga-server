@@ -1,7 +1,6 @@
 import { FactEnvelope, FactRecord, UserIdentity } from "jinaga";
 
 export interface Keystore {
-    close(): Promise<void>;
     getOrCreateUserFact(userIdentity: UserIdentity): Promise<FactRecord>;
     getOrCreateDeviceFact(userIdentity: UserIdentity): Promise<FactRecord>;
     getUserFact(userIdentity: UserIdentity): Promise<FactRecord>;
