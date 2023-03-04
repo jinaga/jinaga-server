@@ -172,6 +172,9 @@ function getPool(uriOrPool: string | Pool, pools: { [uri: string]: Pool; }): Poo
 function createPool(postgresUri: string): Pool {
     const postgresPool = new Pool({
         connectionString: postgresUri,
+        idleTimeoutMillis: process.env.POSTGRES_IDLE_TIMEOUT_MILLIS ?
+            parseInt(process.env.POSTGRES_IDLE_TIMEOUT_MILLIS) :
+            30000,
         log(...messages) {
             Trace.info(messages.join(' '));
         },
