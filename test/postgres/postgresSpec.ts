@@ -27,7 +27,7 @@ describe('Postgres', () => {
     let roleMap = allRoles(query.steps, 'Root').filter(r => r.type !== 'Unknown' && r.role !== 'unknown').reduce(
       (r, role, i) => addRole(r, ensureGetFactTypeId(factTypes, role.type), role.role, i + 1),
       emptyRoleMap());
-    const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap);
+    const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap, "public");
     return sqlQuery ? { sql: sqlQuery.sql, parameters: sqlQuery.parameters, pathLength: sqlQuery.pathLength, empty: sqlQuery.empty, factTypes, roleMap } : null;
   }
 

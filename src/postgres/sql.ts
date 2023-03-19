@@ -10,10 +10,10 @@ export type SqlQuery = {
     factTypeNames: string[]
 };
 
-export function sqlFromSteps(start: FactReference, steps: Step[], factTypes: FactTypeMap, roleMap: RoleMap) : SqlQuery | null {
+export function sqlFromSteps(start: FactReference, steps: Step[], factTypes: FactTypeMap, roleMap: RoleMap, schema: string) : SqlQuery | null {
     const builder = new QueryBuilder(factTypes, roleMap);
 
-    return builder.buildQuery(start, steps);
+    return builder.buildQuery(start, steps, schema);
 }
 
 interface QueryJoinEdge {
@@ -90,7 +90,7 @@ class QueryBuilder {
     constructor(private factTypes: FactTypeMap, private roleMap: RoleMap) {
     }
 
-    buildQuery(start: FactReference, steps: Step[]): SqlQuery | null {
+    buildQuery(start: FactReference, steps: Step[], schema: string): SqlQuery | null {
         if (steps.length === 0) {
             return null;
         }
@@ -120,9 +120,9 @@ class QueryBuilder {
             .filter(j => j.table === 'fact')
             .map(j => (j as QueryJoinFact).factAlias);
         const hashes = factAliases.map(a => `f${a}.hash as hash${a}`).join(', ');
-        const joins = this.buildJoins(this.queryParts.joins, 'f1.fact_id');
-        const whereClause = this.buildWhereClause(this.queryParts.existentialClauses);
-        const sql = `SELECT ${hashes} FROM public.fact f1${joins} WHERE f1.fact_type_id = $1 AND f1.hash = $2${whereClause}`;
+        const joins = this.buildJoins(schema, this.queryParts.joins, 'f1.fact_id');
+        const whereClause = this.buildWhereClause(schema, this.queryParts.existentialClauses);
+        const sql = `SELECT ${hashes} FROM ${schema}.fact f1${joins} WHERE f1.fact_type_id = $1 AND f1.hash = $2${whereClause}`;
 
         return {
             empty: false,
@@ -133,7 +133,7 @@ class QueryBuilder {
         };
     }
 
-    private buildJoins(joins: QueryJoin[], priorFactId: string) {
+    private buildJoins(schema: string, joins: QueryJoin[], priorFactId: string) {
         interface Joins {
             priorFactId: string,
             clauses: string[]
@@ -145,7 +145,7 @@ class QueryBuilder {
         const clauses = joins.reduce((joins, join) => {
             if (join.table === 'edge') {
                 if (join.direction === 'successor') {
-                    const clause = ` JOIN public.edge e${join.edgeAlias} ` +
+                    const clause = ` JOIN ${schema}.edge e${join.edgeAlias} ` +
                         `ON e${join.edgeAlias}.predecessor_fact_id = ${joins.priorFactId} ` +
                         `AND e${join.edgeAlias}.role_id = $${join.roleParameter}`;
                     return {
@@ -154,7 +154,7 @@ class QueryBuilder {
                     };
                 }
                 else {
-                    const clause = ` JOIN public.edge e${join.edgeAlias} ` +
+                    const clause = ` JOIN ${schema}.edge e${join.edgeAlias} ` +
                         `ON e${join.edgeAlias}.successor_fact_id = ${joins.priorFactId} ` +
                         `AND e${join.edgeAlias}.role_id = $${join.roleParameter}`;
                     return {
@@ -163,7 +163,7 @@ class QueryBuilder {
                     };
                 }
             } else {
-                const clause = ` JOIN public.fact f${join.factAlias} ON f${join.factAlias}.fact_id = ${joins.priorFactId}`;
+                const clause = ` JOIN ${schema}.fact f${join.factAlias} ON f${join.factAlias}.fact_id = ${joins.priorFactId}`;
                 return {
                     priorFactId: joins.priorFactId,
                     clauses: [...joins.clauses, clause]
@@ -173,7 +173,7 @@ class QueryBuilder {
         return clauses.join('');
     }
 
-    buildWhereClause(existentialClauses: ExistentialClause[]): string {
+    buildWhereClause(schema: string, existentialClauses: ExistentialClause[]): string {
         if (existentialClauses.length === 0) {
             return '';
         }
@@ -187,12 +187,12 @@ class QueryBuilder {
             const firstTailFactId = first.direction === 'predecessor'
                 ? `e${first.edgeAlias}.successor_fact_id`
                 : `e${first.edgeAlias}.predecessor_fact_id`;
-            const joins = this.buildJoins(rest, firstHeadFactId);
+            const joins = this.buildJoins(schema, rest, firstHeadFactId);
             const priorFactId = clause.priorEdgeJoin.direction === 'predecessor'
                 ? `e${clause.priorEdgeJoin.edgeAlias}.predecessor_fact_id`
                 : `e${clause.priorEdgeJoin.edgeAlias}.successor_fact_id`;
-            const whereClause = this.buildWhereClause(clause.query.existentialClauses);
-            return ` AND ${quantifierSql} (SELECT 1 FROM public.edge e${first.edgeAlias}${joins} ` +
+            const whereClause = this.buildWhereClause(schema, clause.query.existentialClauses);
+            return ` AND ${quantifierSql} (SELECT 1 FROM ${schema}.edge e${first.edgeAlias}${joins} ` +
                 `WHERE ${firstTailFactId} = ${priorFactId} ` +
                 `AND e${first.edgeAlias}.role_id = $${first.roleParameter}${whereClause})`;
         });
