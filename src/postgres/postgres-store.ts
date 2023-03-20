@@ -147,7 +147,7 @@ export class PostgresStore implements Storage {
     private factTypeMap: FactTypeMap = emptyFactTypeMap();
     private roleMap: RoleMap = emptyRoleMap();
 
-    constructor (pool: Pool) {
+    constructor (pool: Pool, private schema: string) {
         this.connectionFactory = new ConnectionFactory(pool);
     }
 
@@ -166,8 +166,8 @@ export class PostgresStore implements Storage {
                 factTypes: FactTypeMap;
                 roles: RoleMap;
             } = await this.connectionFactory.withTransaction(async (connection) => {
-                const factTypes = await storeFactTypes(facts, this.factTypeMap, connection);
-                const existingFacts = await findExistingFacts(facts, factTypes, connection);
+                const factTypes = await storeFactTypes(facts, this.factTypeMap, connection, this.schema);
+                const existingFacts = await findExistingFacts(facts, factTypes, connection, this.schema);
                 const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
                 if (newFacts.length === 0) {
                     return {
@@ -177,8 +177,8 @@ export class PostgresStore implements Storage {
                     };
                 }
 
-                const roles = await storeRoles(newFacts, factTypes, copyRoleMap(this.roleMap), connection);
-                const allFacts = await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roles);
+                const roles = await storeRoles(newFacts, factTypes, copyRoleMap(this.roleMap), connection, this.schema);
+                const allFacts = await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roles, this.schema);
                 const newEnvelopes = envelopes.filter(envelope => newFacts.some(
                     factReferenceEquals(envelope.fact)));
                 if (newEnvelopes.length === 0) {
@@ -189,8 +189,8 @@ export class PostgresStore implements Storage {
                     };
                 }
 
-                const publicKeys = await storePublicKeys(newEnvelopes, connection);
-                await insertSignatures(newEnvelopes, allFacts, factTypes, publicKeys, connection);
+                const publicKeys = await storePublicKeys(newEnvelopes, connection, this.schema);
+                await insertSignatures(newEnvelopes, allFacts, factTypes, publicKeys, connection, this.schema);
                 return {
                     newEnvelopes,
                     factTypes,
@@ -215,7 +215,7 @@ export class PostgresStore implements Storage {
             const factTypes = await this.loadFactTypesFromSteps(query.steps, start.type);
             const roleMap = await this.loadRolesFromSteps(query.steps, factTypes, start.type);
 
-            const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap);
+            const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap, this.schema);
             if (!sqlQuery) {
                 throw new Error(`Could not generate SQL for query "${query.toDescriptiveString()}" starting at "${start.type}"`);
             }
@@ -241,7 +241,7 @@ export class PostgresStore implements Storage {
             return [];
         }
 
-        const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap);
+        const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap, this.schema);
         if (composer === null) {
             return [];
         }
@@ -256,7 +256,7 @@ export class PostgresStore implements Storage {
     async feed(feed: Feed, bookmark: string): Promise<FactFeed> {
         const factTypes: FactTypeMap = await this.loadFactTypesFromFeed(feed);
         const roleMap: RoleMap = await this.loadRolesFromFeed(feed, factTypes);
-        const sql = sqlFromFeed(feed, bookmark, 100, factTypes, roleMap);
+        const sql = sqlFromFeed(feed, this.schema, bookmark, 100, factTypes, roleMap);
         if (!sql) {
             return {
                 tuples: [],
@@ -281,7 +281,7 @@ export class PostgresStore implements Storage {
             .filter(distinct);
         if (unknownFactTypes.length > 0) {
             const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
-                return await loadFactTypes(unknownFactTypes, connection);
+                return await loadFactTypes(unknownFactTypes, connection, this.schema);
             });
             const merged = mergeFactTypes(this.factTypeMap, loadedFactTypes);
             this.factTypeMap = merged;
@@ -296,7 +296,7 @@ export class PostgresStore implements Storage {
             .filter(factType => !factTypes.has(factType));
         if (unknownFactTypes.length > 0) {
             const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
-                return await loadFactTypes(unknownFactTypes, connection);
+                return await loadFactTypes(unknownFactTypes, connection, this.schema);
             });
             const merged = mergeFactTypes(this.factTypeMap, loadedFactTypes);
             this.factTypeMap = merged;
@@ -311,7 +311,7 @@ export class PostgresStore implements Storage {
             .filter(factType => !factTypes.has(factType));
         if (unknownFactTypes.length > 0) {
             const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
-                return await loadFactTypes(unknownFactTypes, connection);
+                return await loadFactTypes(unknownFactTypes, connection, this.schema);
             });
             const merged = mergeFactTypes(this.factTypeMap, loadedFactTypes);
             this.factTypeMap = merged;
@@ -326,7 +326,7 @@ export class PostgresStore implements Storage {
             .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
-                return await loadRoles(unknownRoles, roleMap, connection);
+                return await loadRoles(unknownRoles, roleMap, connection, this.schema);
             });
             const merged = mergeRoleMaps(this.roleMap, loadedRoles);
             this.roleMap = merged;
@@ -346,7 +346,7 @@ export class PostgresStore implements Storage {
             .filter(r => r.successor_type_id && !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
-                return await loadRoles(unknownRoles, roleMap, connection);
+                return await loadRoles(unknownRoles, roleMap, connection, this.schema);
             });
             const merged = mergeRoleMaps(this.roleMap, loadedRoles);
             this.roleMap = merged;
@@ -365,7 +365,7 @@ export class PostgresStore implements Storage {
             .filter(r => r.successor_type_id && !hasRole(roleMap, r.successor_type_id, r.role));
         if (unknownRoles.length > 0) {
             const loadedRoles = await this.connectionFactory.with(async (connection) => {
-                return await loadRoles(unknownRoles, roleMap, connection);
+                return await loadRoles(unknownRoles, roleMap, connection, this.schema);
             });
             const merged = mergeRoleMaps(this.roleMap, loadedRoles);
             this.roleMap = merged;
@@ -387,7 +387,7 @@ export class PostgresStore implements Storage {
             [f.hash, factTypes.get(f.type)]);
         const sql =
             'SELECT f.fact_type_id, f.hash ' +
-            'FROM public.fact f ' +
+            `FROM ${this.schema}.fact f ` +
             'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
             '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ';
         const result: ExistsResult = await this.connectionFactory.with(async (connection) => {
@@ -415,21 +415,21 @@ export class PostgresStore implements Storage {
             [f.hash, factTypes.get(f.type)]);
         const sql =
             'SELECT f.fact_type_id, t.name, f.hash, f.data ' +
-            'FROM public.fact f ' +
-            'JOIN public.fact_type t ' +
+            `FROM ${this.schema}.fact f ` +
+            `JOIN ${this.schema}.fact_type t ` +
             '  ON f.fact_type_id = t.fact_type_id ' +
             'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
             '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
             'UNION ' +
             'SELECT f2.fact_type_id, t.name, f2.hash, f2.data ' +
-            'FROM public.fact f1 ' +
+            `FROM ${this.schema}.fact f1 ` +
             'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
             '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
-            'JOIN public.ancestor a ' +
+            `JOIN ${this.schema}.ancestor a ` +
             '  ON a.fact_id = f1.fact_id ' +
-            'JOIN public.fact f2 ' +
+            `JOIN ${this.schema}.fact f2 ` +
             '  ON f2.fact_id = a.ancestor_fact_id ' +
-            'JOIN public.fact_type t ' +
+            `JOIN ${this.schema}.fact_type t ` +
             '  ON t.fact_type_id = f2.fact_type_id;';
         const result: AncestorResult = await this.connectionFactory.with(async (connection) => {
             return await connection.query(sql, factParameters);
@@ -460,7 +460,7 @@ export class PostgresStore implements Storage {
             .filter(distinct);
         if (newFactTypes.length > 0) {
             const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
-                return await loadFactTypes(newFactTypes, connection);
+                return await loadFactTypes(newFactTypes, connection, this.schema);
             });
             const mergedFactTypes = mergeFactTypes(factTypes, loadedFactTypes);
             this.factTypeMap = mergedFactTypes;
@@ -506,7 +506,7 @@ function predecessorCollectionTypes(predecessors: PredecessorCollection): string
     return Object.keys(predecessors).flatMap(key => predecessorTypes(predecessors[key]));
 }
 
-async function storeFactTypes(facts: FactRecord[], factTypes: FactTypeMap, connection: PoolClient) {
+async function storeFactTypes(facts: FactRecord[], factTypes: FactTypeMap, connection: PoolClient, schema: string) {
     const newFactTypes = facts
         .flatMap(fact => [fact.type, ...predecessorCollectionTypes(fact.predecessors)])
         .filter(type => !factTypes.has(type))
@@ -516,7 +516,7 @@ async function storeFactTypes(facts: FactRecord[], factTypes: FactTypeMap, conne
     }
 
     // Look up existing fact types
-    const loadedFactTypes = await loadFactTypes(newFactTypes, connection);
+    const loadedFactTypes = await loadFactTypes(newFactTypes, connection, schema);
     const remainingNames = newFactTypes.filter(type => !loadedFactTypes.has(type));
     if (remainingNames.length === 0) {
         return mergeFactTypes(loadedFactTypes, factTypes);
@@ -524,7 +524,7 @@ async function storeFactTypes(facts: FactRecord[], factTypes: FactTypeMap, conne
 
     // Insert new fact types
     const values = remainingNames.map((name, index) => `($${index + 1})`);
-    const insertSql = 'INSERT INTO public.fact_type (name) VALUES ' + values.join(', ') +
+    const insertSql = `INSERT INTO ${schema}.fact_type (name) VALUES ` + values.join(', ') +
         ' RETURNING fact_type_id, name;';
     const { rows: newRows }: FactTypeResult = await connection.query(insertSql, remainingNames);
     if (newRows.length !== remainingNames.length) {
@@ -537,8 +537,8 @@ async function storeFactTypes(facts: FactRecord[], factTypes: FactTypeMap, conne
     return allFactTypes;
 }
 
-async function loadFactTypes(factTypeNames: string[], connection: PoolClient) {
-    const lookUpSql = 'SELECT name, fact_type_id FROM public.fact_type WHERE name=ANY($1);';
+async function loadFactTypes(factTypeNames: string[], connection: PoolClient, schema: string) {
+    const lookUpSql = `SELECT name, fact_type_id FROM ${schema}.fact_type WHERE name=ANY($1);`;
     const { rows: existingRows }: FactTypeResult = await connection.query(lookUpSql, [factTypeNames]);
     const factTypeIds = existingRows.reduce(
         (map, row) => addFactType(map, row.name, row.fact_type_id),
@@ -547,7 +547,7 @@ async function loadFactTypes(factTypeNames: string[], connection: PoolClient) {
     return factTypeIds;
 }
 
-async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: RoleMap, connection: PoolClient) {
+async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: RoleMap, connection: PoolClient, schema: string) {
     // Find distinct roles
     const roles = flatten(facts, fact => {
         const successor_type_id = ensureGetFactTypeId(factTypes, fact.type);
@@ -562,7 +562,7 @@ async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: 
 
     if (roles.length > 0) {
         // Look up existing roles
-        const roleIds = await loadRoles(roles, roleMap, connection);
+        const roleIds = await loadRoles(roles, roleMap, connection, schema);
         const remainingRoles = roles.filter(role => !hasRole(
             roleIds, role.successor_type_id, role.role));
         if (remainingRoles.length === 0) {
@@ -572,7 +572,7 @@ async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: 
         // Insert new roles
         const remainingRoleValues = remainingRoles.map((role, index) =>
             `($${index * 2 + 1}, $${index * 2 + 2}::integer)`);
-        const insertSql = 'INSERT INTO public.role (name, defining_fact_type_id) VALUES ' +
+        const insertSql = `INSERT INTO ${schema}.role (name, defining_fact_type_id) VALUES ` +
             remainingRoleValues.join(', ') +
             ' RETURNING role_id, name, defining_fact_type_id;';
         const remainingRoleParameters = flatten(remainingRoles, (role) => [
@@ -594,7 +594,7 @@ async function storeRoles(facts: FactRecord[], factTypes: FactTypeMap, roleMap: 
     }
 }
 
-async function loadRoles(roles: { role: string; successor_type_id: number; }[], roleMap: RoleMap, connection: PoolClient) {
+async function loadRoles(roles: { role: string; successor_type_id: number; }[], roleMap: RoleMap, connection: PoolClient, schema: string) {
     const roleValues = roles.map((role, index) =>
         `($${index * 2 + 1}, $${index * 2 + 2}::integer)`);
     const roleParameters = flatten(roles, (role) => [
@@ -603,7 +603,7 @@ async function loadRoles(roles: { role: string; successor_type_id: number; }[], 
     ]);
 
     const lookUpSql = 'SELECT role.name, role.defining_fact_type_id, role.role_id' +
-        ' FROM public.role' +
+        ` FROM ${schema}.role` +
         ' JOIN (VALUES ' + roleValues.join(', ') + ') AS v (name, defining_fact_type_id)' +
         ' ON v.name = role.name AND v.defining_fact_type_id = role.defining_fact_type_id;';
     const { rows }: RoleResult = await connection.query(lookUpSql, roleParameters);
@@ -614,7 +614,7 @@ async function loadRoles(roles: { role: string; successor_type_id: number; }[], 
     return roleIds;
 }
 
-async function findExistingFacts(facts: FactRecord[], factTypes: FactTypeMap, connection: PoolClient) {
+async function findExistingFacts(facts: FactRecord[], factTypes: FactTypeMap, connection: PoolClient, schema: string) {
     if (facts.length > 0) {
         const factReferences: FactReference[] = facts.flatMap(fact => [
             ...predecessorsOf(fact),
@@ -626,7 +626,7 @@ async function findExistingFacts(facts: FactRecord[], factTypes: FactTypeMap, co
             [f.hash, factTypes.get(f.type)]);
 
         const sql = 'SELECT fact_id, fact.fact_type_id, fact.hash' +
-            ' FROM public.fact' +
+            ` FROM ${schema}.fact` +
             ' JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id)' +
             ' ON v.fact_type_id = fact.fact_type_id AND v.hash = fact.hash;';
         const { rows }: FactResult = await connection.query(sql, factParameters);
@@ -641,12 +641,12 @@ async function findExistingFacts(facts: FactRecord[], factTypes: FactTypeMap, co
     }
 }
 
-async function insertFactsEdgesAndAncestors(facts: FactRecord[], factTypes: FactTypeMap, existingFacts: Map<string, Map<number, number>>, connection: PoolClient, roles: RoleMap) {
+async function insertFactsEdgesAndAncestors(facts: FactRecord[], factTypes: FactTypeMap, existingFacts: Map<string, Map<number, number>>, connection: PoolClient, roles: RoleMap, schema: string) {
     if (facts.length === 0) {
         return emptyFactMap();
     }
 
-    const { sql, parameters } = sqlInsertFacts(facts, roles, factTypes);
+    const { sql, parameters } = sqlInsertFacts(facts, roles, factTypes, schema);
 
     const { rows }: FactResult = await connection.query(sql, parameters);
     if (rows.length !== facts.length) {
@@ -659,7 +659,7 @@ async function insertFactsEdgesAndAncestors(facts: FactRecord[], factTypes: Fact
     return allFacts;
 }
 
-function sqlInsertFacts(facts: FactRecord[], roles: RoleMap, factTypes: FactTypeMap) {
+function sqlInsertFacts(facts: FactRecord[], roles: RoleMap, factTypes: FactTypeMap, schema: string) {
     const factValues = facts.map((f, i) => `(\$${i * 3 + 1}, \$${i * 3 + 2}::integer, \$${i * 3 + 3}::jsonb)`);
     const factParameters = flatten(facts, (f) => [f.hash, ensureGetFactTypeId(factTypes, f.type), {
         fields: f.fields,
@@ -668,11 +668,11 @@ function sqlInsertFacts(facts: FactRecord[], roles: RoleMap, factTypes: FactType
 
     const edgeRecords = flatten(facts, fact => makeEdgeRecords(fact));
     if (edgeRecords.length > 0) {
-        return sqlInsertFactsEdgesAndAncestors(facts, factParameters, edgeRecords, factTypes, roles, factValues);
+        return sqlInsertFactsEdgesAndAncestors(facts, factParameters, edgeRecords, factTypes, roles, factValues, schema);
     }
     else {
         return {
-            sql: 'INSERT INTO public.fact (hash, fact_type_id, data) VALUES ' +
+            sql: `INSERT INTO ${schema}.fact (hash, fact_type_id, data) VALUES ` +
                 factValues.join(', ') +
                 ' RETURNING fact_id, hash, fact_type_id;',
             parameters: factParameters
@@ -680,7 +680,7 @@ function sqlInsertFacts(facts: FactRecord[], roles: RoleMap, factTypes: FactType
     }
 }
 
-function sqlInsertFactsEdgesAndAncestors(facts: FactRecord[], factParameters: (string | number | { fields: {}; predecessors: PredecessorCollection; })[], edgeRecords: EdgeRecord[], factTypes: FactTypeMap, roles: RoleMap, factValues: string[]) {
+function sqlInsertFactsEdgesAndAncestors(facts: FactRecord[], factParameters: (string | number | { fields: {}; predecessors: PredecessorCollection; })[], edgeRecords: EdgeRecord[], factTypes: FactTypeMap, roles: RoleMap, factValues: string[], schema: string) {
     let parameterOffset = factParameters.length;
     const edgeValues = edgeRecords.map((e, i) => `(\$${i * 5 + 1 + parameterOffset}, \$${i * 5 + 2 + parameterOffset}::integer, \$${i * 5 + 3 + parameterOffset}, \$${i * 5 + 4 + parameterOffset}::integer, \$${i * 5 + 5 + parameterOffset}::integer)`);
     const edgeParameters = flatten(edgeRecords, (e) => {
@@ -722,13 +722,13 @@ new_ancestor AS (
         AS ev (hash, fact_type_id, ancestor_hash, ancestor_fact_type_id)
 ),
 inserted_fact AS (
-    INSERT INTO public.fact (hash, fact_type_id, data)
+    INSERT INTO ${schema}.fact (hash, fact_type_id, data)
     SELECT hash, fact_type_id, data
     FROM new_fact
     RETURNING fact_id, fact_type_id, hash
 ),
 inserted_edge AS (
-    INSERT INTO public.edge
+    INSERT INTO ${schema}.edge
         (role_id, successor_fact_id, predecessor_fact_id)
     SELECT
         new_edge.role_id,
@@ -743,7 +743,7 @@ inserted_edge AS (
         FROM inserted_fact
         UNION ALL
         SELECT fact_id, fact_type_id, hash
-        FROM public.fact
+        FROM ${schema}.fact
     ) AS predecessor
         ON predecessor.hash = new_edge.predecessor_hash
         AND predecessor.fact_type_id = new_edge.predecessor_fact_type_id
@@ -762,20 +762,20 @@ ancestor_id AS (
         FROM inserted_fact
         UNION ALL
         SELECT fact_id, fact_type_id, hash
-        FROM public.fact
+        FROM ${schema}.fact
     ) AS ancestor
         ON ancestor.hash = new_ancestor.ancestor_hash
         AND ancestor.fact_type_id = new_ancestor.ancestor_fact_type_id
 ),
 inserted_ancestor AS (
-    INSERT INTO public.ancestor
+    INSERT INTO ${schema}.ancestor
         (fact_id, ancestor_fact_id)
         SELECT ancestor_id.fact_id, ancestor_id.ancestor_fact_id
         FROM ancestor_id
     UNION ALL
         SELECT ancestor_id.fact_id, ancestor.ancestor_fact_id
         FROM ancestor_id
-        JOIN public.ancestor
+        JOIN ${schema}.ancestor
             ON ancestor.fact_id = ancestor_id.ancestor_fact_id
     ON CONFLICT DO NOTHING
 )
@@ -816,11 +816,11 @@ function recursivePredecessors(factReference: FactReference, facts: FactRecord[]
         });
 }
 
-async function storePublicKeys(envelopes: FactEnvelope[], connection: PoolClient) {
+async function storePublicKeys(envelopes: FactEnvelope[], connection: PoolClient, schema: string) {
     // Look up existing fact types
     const publicKeys = flatten(envelopes, e => e.signatures.map(s => s.publicKey))
         .filter(distinct);
-    const lookUpSql = 'SELECT public_key, public_key_id FROM public.public_key WHERE public_key=ANY($1);';
+    const lookUpSql = `SELECT public_key, public_key_id FROM ${schema}.public_key WHERE public_key=ANY($1);`;
     const { rows: existingRows }: PublicKeyResult = await connection.query(lookUpSql, [publicKeys]);
     const publicKeyIds = existingRows.reduce(
         (map, row) => addFactType(map, row.public_key, row.public_key_id),
@@ -833,7 +833,7 @@ async function storePublicKeys(envelopes: FactEnvelope[], connection: PoolClient
 
     // Insert new fact types
     const values = remainingPublicKeys.map((name, index) => `($${index + 1})`);
-    const insertSql = 'INSERT INTO public.public_key (public_key) VALUES ' + values.join(', ') +
+    const insertSql = `INSERT INTO ${schema}.public_key (public_key) VALUES ` + values.join(', ') +
         ' RETURNING public_key, public_key_id;';
     const { rows: newRows }: PublicKeyResult = await connection.query(insertSql, remainingPublicKeys);
     if (newRows.length !== remainingPublicKeys.length) {
@@ -846,7 +846,7 @@ async function storePublicKeys(envelopes: FactEnvelope[], connection: PoolClient
     return allPublicKeyIds;
 }
 
-async function insertSignatures(envelopes: FactEnvelope[], allFacts: FactMap, factTypes: FactTypeMap, publicKey: PublicKeyMap, connection: PoolClient) {
+async function insertSignatures(envelopes: FactEnvelope[], allFacts: FactMap, factTypes: FactTypeMap, publicKey: PublicKeyMap, connection: PoolClient, schema: string) {
     const signatureRecords = flatten(envelopes, envelope => envelope.signatures.map(signature => ({
         factId: getFactId(allFacts, envelope.fact.hash, ensureGetFactTypeId(factTypes, envelope.fact.type)),
         publicKeyId: getPublicKeyId(publicKey, signature.publicKey),
@@ -858,7 +858,7 @@ async function insertSignatures(envelopes: FactEnvelope[], allFacts: FactMap, fa
         const signatureParameters = flatten(signatureRecords, s =>
             [s.factId, s.publicKeyId, s.signature]);
 
-        const sql = `INSERT INTO public.signature
+        const sql = `INSERT INTO ${schema}.signature
             (fact_id, public_key_id, signature) 
             (SELECT fact_id, public_key_id, signature 
              FROM (VALUES ${signatureValues.join(', ')}) AS v(fact_id, public_key_id, signature)) 

@@ -53,7 +53,7 @@ class QueryDescription {
         private readonly notExistsConditions: NotExistsConditionDescription[] = []
     ) {}
 
-    generateSqlQuery(bookmark: string, limit: number): SpecificationSqlQuery {
+    generateSqlQuery(schema: string, bookmark: string, limit: number): SpecificationSqlQuery {
         const hashes = this.outputs
             .map(output => `f${output.factIndex}.hash as hash${output.factIndex}`)
             .join(", ");
@@ -65,17 +65,17 @@ class QueryDescription {
         const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
         const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
         const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-        const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
+        const joins: string[] = generateJoins(schema, this.edges, writtenFactIndexes);
         const inputWhereClauses = this.inputs
             .filter(input => input.factTypeParameter !== 0)
             .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
             .join(" AND ");
         const notExistsWhereClauses = this.notExistsConditions
-            .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(notExistsWhereClause, writtenFactIndexes)})`)
+            .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(schema, notExistsWhereClause, writtenFactIndexes)})`)
             .join("");
         const bookmarkParameter = this.parameters.length + 1;
         const limitParameter = bookmarkParameter + 1;
-        const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+        const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
         const bookmarkValue: number[] = parseBookmark(bookmark);
         return {
             sql,
@@ -89,13 +89,13 @@ class QueryDescription {
     }
 }
 
-function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
+function generateJoins(schema: string, edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
     const joins: string[] = [];
     edges.forEach(edge => {
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
             if (writtenFactIndexes.has(edge.successorFactIndex)) {
                 joins.push(
-                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` JOIN ${schema}.edge e${edge.edgeIndex}` +
                     ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
                     ` AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
                     ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
@@ -103,12 +103,12 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
             }
             else {
                 joins.push(
-                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` JOIN ${schema}.edge e${edge.edgeIndex}` +
                     ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
                     ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
                 );
                 joins.push(
-                    ` JOIN public.fact f${edge.successorFactIndex}` +
+                    ` JOIN ${schema}.fact f${edge.successorFactIndex}` +
                     ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
                 );
                 writtenFactIndexes.add(edge.successorFactIndex);
@@ -116,12 +116,12 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
         }
         else if (writtenFactIndexes.has(edge.successorFactIndex)) {
             joins.push(
-                ` JOIN public.edge e${edge.edgeIndex}` +
+                ` JOIN ${schema}.edge e${edge.edgeIndex}` +
                 ` ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
                 ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
             );
             joins.push(
-                ` JOIN public.fact f${edge.predecessorFactIndex}` +
+                ` JOIN ${schema}.fact f${edge.predecessorFactIndex}` +
                 ` ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id`
             );
             writtenFactIndexes.add(edge.predecessorFactIndex);
@@ -133,7 +133,7 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
     return joins;
 }
 
-function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDescription, outerFactIndexes: Set<number>): string {
+function generateNotExistsWhereClause(schema: string, notExistsWhereClause: NotExistsConditionDescription, outerFactIndexes: Set<number>): string {
     const firstEdge = notExistsWhereClause.edges[0];
     const writtenFactIndexes = new Set<number>(outerFactIndexes);
     const firstJoin: string[] = [];
@@ -148,7 +148,7 @@ function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDe
                 ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
             );
             firstJoin.push(
-                ` JOIN public.fact f${firstEdge.successorFactIndex}` +
+                ` JOIN ${schema}.fact f${firstEdge.successorFactIndex}` +
                 ` ON f${firstEdge.successorFactIndex}.fact_id = e${firstEdge.edgeIndex}.successor_fact_id`
             );
             writtenFactIndexes.add(firstEdge.successorFactIndex);
@@ -160,7 +160,7 @@ function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDe
             ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
         );
         firstJoin.push(
-            ` JOIN public.fact f${firstEdge.predecessorFactIndex}` +
+            ` JOIN ${schema}.fact f${firstEdge.predecessorFactIndex}` +
             ` ON f${firstEdge.predecessorFactIndex}.fact_id = e${firstEdge.edgeIndex}.predecessor_fact_id`
         );
         writtenFactIndexes.add(firstEdge.predecessorFactIndex);
@@ -168,9 +168,9 @@ function generateNotExistsWhereClause(notExistsWhereClause: NotExistsConditionDe
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const tailJoins: string[] = generateJoins(notExistsWhereClause.edges.slice(1), writtenFactIndexes);
+    const tailJoins: string[] = generateJoins(schema, notExistsWhereClause.edges.slice(1), writtenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
-    return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
+    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
 }
 
 function parseBookmark(bookmark: string): number[] {
@@ -330,7 +330,7 @@ class DescriptionBuilder {
     }
 }
 
-export function sqlFromSpecification(start: FactReference[], bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
+export function sqlFromSpecification(start: FactReference[], schema: string, bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
     const feeds = buildFeeds(start, specification);
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
     const feedAndBookmark = feeds.map((feed, index) => ({
@@ -341,18 +341,18 @@ export function sqlFromSpecification(start: FactReference[], bookmarks: string[]
         descriptionBuilder.isSatisfiable(fb.feed, fb.feed.edges));
     const sqlQueries = satisfiableFeedsAndBookmarks.map(fb => {
         const description = descriptionBuilder.buildDescription(fb.feed);
-        const sql = description.generateSqlQuery(fb.bookmark, limit);
+        const sql = description.generateSqlQuery(schema, fb.bookmark, limit);
         return sql;
     });
     return sqlQueries;
 }
 
-export function sqlFromFeed(feed: Feed, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
+export function sqlFromFeed(feed: Feed, schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
     if (!descriptionBuilder.isSatisfiable(feed, feed.edges)) {
         return null;
     }
     const description = descriptionBuilder.buildDescription(feed);
-    const sql = description.generateSqlQuery(bookmark, limit);
+    const sql = description.generateSqlQuery(schema, bookmark, limit);
     return sql;
 }

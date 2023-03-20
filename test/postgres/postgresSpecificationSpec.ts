@@ -44,7 +44,7 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
         }
         throw new Error(`Unknown input type ${input.type}`);
     });
-    const sqlQueries = sqlFromSpecification(start, bookmarks, 100, specification, factTypes, roleMap);
+    const sqlQueries = sqlFromSpecification(start, "public", bookmarks, 100, specification, factTypes, roleMap);
     return { sqlQueries, factTypes, roleMap };
 }
 

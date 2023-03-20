@@ -217,7 +217,7 @@ class QueryDescription {
         return this.outputs.length;
     }
 
-    generateResultSqlQuery(): SpecificationSqlQuery {
+    generateResultSqlQuery(schema: string): SpecificationSqlQuery {
         const columns = this.outputs
             .map(output => `f${output.factIndex}.hash as hash${output.factIndex}, f${output.factIndex}.fact_id as id${output.factIndex}, f${output.factIndex}.data as data${output.factIndex}`)
             .join(", ");
@@ -226,17 +226,17 @@ class QueryDescription {
         const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
         const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
         const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-        const joins: string[] = generateJoins(this.edges, writtenFactIndexes);
+        const joins: string[] = generateJoins(this.edges, writtenFactIndexes, schema);
         const inputWhereClauses = this.inputs
             .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
             .join(" AND ");
         const existentialWhereClauses = this.existentialConditions
-            .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes)})`)
+            .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema)})`)
             .join("");
         const orderByClause = this.outputs
             .map(output => `f${output.factIndex}.fact_id ASC`)
             .join(", ");
-        const sql = `SELECT ${columns} FROM public.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+        const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
         return {
             sql,
             parameters: this.parameters,
@@ -322,13 +322,13 @@ function existentialsWithNewCondition(existentialConditions: ExistentialConditio
     }
 }
 
-function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
+function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string) {
     const joins: string[] = [];
     edges.forEach(edge => {
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
             if (writtenFactIndexes.has(edge.successorFactIndex)) {
                 joins.push(
-                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` JOIN ${schema}.edge e${edge.edgeIndex}` +
                     ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
                     ` AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
                     ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
@@ -336,12 +336,12 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
             }
             else {
                 joins.push(
-                    ` JOIN public.edge e${edge.edgeIndex}` +
+                    ` JOIN ${schema}.edge e${edge.edgeIndex}` +
                     ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
                     ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
                 );
                 joins.push(
-                    ` JOIN public.fact f${edge.successorFactIndex}` +
+                    ` JOIN ${schema}.fact f${edge.successorFactIndex}` +
                     ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
                 );
                 writtenFactIndexes.add(edge.successorFactIndex);
@@ -349,12 +349,12 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
         }
         else if (writtenFactIndexes.has(edge.successorFactIndex)) {
             joins.push(
-                ` JOIN public.edge e${edge.edgeIndex}` +
+                ` JOIN ${schema}.edge e${edge.edgeIndex}` +
                 ` ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
                 ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
             );
             joins.push(
-                ` JOIN public.fact f${edge.predecessorFactIndex}` +
+                ` JOIN ${schema}.fact f${edge.predecessorFactIndex}` +
                 ` ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id`
             );
             writtenFactIndexes.add(edge.predecessorFactIndex);
@@ -366,7 +366,7 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
     return joins;
 }
 
-function generateExistentialWhereClause(existentialCondition: ExistentialConditionDescription, outerFactIndexes: Set<number>): string {
+function generateExistentialWhereClause(existentialCondition: ExistentialConditionDescription, outerFactIndexes: Set<number>, schema: string): string {
     const firstEdge = existentialCondition.edges[0];
     const writtenFactIndexes = new Set<number>(outerFactIndexes);
     const firstJoin: string[] = [];
@@ -381,7 +381,7 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
                 ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
             );
             firstJoin.push(
-                ` JOIN public.fact f${firstEdge.successorFactIndex}` +
+                ` JOIN ${schema}.fact f${firstEdge.successorFactIndex}` +
                 ` ON f${firstEdge.successorFactIndex}.fact_id = e${firstEdge.edgeIndex}.successor_fact_id`
             );
             writtenFactIndexes.add(firstEdge.successorFactIndex);
@@ -393,7 +393,7 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
             ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
         );
         firstJoin.push(
-            ` JOIN public.fact f${firstEdge.predecessorFactIndex}` +
+            ` JOIN ${schema}.fact f${firstEdge.predecessorFactIndex}` +
             ` ON f${firstEdge.predecessorFactIndex}.fact_id = e${firstEdge.edgeIndex}.predecessor_fact_id`
         );
         writtenFactIndexes.add(firstEdge.predecessorFactIndex);
@@ -401,15 +401,15 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes);
+    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes, schema);
     const joins = firstJoin.concat(tailJoins);
     const inputWhereClauses = existentialCondition.inputs
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join("");
     const existentialWhereClauses = existentialCondition.existentialConditions
-        .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes)})`)
+        .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes, schema)})`)
         .join("");
-return `SELECT 1 FROM public.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${existentialWhereClauses}`;
+    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${existentialWhereClauses}`;
 }
 
 type FactByLabel = {
@@ -868,24 +868,24 @@ function idsEqual(a: number[], b: number[]) {
     return a.every((value, index) => value === b[index]);
 }
 
-export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap): ResultComposer | null {
+export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string): ResultComposer | null {
     const descriptionBuilder = new ResultDescriptionBuilder(factTypes, roleMap);
     const description = descriptionBuilder.buildDescription(start, specification);
 
     if (!description.queryDescription.isSatisfiable()) {
         return null;
     }
-    return createResultComposer(description, 0);
+    return createResultComposer(description, 0, schema);
 }
 
-function createResultComposer(description: ResultDescription, parentFactIdLength: number): ResultComposer {
-    const sqlQuery = description.queryDescription.generateResultSqlQuery();
+function createResultComposer(description: ResultDescription, parentFactIdLength: number, schema: string): ResultComposer {
+    const sqlQuery = description.queryDescription.generateResultSqlQuery(schema);
     const resultProjection = description.resultProjection;
     const childResultComposers = description.childResultDescriptions
         .filter(child => child.queryDescription.isSatisfiable())
         .map(child => ({
             name: child.name,
-            resultComposer: createResultComposer(child, description.queryDescription.outputLength())
+            resultComposer: createResultComposer(child, description.queryDescription.outputLength(), schema)
         }));
     return new ResultComposer(sqlQuery, resultProjection, parentFactIdLength, childResultComposers);
 }

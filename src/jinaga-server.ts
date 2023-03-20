@@ -37,7 +37,9 @@ import { PostgresStore } from "./postgres/postgres-store";
 
 export type JinagaServerConfig = {
     pgStore?: string | Pool,
+    pgStoreSchema?: string,
     pgKeystore?: string | Pool,
+    pgKeystoreSchema?: string,
     httpEndpoint?: string,
     model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
@@ -92,7 +94,7 @@ export class JinagaServer {
 function createStore(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Storage {
     if (config.pgStore) {
         const pool = getPool(config.pgStore, pools);
-        const store = new PostgresStore(pool);
+        const store = new PostgresStore(pool, validateSchema(config.pgStoreSchema));
         return store;
     }
     else {
@@ -119,7 +121,7 @@ function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool
     const uriOrPool = config.pgKeystore;
     if (uriOrPool) {
         const pool = getPool(uriOrPool, pools);
-        const keystore = new PostgresKeystore(pool);
+        const keystore = new PostgresKeystore(pool, validateSchema(config.pgKeystoreSchema));
         return keystore;
     }
     else {
@@ -222,4 +224,18 @@ async function withSession(store: Storage, keystore: Keystore | null, authorizat
     const factManager = new FactManager(authentication, fork, observableSource, store, network);
     const j = new Jinaga(factManager, syncStatusNotifier);
     await callback(j);
+}
+
+function validateSchema(schema: string | undefined): string {
+    if (!schema) {
+        return "public";
+    }
+
+    // Verify that the schema is a valid Postgres schema name.
+    // https://www.postgresql.org/docs/9.1/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS
+    if (!/^[a-z_][a-z0-9_$]*$/.test(schema)) {
+        throw new Error(`Invalid schema name: ${schema}. Schema names must start with a letter or underscore, and contain only letters, numbers, and underscores.`);
+    }
+
+    return schema;
 }

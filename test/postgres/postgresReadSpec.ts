@@ -43,7 +43,7 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
         }
         throw new Error(`Unknown input type ${input.type}`);
     });
-    const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap);
+    const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap, "public");
     if (!composer) {
         throw new Error("The specification is not satisfiable.");
     }

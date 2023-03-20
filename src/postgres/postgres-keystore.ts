@@ -14,7 +14,7 @@ export class PostgresKeystore implements Keystore {
     private connectionFactory: ConnectionFactory;
     private cache: Map<string, KeyPair> = new Map();
 
-    constructor (pool: Pool) {
+    constructor (pool: Pool, private schema: string) {
         this.connectionFactory = new ConnectionFactory(pool);
     }
 
@@ -77,7 +77,7 @@ export class PostgresKeystore implements Keystore {
     }
 
     private async selectKeyPair(connection: PoolClient, userIdentity: UserIdentity): Promise<KeyPair> {
-        const { rows } = await connection.query('SELECT public_key, private_key FROM public.user WHERE provider = $1 AND user_identifier = $2',
+        const { rows } = await connection.query(`SELECT public_key, private_key FROM ${this.schema}.user WHERE provider = $1 AND user_identifier = $2`,
             [userIdentity.provider, userIdentity.id]);
         if (rows.length > 1) {
             throw new Error('Duplicate entries found in the keystore');
@@ -104,7 +104,7 @@ export class PostgresKeystore implements Keystore {
     }
 
     private async selectOrInsertKeyPair(connection: PoolClient, userIdentity: UserIdentity): Promise<KeyPair> {
-        const { rows } = await connection.query('SELECT public_key, private_key FROM public.user WHERE provider = $1 AND user_identifier = $2',
+        const { rows } = await connection.query(`SELECT public_key, private_key FROM ${this.schema}.user WHERE provider = $1 AND user_identifier = $2`,
             [userIdentity.provider, userIdentity.id]);
         if (rows.length > 1) {
             throw new Error('Duplicate entries found in the keystore');
@@ -124,7 +124,7 @@ export class PostgresKeystore implements Keystore {
         const keypair = pki.rsa.generateKeyPair({ bits: 2048 });
         const privatePem = pki.privateKeyToPem(keypair.privateKey);
         const publicPem = pki.publicKeyToPem(keypair.publicKey);
-        await connection.query('INSERT INTO public.user (provider, user_identifier, private_key, public_key) VALUES ($1, $2, $3, $4)',
+        await connection.query(`INSERT INTO ${this.schema}.user (provider, user_identifier, private_key, public_key) VALUES ($1, $2, $3, $4)`,
             [userIdentity.provider, userIdentity.id, privatePem, publicPem]);
         return { publicPem, privatePem };
     }
