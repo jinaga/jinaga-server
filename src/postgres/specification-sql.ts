@@ -174,11 +174,24 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: NotE
 }
 
 function parseBookmark(bookmark: string): number[] {
-    if (bookmark === undefined || bookmark === null || bookmark === "") {
-        return [];
+    try {
+        if (bookmark === undefined || bookmark === null || bookmark === "") {
+            return [];
+        }
+        else {
+            return bookmark.split(".").map(str => strictParseInt(str));
+        }
     }
-    else {
-        return bookmark.split(".").map(str => parseInt(str));
+    catch (e) {
+        throw new Error(`Invalid bookmark: "${bookmark}"`);
+    }
+
+    function strictParseInt(str: string): number {
+        const parsed = parseInt(str);
+        if (isNaN(parsed)) {
+            throw new Error("NaN");
+        }
+        return parsed;
     }
 }
 
