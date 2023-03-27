@@ -5,17 +5,17 @@ import {
     AuthorizationNoOp,
     AuthorizationRules,
     FactManager,
-    Fork, Jinaga,
+    Jinaga,
     MemoryStore,
     Model,
-    Network,
     NetworkNoOp,
     ObservableSource,
     ObservableSourceImpl,
     PassThroughFork,
     Storage,
     SyncStatusNotifier,
-    Trace, UserIdentity
+    Trace,
+    UserIdentity
 } from "jinaga";
 import { Pool } from "pg";
 
@@ -94,10 +94,6 @@ function createStore(config: JinagaServerConfig, pools: { [uri: string]: Pool })
     }
 }
 
-function createFork(config: JinagaServerConfig, store: Storage, syncStatusNotifier: SyncStatusNotifier): Fork {
-    return new PassThroughFork(store);
-}
-
 function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Keystore | null {
     const uriOrPool = config.pgKeystore;
     if (uriOrPool) {
@@ -122,10 +118,6 @@ function createAuthorization(authorizationRules: AuthorizationRules | null, stor
 
 function createAuthentication(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null) {
     return keystore ? new AuthenticationDevice(store, keystore, authorizationRules, localDeviceIdentity) : new AuthenticationNoOp();
-}
-
-function createNetwork(config: JinagaServerConfig): Network {
-    return new NetworkNoOp();
 }
 
 function getPool(uriOrPool: string | Pool, pools: { [uri: string]: Pool; }): Pool {

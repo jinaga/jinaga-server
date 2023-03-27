@@ -6,7 +6,7 @@ export class AuthenticationDevice implements Authentication {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private inner: Storage,
+        inner: Storage,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null,
         private localDeviceIdentity: UserIdentity
