@@ -5,9 +5,7 @@ import {
     AuthorizationNoOp,
     AuthorizationRules,
     FactManager,
-    Fork,
-    HttpNetwork,
-    Jinaga,
+    Fork, Jinaga,
     MemoryStore,
     Model,
     Network,
@@ -17,17 +15,13 @@ import {
     PassThroughFork,
     Storage,
     SyncStatusNotifier,
-    Trace,
-    TransientFork,
-    UserIdentity,
-    WebClient
+    Trace, UserIdentity
 } from "jinaga";
 import { Pool } from "pg";
 
 import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
 import { AuthorizationKeystore } from "./authorization/authorization-keystore";
-import { NodeHttpConnection } from "./http/node-http";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
 import { MemoryFeedCache } from "./memory/memory-feed-cache";
@@ -40,10 +34,8 @@ export type JinagaServerConfig = {
     pgStoreSchema?: string,
     pgKeystore?: string | Pool,
     pgKeystoreSchema?: string,
-    httpEndpoint?: string,
     model?: Model,
-    authorization?: (a: AuthorizationRules) => AuthorizationRules,
-    httpTimeoutSeconds?: number
+    authorization?: (a: AuthorizationRules) => AuthorizationRules
 };
 
 export type JinagaServerInstance = {
@@ -64,14 +56,14 @@ export class JinagaServer {
         const pools: { [uri: string]: Pool } = {};
         const store = createStore(config, pools);
         const source = new ObservableSourceImpl(store);
-        const fork = createFork(config, store, syncStatusNotifier);
+        const fork = new PassThroughFork(store);
         const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const authorization = createAuthorization(authorizationRules, store, keystore);
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
         const authentication = createAuthentication(store, keystore, authorizationRules);
-        const network = createNetwork(config);
+        const network = new NetworkNoOp();
         const factManager = new FactManager(authentication, fork, source, store, network);
         const j: Jinaga = new Jinaga(factManager, syncStatusNotifier);
 
@@ -103,18 +95,7 @@ function createStore(config: JinagaServerConfig, pools: { [uri: string]: Pool })
 }
 
 function createFork(config: JinagaServerConfig, store: Storage, syncStatusNotifier: SyncStatusNotifier): Fork {
-    if (config.httpEndpoint) {
-        const httpConnection = new NodeHttpConnection(config.httpEndpoint);
-        const httpTimeoutSeconds = config.httpTimeoutSeconds || 5;
-        const webClient = new WebClient(httpConnection, syncStatusNotifier, {
-            timeoutSeconds: httpTimeoutSeconds
-        });
-        const fork = new TransientFork(store, webClient);
-        return fork;
-    }
-    else {
-        return new PassThroughFork(store);
-    }
+    return new PassThroughFork(store);
 }
 
 function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Keystore | null {
@@ -144,18 +125,7 @@ function createAuthentication(store: Storage, keystore: Keystore | null, authori
 }
 
 function createNetwork(config: JinagaServerConfig): Network {
-    if (config.httpEndpoint) {
-        const httpConnection = new NodeHttpConnection(config.httpEndpoint);
-        const httpTimeoutSeconds = config.httpTimeoutSeconds || 5;
-        const syncStatusNotifier = new SyncStatusNotifier();
-        const webClient = new WebClient(httpConnection, syncStatusNotifier, {
-            timeoutSeconds: httpTimeoutSeconds
-        });
-        return new HttpNetwork(webClient);
-    }
-    else {
-        return new NetworkNoOp();
-    }
+    return new NetworkNoOp();
 }
 
 function getPool(uriOrPool: string | Pool, pools: { [uri: string]: Pool; }): Pool {
