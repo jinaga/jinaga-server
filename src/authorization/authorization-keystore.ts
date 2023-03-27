@@ -19,12 +19,12 @@ export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        private observableSource: Storage,
+        private store: Storage,
         private keystore: Keystore,
-        authorizationRules: AuthorizationRules | null) {
-
+        authorizationRules: AuthorizationRules | null
+    ) {
         this.authorizationEngine = authorizationRules &&
-            new AuthorizationEngine(authorizationRules, observableSource);
+            new AuthorizationEngine(authorizationRules, store);
     }
 
     async getOrCreateUserFact(userIdentity: UserIdentity) {
@@ -35,29 +35,29 @@ export class AuthorizationKeystore implements Authorization {
                 signatures: []
             }
         ];
-        await this.observableSource.save(envelopes);
+        await this.store.save(envelopes);
         return userFact;
     }
 
     query(userIdentity: UserIdentity, start: FactReference, query: Query) {
-        return this.observableSource.query(start, query);
+        return this.store.query(start, query);
     }
 
     read(userIdentity: UserIdentity, start: FactReference[], specification: Specification) {
-        return this.observableSource.read(start, specification);
+        return this.store.read(start, specification);
     }
 
     feed(userIdentity: UserIdentity, feed: Feed, bookmark: string): Promise<FactFeed> {
-        return this.observableSource.feed(feed, bookmark);
+        return this.store.feed(feed, bookmark);
     }
 
     load(userIdentity: UserIdentity, references: FactReference[]) {
-        return this.observableSource.load(references);
+        return this.store.load(references);
     }
 
     async save(userIdentity: UserIdentity | null, facts: FactRecord[]) {
         if (!this.authorizationEngine) {
-            const envelopes = await this.observableSource.save(facts.map(fact => ({
+            const envelopes = await this.store.save(facts.map(fact => ({
                 fact,
                 signatures: []
             })));
@@ -68,7 +68,7 @@ export class AuthorizationKeystore implements Authorization {
         const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
         if (userIdentity) {
             const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
-            const envelopes = await this.observableSource.save(signedFacts);
+            const envelopes = await this.store.save(signedFacts);
             return envelopes.map(envelope => envelope.fact);
         }
         else {
