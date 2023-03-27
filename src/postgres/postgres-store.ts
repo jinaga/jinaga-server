@@ -476,6 +476,14 @@ export class PostgresStore implements Storage {
     saveBookmark(feed: string, bookmark: string): Promise<void> {
         throw new Error("Method not implemented.");
     }
+
+    getMruDate(specificationHash: string): Promise<Date | null> {
+        throw new Error("Method not implemented.");
+    }
+    
+    setMruDate(specificationHash: string, mruDate: Date): Promise<void> {
+        throw new Error("Method not implemented.");
+    }
 }
 
 async function executeQueryTree(sqlQueryTree: SqlQueryTree, connection: PoolClient): Promise<ResultSetTree> {
