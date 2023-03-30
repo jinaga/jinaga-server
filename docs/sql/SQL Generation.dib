@@ -1,0 +1,293 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!csharp
+
+#r "nuget: Jinaga"
+#r "nuget: Jinaga.UnitTest"
+#r "nuget: Jinaga.Graphviz"
+using Jinaga;
+using Jinaga.UnitTest;
+using Jinaga.Graphviz;
+
+var j = JinagaClient.Create();
+
+#!markdown
+
+# SQL Generation
+
+The Jinaga specification language describes a walk through a graph of facts.
+To execute this walk, Jinaga needs to generate SQL queries.
+We'll examine some incrementally more complicated queries to see how Jinaga generates SQL.
+
+## Specifications
+
+To understand how Jinaga generates SQL, we need to understand Jinaga specifications.
+Let's start with a model of a school offering courses.
+
+#!csharp
+
+[FactType("School")]
+public record School(string name) {}
+
+[FactType("Course")]
+public record Course(School school, string identifier) {}
+
+Renderer.RenderTypes(typeof(School), typeof(Course))
+
+#!markdown
+
+Suppose that the model contained the following facts.
+
+#!csharp
+
+var lps = await j.Fact(new School("LPS Frisco"));
+var algebra = await j.Fact(new Course(lps, "MATH 101"));
+var geometry = await j.Fact(new Course(lps, "MATH 102"));
+var trigonometry = await j.Fact(new Course(lps, "MATH 201"));
+var calculus = await j.Fact(new Course(lps, "MATH 301"));
+
+Renderer.RenderFacts(algebra, geometry, trigonometry, calculus)
+
+#!markdown
+
+Write a query to return the catalog of courses offered by the school.
+
+#!csharp
+
+var coursesInSchool = Given<School>.Match((school, facts) =>
+  from course in facts.OfType<Course>()
+  where course.school == school
+  select course
+);
+
+var catalog = await j.Query(lps, coursesInSchool);
+catalog
+
+#!markdown
+
+This query can be expressed using the Jinaga specification language.
+
+#!csharp
+
+coursesInSchool.ToDescriptiveString()
+
+#!markdown
+
+Within the Jinaga runtime, this specification is represented as a data structure.
+A specification has three parts:
+- Given
+- Matches
+- Projection
+
+The `given` is a collection of labels that are placeholders for known facts.
+In this particular specification, the given is the label `school` of type `School`.
+
+```
+(school: School)
+```
+
+The `matches` collection contains a set of labels for unknown facts, and their corresponding conditions.
+This specification has a single match, which has the label `course` of type `Course`.
+The condition is that the course `school` is the same as the given `school`.
+
+```
+course: Course [
+  course->school: School = school
+]
+```
+
+The collection of unknowns declared in the matches form a tuple.
+That is to say that when the specification is run, the result is the set of all tuples that simultaneously satisfy the conditions.
+In this case, there is only one unknown.
+Each tuple therefore contains a single fact.
+
+```
+[
+  { course: algebra },
+  { course: geometry },
+  { course: trigonometry },
+  { course: calculus }
+]
+```
+
+The `projection` is a function that takes a tuple and returns a value.
+In this case, the projection is a function that returns the `course` fact.
+
+```
+=> course
+```
+
+The result is therefore a set of facts.
+
+```
+[
+  algebra,
+  geometry,
+  trigonometry,
+  calculus
+]
+```
+
+#!markdown
+
+### Feed
+
+Jinaga runs two different kinds of SQL queries to satisfy a specification.
+The first is a feed query.
+A feed query returns the tuples that satisfy the specification.
+It does not run the projection function.
+
+To run the feed query, Jinaga first builds a Query Description.
+The Query Description has five parts:
+- Inputs
+- Parameters
+- Outputs
+- Edges
+- Not exists conditions
+
+The `inputs` are the given facts.
+They represent the `given` labels in the specification, but also know specific fact instances.
+In the example above, the input is the `school` fact "LPS Frisco".
+
+For each input, Jinaga allocates a join to the fact table.
+It doesn't turn these into SQL immediately.
+Instead, it simply reserves an index.
+
+It also allocates two parameters.
+The first is for the fact type, and the second is for the fact hash.
+It stores the parameters in a parallel collection called `parameters`, and keeps the indices in the `inputs` collection.
+
+For the example query, the resulting `inputs` and `parameters` arrays are as follows:
+
+```
+inputs: [
+  {
+    factIndex: 1,
+    factTypeParameter: 1,
+    factHashParameter: 2
+  }
+]
+
+parameters: [
+  1001,
+  "XYZ123"
+]
+```
+
+Next Jinaga builds the `edges` collection.
+An edge description represents a relationship between two labels.
+In the example above, there is a single edge.
+It connects the unknown `course` to the given `school`.
+
+To build the edges, Jinaga walks the join conditions within the matches.
+For each step, it allocates a join to both the fact table and the edge table.
+In the above example, it allocates fact index 2 to the `course` label and edge index 1 to the step from course to school.
+
+It also allocates one parameter for each edge join.
+That parameter is for the role.
+
+For the example query, the resulting `edges` and `parameters` arrays are as follows:
+
+```
+edges: [
+  {
+    edgeIndex: 1,
+    predecessorIndex: 1,
+    successorIndex: 2,
+    roleParameter: 3
+  }
+]
+
+parameters: [
+  1001,
+  "XYZ123",
+  2001
+]
+```
+
+The `outputs` are the unknowns.
+For each of these, Jinaga records the index of the fact table join.
+
+For the example query, the resulting `outputs` array is as follows:
+
+```
+outputs: [
+  {
+    factIndex: 2
+  }
+]
+```
+
+We'll examine the `not exists` conditions later.
+They do not apply to this example.
+
+#!markdown
+
+### Feed SQL
+
+Now that Jinaga has built the Query Description, it can turn it into SQL.
+The `SELECT` clause is based on the `outputs` collection.
+For each output, Jinaga adds a column for the fact hash.
+It also selects a sorted array of fact IDs as the bookmark.
+
+```
+SELECT
+  f2.hash as hash2,
+  sort(array[f2.fact_id], 'desc') as bookmark
+```
+
+Then it generates the `FROM` clause using the first fact index.
+
+```
+FROM
+  fact f1
+```
+
+Then it generates the `WHERE` clause.
+To do so, it iterates through the `edges` collection.
+It makes sure that at least one of the fact indexes -- the predecessor or successor -- has already been written.
+Then it writes out the edge join and the remaining fact join.
+Here it uses the edge role parameter.
+
+```
+JOIN edge e1
+  ON e1.predecessor_fact_id = f1.fact_id
+  AND e1.role_id = $3
+JOIN fact f2
+  ON f2.fact_id = e1.successor_fact_id
+```
+
+Next it generates the `WHERE` clause for the `inputs`.
+It uses the fact type and fact hash parameters.
+It includes the bookmark.
+
+```
+WHERE f1.fact_type_id = $1 AND f1.hash = $2
+  AND sort(array[f2.fact_id], 'desc') > $4
+```
+
+Finally, it sorts and pages the results.
+
+```
+ORDER BY bookmark ASC LIMIT $5
+```
+
+The resulting SQL is as follows:
+
+```
+SELECT
+  f2.hash as hash2,
+  sort(array[f2.fact_id], 'desc') as bookmark
+FROM
+  fact f1
+JOIN edge e1
+  ON e1.predecessor_fact_id = f1.fact_id
+  AND e1.role_id = $3
+JOIN fact f2
+  ON f2.fact_id = e1.successor_fact_id
+WHERE f1.fact_type_id = $1 AND f1.hash = $2
+  AND sort(array[f2.fact_id], 'desc') > $4
+ORDER BY bookmark ASC LIMIT $5
+```
