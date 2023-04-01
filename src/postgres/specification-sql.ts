@@ -40,7 +40,6 @@ interface EdgeDescription {
 }
 interface NotExistsConditionDescription {
     edges: EdgeDescription[];
-    notExistsConditions: NotExistsConditionDescription[];
 }
 class QueryDescription {
     constructor(
@@ -328,13 +327,9 @@ class DescriptionBuilder {
         const edges = condition.edges.map(edge =>
             this.buildEdgeDescription(feed, edge, addParameter)
         );
-        const notExistsConditions = condition.notExistsConditions.map(condition =>
-            this.buildNotExistsConditionDescription(feed, condition, addParameter)
-        );
 
         return {
-            edges,
-            notExistsConditions
+            edges
         }
     }
 }
