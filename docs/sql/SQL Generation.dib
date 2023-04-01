@@ -148,7 +148,8 @@ The Query Description has five parts:
 - Not exists conditions
 
 The `inputs` are the given facts.
-They represent the `given` labels in the specification, but also know specific fact instances.
+They represent the `given` labels in the specification.
+They also record a specific fact instance for each of those labels.
 In the example above, the input is the `school` fact "LPS Frisco".
 
 For each input, Jinaga allocates a join to the fact table.
@@ -159,7 +160,9 @@ It also allocates two parameters.
 The first is for the fact type, and the second is for the fact hash.
 It stores the parameters in a parallel collection called `parameters`, and keeps the indices in the `inputs` collection.
 
-For the example query, the resulting `inputs` and `parameters` arrays are as follows:
+For the example query, the resulting `inputs` and `parameters` arrays are as follows.
+The number 1001 would be the ID of the fact type `School`.
+The string "XYZ123" would be the hash of the "LPS Frisco" fact instance.
 
 ```
 inputs: [
@@ -188,7 +191,8 @@ In the above example, it allocates fact index 2 to the `course` label and edge i
 It also allocates one parameter for each edge join.
 That parameter is for the role.
 
-For the example query, the resulting `edges` and `parameters` arrays are as follows:
+For the example query, the resulting `edges` and `parameters` arrays are as follows.
+The number 2001 would be the ID of the fact type `Course`.
 
 ```
 edges: [
@@ -210,7 +214,8 @@ parameters: [
 The `outputs` are the unknowns.
 For each of these, Jinaga records the index of the fact table join.
 
-For the example query, the resulting `outputs` array is as follows:
+For the example query, the resulting `outputs` array is as follows.
+The fact index 2 was allocated to the `course` label.
 
 ```
 outputs: [
@@ -230,9 +235,12 @@ They do not apply to this example.
 Now that Jinaga has built the Query Description, it can turn it into SQL.
 The `SELECT` clause is based on the `outputs` collection.
 For each output, Jinaga adds a column for the fact hash.
-It also selects a sorted array of fact IDs as the bookmark.
 
-```
+It also selects a sorted array of fact IDs as the bookmark.
+The bookmark is a decreasing list of the fact IDs in the tuple.
+The bookmark will also appear at the end of the generated SQL for paging and sorting.
+
+```sql
 SELECT
   f2.hash as hash2,
   sort(array[f2.fact_id], 'desc') as bookmark
@@ -240,9 +248,8 @@ SELECT
 
 Then it generates the `FROM` clause using the first fact index.
 
-```
-FROM
-  fact f1
+```sql
+FROM fact f1
 ```
 
 Then it generates the `WHERE` clause.
@@ -251,7 +258,7 @@ It makes sure that at least one of the fact indexes -- the predecessor or succes
 Then it writes out the edge join and the remaining fact join.
 Here it uses the edge role parameter.
 
-```
+```sql
 JOIN edge e1
   ON e1.predecessor_fact_id = f1.fact_id
   AND e1.role_id = $3
@@ -261,27 +268,26 @@ JOIN fact f2
 
 Next it generates the `WHERE` clause for the `inputs`.
 It uses the fact type and fact hash parameters.
-It includes the bookmark.
+It includes the bookmark in the where clause to continue reading the feed from the point that the previous page ended.
 
-```
+```sql
 WHERE f1.fact_type_id = $1 AND f1.hash = $2
   AND sort(array[f2.fact_id], 'desc') > $4
 ```
 
-Finally, it sorts and pages the results.
+Finally, it sorts and pages the results using the bookmark.
 
-```
+```sql
 ORDER BY bookmark ASC LIMIT $5
 ```
 
 The resulting SQL is as follows:
 
-```
+```sql
 SELECT
   f2.hash as hash2,
   sort(array[f2.fact_id], 'desc') as bookmark
-FROM
-  fact f1
+FROM fact f1
 JOIN edge e1
   ON e1.predecessor_fact_id = f1.fact_id
   AND e1.role_id = $3
@@ -290,4 +296,84 @@ JOIN fact f2
 WHERE f1.fact_type_id = $1 AND f1.hash = $2
   AND sort(array[f2.fact_id], 'desc') > $4
 ORDER BY bookmark ASC LIMIT $5
+```
+
+#!markdown
+
+### Result SQL
+
+The Feed SQL query is intended to fetch tuples a page at a time.
+It is executed on the server.
+The Result SQL query, on the other hand, is intended to fetch the results of the projection function.
+It is executed on the client.
+The one exception is the `/read` endpoint, which runs the projection on the server for human consumption.
+
+The Result SQL query is more complex than the Feed SQL query.
+It can contain nested existential queries to any depth.
+This simple example does not contain any existential queries, so the differences are less significant.
+
+The `inputs` and `outputs` collections differ from the Feed SQL generator in that they also contain the labels.
+For the example query, the `inputs` and `outputs` collections are as follows.
+
+```
+inputs: [
+  {
+    label: "school",
+    factIndex: 1,
+    factTypeParameter: 1,
+    factHashParameter: 2
+  }
+]
+
+outputs: [
+  {
+    label: "course",
+    factIndex: 2
+  }
+]
+```
+
+This extra information helps the result composer to execute the projection function.
+The composer will need the field values of the facts, which are in the `data` column.
+It will also need the fact IDs to link child projections to their parents.
+It therefore adds those columns to the `SELECT` clause.
+
+```sql
+SELECT
+  f2.hash as hash2, f2.fact_id as id2, f2.data as data2
+```
+
+Then it generates the `FROM`, `JOIN`, and `WHERE` clauses as before.
+The Result SQL, however, does not include the bookmark in the `WHERE` clause.
+
+```sql
+FROM fact f1
+JOIN edge e1
+  ON e1.predecessor_fact_id = f1.fact_id
+  AND e1.role_id = $3
+JOIN fact f2
+  ON f2.fact_id = e1.successor_fact_id
+WHERE f1.fact_type_id = $1 AND f1.hash = $2
+```
+
+The Result SQL is not sorted by bookmark.
+Instead, it is sorted by the fact ID.
+
+```sql
+ORDER BY f2.fact_id ASC
+```
+
+The resulting SQL is as follows:
+
+```sql
+SELECT
+  f2.hash as hash2, f2.fact_id as id2, f2.data as data2
+FROM fact f1
+JOIN edge e1
+  ON e1.predecessor_fact_id = f1.fact_id
+  AND e1.role_id = $3
+JOIN fact f2
+  ON f2.fact_id = e1.successor_fact_id
+WHERE f1.fact_type_id = $1 AND f1.hash = $2
+ORDER BY f2.fact_id ASC
 ```
