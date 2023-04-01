@@ -25,8 +25,6 @@ interface SpecificationSqlQuery {
 
 interface InputDescription {
     factIndex: number;
-    factTypeId: number;
-    factHash: string;
     factTypeParameter: number;
     factHashParameter: number;
 }
@@ -284,9 +282,7 @@ class DescriptionBuilder {
         const factHashParameter = addParameter(input.factHash);
         return {
             factIndex: input.factIndex,
-            factTypeId,
             factTypeParameter,
-            factHash: input.factHash,
             factHashParameter
         };
     }
