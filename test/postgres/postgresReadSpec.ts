@@ -184,6 +184,57 @@ describe("Postgres read", () => {
         ]);
     });
 
+    it("should read nested existential conditions", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                project: Project [
+                    project->company: Company = company
+                    !E {
+                        deleted: Project.Deleted [
+                            deleted->project: Project = project
+                            !E {
+                                restored: Project.Restored [
+                                    restored->deleted: Project.Deleted = deleted
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            } => project
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `AND NOT EXISTS (` +
+                `SELECT 1 ` +
+                `FROM public.edge e2 ` +
+                `JOIN public.fact f3 ` +
+                    `ON f3.fact_id = e2.successor_fact_id ` +
+                `WHERE e2.predecessor_fact_id = f2.fact_id ` +
+                    `AND e2.role_id = $4 ` +
+                `AND NOT EXISTS (` +
+                    `SELECT 1 ` +
+                    `FROM public.edge e3 ` +
+                    `JOIN public.fact f4 ` +
+                        `ON f4.fact_id = e3.successor_fact_id ` +
+                    `WHERE e3.predecessor_fact_id = f3.fact_id ` +
+                        `AND e3.role_id = $5` +
+                `)` +
+            `) ` +
+            `ORDER BY f2.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual
+    });
+
     it("should read complex specifications", () => {
         const { composer, factTypes, roleMap } = sqlFor(`
             (company: Company, user: Jinaga.User) {
