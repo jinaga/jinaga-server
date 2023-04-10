@@ -25,8 +25,6 @@ interface SpecificationSqlQuery {
 
 interface InputDescription {
     factIndex: number;
-    factTypeId: number;
-    factHash: string;
     factTypeParameter: number;
     factHashParameter: number;
 }
@@ -42,7 +40,6 @@ interface EdgeDescription {
 }
 interface NotExistsConditionDescription {
     edges: EdgeDescription[];
-    notExistsConditions: NotExistsConditionDescription[];
 }
 class QueryDescription {
     constructor(
@@ -284,9 +281,7 @@ class DescriptionBuilder {
         const factHashParameter = addParameter(input.factHash);
         return {
             factIndex: input.factIndex,
-            factTypeId,
             factTypeParameter,
-            factHash: input.factHash,
             factHashParameter
         };
     }
@@ -332,13 +327,9 @@ class DescriptionBuilder {
         const edges = condition.edges.map(edge =>
             this.buildEdgeDescription(feed, edge, addParameter)
         );
-        const notExistsConditions = condition.notExistsConditions.map(condition =>
-            this.buildNotExistsConditionDescription(feed, condition, addParameter)
-        );
 
         return {
-            edges,
-            notExistsConditions
+            edges
         }
     }
 }
