@@ -16,6 +16,7 @@ import {
     getAllRolesFromFeed,
     Join,
     PredecessorCollection,
+    ProjectedResult,
     PropertyCondition,
     Query,
     Specification,
@@ -51,7 +52,7 @@ import {
     PublicKeyMap,
     RoleMap
 } from "./maps";
-import { ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
+import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
 import { sqlFromSteps } from "./sql";
 
@@ -232,7 +233,7 @@ export class PostgresStore implements Storage {
         }
     }
 
-    async read(start: FactReference[], specification: Specification): Promise<any[]> {
+    async read(start: FactReference[], specification: Specification): Promise<ProjectedResult[]> {
         const factTypes = await this.loadFactTypesFromSpecification(specification);
         const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
 
@@ -488,7 +489,21 @@ export class PostgresStore implements Storage {
 
 async function executeQueryTree(sqlQueryTree: SqlQueryTree, connection: PoolClient): Promise<ResultSetTree> {
     const sqlQuery = sqlQueryTree.sqlQuery;
-    const { rows } = await connection.query(sqlQuery.sql, sqlQuery.parameters);
+    const { rows: dataRows } = await connection.query(sqlQuery.sql, sqlQuery.parameters);
+    const rows: ResultSetRow[] = dataRows.map(dataRow => {
+        const row = sqlQuery.labels.reduce((acc, label) => {
+            const fact: ResultSetFact = {
+                hash: dataRow[`hash${label.index}`],
+                factId: dataRow[`id${label.index}`],
+                data: dataRow[`data${label.index}`]
+            };
+            return {
+                ...acc,
+                [label.index]: fact
+            };
+        }, {} as ResultSetRow);
+        return row;
+    });
     const resultSets: ResultSetTree = {
         resultSet: rows,
         childResultSets: []
