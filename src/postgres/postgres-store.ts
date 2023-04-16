@@ -478,11 +478,11 @@ export class PostgresStore implements Storage {
     }
 
     getMruDate(specificationHash: string): Promise<Date | null> {
-        throw new Error("Method not implemented.");
+        return Promise.resolve(null);
     }
     
     setMruDate(specificationHash: string, mruDate: Date): Promise<void> {
-        throw new Error("Method not implemented.");
+        return Promise.resolve();
     }
 }
 

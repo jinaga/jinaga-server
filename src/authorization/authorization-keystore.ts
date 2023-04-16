@@ -43,8 +43,9 @@ export class AuthorizationKeystore implements Authorization {
         return this.store.query(start, query);
     }
 
-    read(userIdentity: UserIdentity, start: FactReference[], specification: Specification) {
-        return this.store.read(start, specification);
+    async read(userIdentity: UserIdentity, start: FactReference[], specification: Specification) {
+        const projectedResult = await this.store.read(start, specification);
+        return projectedResult.map(p => p.result);
     }
 
     feed(userIdentity: UserIdentity, feed: Feed, bookmark: string): Promise<FactFeed> {
