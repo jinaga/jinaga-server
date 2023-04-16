@@ -6,13 +6,13 @@ export class AuthenticationDevice implements Authentication {
     private authorizationEngine: AuthorizationEngine | null;
 
     constructor(
-        inner: Storage,
+        private store: Storage,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null,
         private localDeviceIdentity: UserIdentity
     ) {
         this.authorizationEngine = authorizationRules &&
-            new AuthorizationEngine(authorizationRules, inner);
+            new AuthorizationEngine(authorizationRules, store);
     }
 
     async login(): Promise<LoginResponse> {
@@ -20,7 +20,15 @@ export class AuthenticationDevice implements Authentication {
     }
 
     async local(): Promise<FactRecord> {
-        return await this.keystore.getOrCreateDeviceFact(this.localDeviceIdentity);
+        const deviceFact = await this.keystore.getOrCreateDeviceFact(this.localDeviceIdentity);
+        const envelopes = [
+            <FactEnvelope>{
+                fact: deviceFact,
+                signatures: []
+            }
+        ];
+        await this.store.save(envelopes);
+        return deviceFact;
     }
 
     async authorize(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
