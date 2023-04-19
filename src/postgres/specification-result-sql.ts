@@ -49,6 +49,7 @@ interface SpecificationSqlQuery {
 };
 interface InputDescription {
     label: string;
+    type: string;
     factIndex: number;
     factTypeParameter: number;
     factHashParameter: number;
@@ -106,6 +107,7 @@ class QueryDescription {
         ]
         const input: InputDescription = {
             label: label.name,
+            type: label.type,
             factIndex,
             factTypeParameter,
             factHashParameter
@@ -224,8 +226,9 @@ class QueryDescription {
     }
 
     generateResultSqlQuery(schema: string): SpecificationSqlQuery {
-        const columns = this.outputs
-            .map(output => `f${output.factIndex}.hash as hash${output.factIndex}, f${output.factIndex}.fact_id as id${output.factIndex}, f${output.factIndex}.data as data${output.factIndex}`)
+        const allLabels = [ ...this.inputs, ...this.outputs ];
+        const columns = allLabels
+            .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
             .join(", ");
         const firstEdge = this.edges[0];
         const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
@@ -246,10 +249,10 @@ class QueryDescription {
         return {
             sql,
             parameters: this.parameters,
-            labels: this.outputs.map(output => ({
-                name: output.label,
-                type: output.type,
-                index: output.factIndex
+            labels: allLabels.map(label => ({
+                name: label.label,
+                type: label.type,
+                index: label.factIndex
             })),
             bookmark: "[]"
         };
