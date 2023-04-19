@@ -251,7 +251,14 @@ export class PostgresStore implements Storage {
         const resultSets = await this.connectionFactory.with(async (connection) => {
             return await executeQueryTree(sqlQueryTree, connection);
         });
-        return composer.compose(resultSets);
+
+        // Find the references for fact projections
+        const factReferences: FactReference[] = composer.findFactReferences(resultSets);
+
+        // Load the references into a fact tree
+        const factRecords = await this.load(factReferences);
+
+        return composer.compose(resultSets, factRecords);
     }
 
     async feed(feed: Feed, bookmark: string): Promise<FactFeed> {
