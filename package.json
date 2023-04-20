@@ -1,6 +1,6 @@
 {
   "name": "jinaga-server",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "Application-agnostic back end for web applications",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
