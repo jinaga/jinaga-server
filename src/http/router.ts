@@ -12,6 +12,7 @@ import {
     LoadMessage,
     LoadResponse,
     ProfileMessage,
+    ProjectedResult,
     QueryMessage,
     QueryResponse,
     SaveMessage,
@@ -274,7 +275,7 @@ export class HttpRouter {
 
         const userIdentity = serializeUserIdentity(user);
         const results = await this.authorization.read(userIdentity, start, specification);
-        return results;
+        return extractResults(results);
     }
 
     private async write(user: RequestUser, input: string): Promise<void> {
@@ -382,4 +383,20 @@ export class HttpRouter {
 function urlSafeHash(feed: Feed): string {
     const base64 = computeObjectHash(feed);
     return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function extractResults(obj: any): any {
+    if (Array.isArray(obj)) {
+        const projectedResults: ProjectedResult[] = obj;
+        return projectedResults.map(r => extractResults(r.result));
+    }
+    else if (typeof obj === "object") {
+        return Object.keys(obj).reduce((acc, key) => ({
+            ...acc,
+            [key]: extractResults(obj[key])
+        }), {});
+    }
+    else {
+        return obj;
+    }
 }

@@ -1,13 +1,18 @@
 import {
     ComponentProjection,
     FactProjection,
+    FactRecord,
     FactReference,
     FieldProjection,
     HashProjection,
+    hydrateFromTree,
     Label,
     Match,
     PathCondition,
+    PredecessorCollection,
+    ProjectedResult,
     Projection,
+    ReferencesByName,
     SingularProjection,
     Specification,
     SpecificationProjection
@@ -18,6 +23,7 @@ import { ensureGetFactTypeId, FactTypeMap, getFactTypeId, getRoleId, RoleMap } f
 interface SpecificationLabel {
     name: string;
     index: number;
+    type: string;
 }
 interface FactDescription {
     type: string;
@@ -43,6 +49,7 @@ interface SpecificationSqlQuery {
 };
 interface InputDescription {
     label: string;
+    type: string;
     factIndex: number;
     factTypeParameter: number;
     factHashParameter: number;
@@ -100,6 +107,7 @@ class QueryDescription {
         ]
         const input: InputDescription = {
             label: label.name,
+            type: label.type,
             factIndex,
             factTypeParameter,
             factHashParameter
@@ -218,8 +226,9 @@ class QueryDescription {
     }
 
     generateResultSqlQuery(schema: string): SpecificationSqlQuery {
-        const columns = this.outputs
-            .map(output => `f${output.factIndex}.hash as hash${output.factIndex}, f${output.factIndex}.fact_id as id${output.factIndex}, f${output.factIndex}.data as data${output.factIndex}`)
+        const allLabels = [ ...this.inputs, ...this.outputs ];
+        const columns = allLabels
+            .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
             .join(", ");
         const firstEdge = this.edges[0];
         const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
@@ -240,10 +249,10 @@ class QueryDescription {
         return {
             sql,
             parameters: this.parameters,
-            labels: this.outputs.map(output => ({
-                name: output.label,
-                type: output.type,
-                index: output.factIndex
+            labels: allLabels.map(label => ({
+                name: label.label,
+                type: label.type,
+                index: label.factIndex
             })),
             bookmark: "[]"
         };
@@ -420,6 +429,7 @@ interface ResultDescription {
     queryDescription: QueryDescription;
     resultProjection: Projection;
     childResultDescriptions: NamedResultDescription[];
+    givenTuple: ReferencesByName;
 }
 
 interface NamedResultDescription extends ResultDescription {
@@ -428,12 +438,13 @@ interface NamedResultDescription extends ResultDescription {
 
 interface IdentifiedResults {
     factIds: number[];
+    tuple: ReferencesByName;
     result: any;
 }
 
 interface ChildResults {
     parentFactIds: number[];
-    results: any[];
+    results: ProjectedResult[];
 }
 
 export interface SqlQueryTree {
@@ -445,8 +456,23 @@ interface NamedSqlQueryTree extends SqlQueryTree {
     name: string;
 }
 
+export interface ResultSetData {
+    fields: { [field: string]: any };
+    predecessors: PredecessorCollection;
+}
+
+export interface ResultSetFact {
+    hash: string;
+    factId: number;
+    data: ResultSetData;
+}
+
+export interface ResultSetRow {
+    [factIndex: number]: ResultSetFact;
+}
+
 export interface ResultSetTree {
-    resultSet: any[];
+    resultSet: ResultSetRow[];
     childResultSets: NamedResultSetTree[];
 }
 
@@ -459,6 +485,7 @@ export class ResultComposer {
         private readonly sqlQuery: SpecificationSqlQuery,
         private readonly resultProjection: Projection,
         private readonly parentFactIdLength: number,
+        private readonly givenTuple: ReferencesByName,
         private readonly childResultComposers: NamedResultComposer[]
     ) { }
 
@@ -476,10 +503,56 @@ export class ResultComposer {
         };
     }
 
-    public compose(
+    public findFactReferences(
         resultSets: ResultSetTree
-    ): any[] {
-        const childResults = this.composeInternal(resultSets);
+    ): FactReference[] {
+        let factReferences: FactReference[] = [];
+
+        // Add the fact references for selected facts.
+        const projection = this.resultProjection;
+        if (projection.type === 'fact') {
+            const projectionFactReferences = this.factReferencesForProjection(projection, resultSets);
+            factReferences = factReferences.concat(projectionFactReferences);
+        }
+
+        // Add the fact references for composites.
+        if (projection.type === 'composite') {
+            for (const component of projection.components) {
+                if (component.type === 'fact') {
+                    const projectionFactReferences = this.factReferencesForProjection(component, resultSets);
+                    factReferences = factReferences.concat(projectionFactReferences);
+                }
+            }
+        }
+
+        // Recursively add the fact references for child result sets.
+        for (const childResultSet of resultSets.childResultSets) {
+            const childResultComposer = this.childResultComposers.find(c =>
+                c.name === childResultSet.name);
+            if (childResultComposer) {
+                const childFactReferences = childResultComposer.resultComposer
+                    .findFactReferences(childResultSet);
+                factReferences = factReferences.concat(childFactReferences);
+            }
+        }
+
+        return factReferences;
+    }
+
+    private factReferencesForProjection(projection: FactProjection, resultSets: ResultSetTree) {
+        const label = this.getLabel(projection.label);
+        const factReferences = resultSets.resultSet.map(row => ({
+            type: label.type,
+            hash: row[label.index].hash
+        }));
+        return factReferences;
+    }
+
+    public compose(
+        resultSets: ResultSetTree,
+        factRecords: FactRecord[]
+    ): ProjectedResult[] {
+        const childResults = this.composeInternal(resultSets, factRecords);
         if (childResults.length === 0) {
             return [];
         }
@@ -489,7 +562,8 @@ export class ResultComposer {
     }
 
     private composeInternal(
-        resultSets: ResultSetTree
+        resultSets: ResultSetTree,
+        factRecords: FactRecord[]
     ): ChildResults[] {
         const rows = resultSets.resultSet;
         if (rows.length === 0) {
@@ -499,7 +573,8 @@ export class ResultComposer {
         // Project all rows and their identifiers
         const identifiedResults: IdentifiedResults[] = rows.map(row => ({
             factIds: this.identifierOf(row),
-            result: this.projectionOf(row)
+            tuple: this.tupleOf(row),
+            result: this.projectionOf(row, factRecords)
         }));
 
         // Compose child results
@@ -510,7 +585,7 @@ export class ResultComposer {
                 const availableNames = resultSets.childResultSets.map(childResultSet => childResultSet.name);
                 throw new Error(`Child result set ${childResultComposer.name} not found in (${availableNames.join(", ")})`);
             }
-            const composedResults = childResultComposer.resultComposer.composeInternal(childResultSet);
+            const composedResults = childResultComposer.resultComposer.composeInternal(childResultSet, factRecords);
 
             // Add the child results
             let index = 0;
@@ -530,11 +605,17 @@ export class ResultComposer {
         // Group the results by their parent identifiers
         const childResults: ChildResults[] = [];
         let parentFactIds: number[] = identifiedResults[0].factIds.slice(0, this.parentFactIdLength);
-        let results: any[] = [ identifiedResults[0].result ];
+        let results: ProjectedResult[] = [{
+            tuple: identifiedResults[0].tuple,
+            result: identifiedResults[0].result
+        }];
         for (const identifiedResult of identifiedResults.slice(1)) {
             const nextParentFactIds = identifiedResult.factIds.slice(0, this.parentFactIdLength);
             if (idsEqual(nextParentFactIds, parentFactIds)) {
-                results.push(identifiedResult.result);
+                results.push({
+                    tuple: identifiedResult.tuple,
+                    result: identifiedResult.result
+                });
             }
             else {
                 childResults.push({
@@ -542,7 +623,10 @@ export class ResultComposer {
                     results
                 });
                 parentFactIds = nextParentFactIds;
-                results = [ identifiedResult.result ];
+                results = [{
+                    tuple: identifiedResult.tuple,
+                    result: identifiedResult.result
+                }];
             }
         }
         childResults.push({
@@ -552,11 +636,22 @@ export class ResultComposer {
         return childResults;
     }
 
-    private identifierOf(row: any): number[] {
-        return this.sqlQuery.labels.map(label => row[`id${label.index}`]);
+    private identifierOf(row: ResultSetRow): number[] {
+        return this.sqlQuery.labels.map(label => row[label.index].factId);
     }
 
-    private projectionOf(row: any): any {
+    private tupleOf(row: ResultSetRow): ReferencesByName {
+        const tuple = this.sqlQuery.labels.reduce((acc, label) => ({
+            ...acc,
+            [label.name]: {
+                type: label.type,
+                hash: row[label.index].hash,
+            }
+        }), this.givenTuple);
+        return tuple;
+    }
+
+    private projectionOf(row: ResultSetRow, factRecords: FactRecord[]): any {
         if (this.resultProjection.type === "field") {
             return this.fieldValue(this.resultProjection, row);
         }
@@ -568,13 +663,13 @@ export class ResultComposer {
                     .slice(this.parentFactIdLength)
                     .reduce((acc, label) => ({
                         ...acc,
-                        [label.name]: row[`data${label.index}`].fields
+                        [label.name]: row[label.index].data.fields
                     }), {})
             }
             else {
                 return this.resultProjection.components.reduce((acc, component) => ({
                     ...acc,
-                    [component.name]: this.elementValue(component, row)
+                    [component.name]: this.elementValue(component, row, factRecords)
                 }), {});
             }
         }
@@ -582,7 +677,7 @@ export class ResultComposer {
             return this.hashValue(this.resultProjection, row);
         }
         else if (this.resultProjection.type === "fact") {
-            return this.factValue(this.resultProjection, row);
+            return this.factValue(this.resultProjection, row, factRecords);
         }
         else {
             const _exhaustiveCheck: never = this.resultProjection;
@@ -590,18 +685,23 @@ export class ResultComposer {
         }
     }
 
-    private elementValue(projection: ComponentProjection, row: any): any {
+    private elementValue(projection: ComponentProjection, row: ResultSetRow, factRecords: FactRecord[]): any {
         if (projection.type === "field") {
             const label = this.getLabel(projection.label);
-            return row[`data${label.index}`].fields[projection.field];
+            return row[label.index].data.fields[projection.field];
         }
         else if (projection.type === "hash") {
             const label = this.getLabel(projection.label);
-            return row[`hash${label.index}`];
+            return row[label.index].hash;
         }
         else if (projection.type === "fact") {
             const label = this.getLabel(projection.label);
-            return row[`data${label.index}`].fields;
+            const factReference = {
+                type: label.type,
+                hash: row[label.index].hash,
+            };
+            const [fact] = hydrateFromTree([factReference], factRecords);
+            return fact;
         }
         else if (projection.type === "specification") {
             // This should have already been taken care of
@@ -613,19 +713,24 @@ export class ResultComposer {
         }
     }
 
-    private fieldValue(projection: FieldProjection, row: any): any {
+    private fieldValue(projection: FieldProjection, row: ResultSetRow): any {
         const label = this.getLabel(projection.label);
-        return row[`data${label.index}`].fields[projection.field];
+        return row[label.index].data.fields[projection.field];
     }
 
-    private hashValue(projection: HashProjection, row: any): any {
+    private hashValue(projection: HashProjection, row: ResultSetRow): any {
         const label = this.getLabel(projection.label);
-        return row[`hash${label.index}`];
+        return row[label.index].hash;
     }
 
-    private factValue(projection: FactProjection, row: any): any {
+    private factValue(projection: FactProjection, row: ResultSetRow, factRecords: FactRecord[]): any {
         const label = this.getLabel(projection.label);
-        return row[`data${label.index}`].fields;
+        const factReference: FactReference = {
+            type: label.type,
+            hash: row[label.index].hash
+        };
+        const [fact] = hydrateFromTree([factReference], factRecords);
+        return fact;
     }
 
     private getLabel(name: string) {
@@ -669,6 +774,10 @@ class ResultDescriptionBuilder {
     }
 
     private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
+        const givenTuple = given.reduce((acc, label, index) => ({
+            ...acc,
+            [label.name]: start[index]
+        }), {} as ReferencesByName);
         ({ queryDescription, knownFacts } = this.addEdges(queryDescription, given, start, knownFacts, path, matches));
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
@@ -678,7 +787,8 @@ class ResultDescriptionBuilder {
                     type: "composite",
                     components: []
                 },
-                childResultDescriptions: []
+                childResultDescriptions: [],
+                givenTuple
             }
         }
         const childResultDescriptions: NamedResultDescription[] = [];
@@ -700,14 +810,16 @@ class ResultDescriptionBuilder {
                     type: "composite",
                     components: singularProjections
                 },
-                childResultDescriptions
+                childResultDescriptions,
+                givenTuple
             };
         }
         else {
             return {
                 queryDescription,
                 resultProjection: projection,
-                childResultDescriptions: []
+                childResultDescriptions: [],
+                givenTuple
             }
         }
     }
@@ -887,5 +999,5 @@ function createResultComposer(description: ResultDescription, parentFactIdLength
             name: child.name,
             resultComposer: createResultComposer(child, description.queryDescription.outputLength(), schema)
         }));
-    return new ResultComposer(sqlQuery, resultProjection, parentFactIdLength, childResultComposers);
+    return new ResultComposer(sqlQuery, resultProjection, parentFactIdLength, description.givenTuple, childResultComposers);
 }
