@@ -987,7 +987,7 @@ export function resultSqlFromSpecification(start: FactReference[], specification
     if (!description.queryDescription.isSatisfiable()) {
         return null;
     }
-    return createResultComposer(description, 0, schema);
+    return createResultComposer(description, start.length, schema);
 }
 
 function createResultComposer(description: ResultDescription, parentFactIdLength: number, schema: string): ResultComposer {
