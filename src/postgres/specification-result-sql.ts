@@ -222,7 +222,7 @@ class QueryDescription {
     }
 
     outputLength(): number {
-        return this.outputs.length;
+        return this.inputs.length + this.outputs.length;
     }
 
     generateResultSqlQuery(schema: string): SpecificationSqlQuery {
