@@ -1,4 +1,4 @@
-FROM node:alpine3.12
+FROM node:18.15-bullseye-slim
 
 WORKDIR /root
 
