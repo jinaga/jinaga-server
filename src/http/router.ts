@@ -305,11 +305,12 @@ export class HttpRouter {
         const start = this.selectStart(specification, declaration);
 
         const feedDefinitionsByHash = buildFeeds(specification).map(feed => {
+            const indexedStart = feed.inputs.map(input => ({
+                factReference: start[input.inputIndex],
+                index: input.inputIndex
+            }));
             const feedDefinition: FeedDefinition = {
-                start: start.map((factReference, index) => ({
-                    factReference,
-                    index
-                })),
+                start: indexedStart,
                 feed
             };
             return {
@@ -341,14 +342,10 @@ export class HttpRouter {
         const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.start
-            .sort((a, b) => a.index - b.index)
-            .map((s, i) => {
-                if (s.index !== i) {
-                    throw new Error("Start facts must not have gaps.");
-                }
-                return s.factReference;
-            });
+        const start = feedDefinition.start.reduce((start, input) => {
+            start[input.index] = input.factReference;
+            return start;
+        }, [] as FactReference[]);
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
