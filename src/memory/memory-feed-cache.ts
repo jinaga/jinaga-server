@@ -1,15 +1,14 @@
-import { Feed } from "jinaga";
-import { FeedCache } from "../http/feed-cache";
+import { FeedCache, FeedDefinition } from "../http/feed-cache";
 
 export class MemoryFeedCache implements FeedCache {
-    private feeds: { [feedHash: string]: Feed } = {};
+    private feedDefinitions: { [feedHash: string]: FeedDefinition } = {};
 
-    storeFeed(feedHash: string, feed: Feed): Promise<void> {
-        this.feeds[feedHash] = feed;
+    storeFeed(feedHash: string, feedDefinition: FeedDefinition): Promise<void> {
+        this.feedDefinitions[feedHash] = feedDefinition;
         return Promise.resolve();
     }
 
-    getFeed(feedHash: string): Promise<Feed | undefined> {
-        return Promise.resolve(this.feeds[feedHash]);
+    getFeed(feedHash: string): Promise<FeedDefinition | undefined> {
+        return Promise.resolve(this.feedDefinitions[feedHash]);
     }
 }

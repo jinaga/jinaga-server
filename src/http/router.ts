@@ -1,14 +1,11 @@
 import { Handler, Router } from "express";
 import {
     Authorization,
-    buildFeeds,
-    computeObjectHash,
     Declaration,
     FactRecord,
     FactReference,
     Feed,
     Forbidden,
-    fromDescriptiveString,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
@@ -20,10 +17,13 @@ import {
     SpecificationParser,
     Trace,
     UserIdentity,
+    buildFeeds,
+    computeObjectHash,
+    fromDescriptiveString,
 } from "jinaga";
 import { FeedResponse, FeedsResponse } from "jinaga/dist/http/messages";
 
-import { FeedCache } from "./feed-cache";
+import { FeedCache, FeedDefinition } from "./feed-cache";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -304,17 +304,26 @@ export class HttpRouter {
         const specification = parser.parseSpecification();
         const start = this.selectStart(specification, declaration);
 
-        const feedDefinitions = buildFeeds(start, specification).map(feed => ({
-            hash: urlSafeHash(feed),
-            feed
-        }));
+        const feedDefinitionsByHash = buildFeeds(specification).map(feed => {
+            const feedDefinition: FeedDefinition = {
+                start: start.map((factReference, index) => ({
+                    factReference,
+                    index
+                })),
+                feed
+            };
+            return {
+                hash: urlSafeHash(feed),
+                feedDefinition
+            };
+        });
         // Store all feeds in the cache.
-        for (const feedDefinition of feedDefinitions) {
-            await this.feedCache.storeFeed(feedDefinition.hash, feedDefinition.feed);
+        for (const d of feedDefinitionsByHash) {
+            await this.feedCache.storeFeed(d.hash, d.feedDefinition);
         }
 
         return {
-            feeds: feedDefinitions.map(f => f.hash)
+            feeds: feedDefinitionsByHash.map(f => f.hash)
         }
     }
 
@@ -324,15 +333,23 @@ export class HttpRouter {
             return null;
         }
 
-        const feed = await this.feedCache.getFeed(feedHash);
-        if (!feed) {
+        const feedDefinition = await this.feedCache.getFeed(feedHash);
+        if (!feedDefinition) {
             return null;
         }
 
         const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const results = await this.authorization.feed(userIdentity, feed, bookmark);
+        const start = feedDefinition.start
+            .sort((a, b) => a.index - b.index)
+            .map((s, i) => {
+                if (s.index !== i) {
+                    throw new Error("Start facts must not have gaps.");
+                }
+                return s.factReference;
+            });
+        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
             self.findIndex(f => f.hash === value.hash && f.type === value.type) === index

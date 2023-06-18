@@ -228,7 +228,7 @@ class DescriptionBuilder {
         return true;
     }
 
-    buildDescription(feed: Feed): QueryDescription {
+    buildDescription(feed: Feed, start: FactReference[]): QueryDescription {
         const parameters: (string | number)[] = [];
         function addParameter(value: string | number) {
             parameters.push(value);
@@ -237,7 +237,7 @@ class DescriptionBuilder {
 
         // Allocate parameters for the inputs.
         const inputs: InputDescription[] = feed.inputs.map(input =>
-            this.buildInputDescription(feed, input, addParameter)
+            this.buildInputDescription(feed, input, start, addParameter)
         );
 
         // Allocate parameters for the edge roles.
@@ -266,7 +266,7 @@ class DescriptionBuilder {
         );
     }
 
-    private buildInputDescription(feed: Feed, input: FeedInputDescription, addParameter: (value: string | number) => number): InputDescription {
+    private buildInputDescription(feed: Feed, input: FeedInputDescription, start: FactReference[], addParameter: (value: string | number) => number): InputDescription {
         const fact = feed.facts.find(f => f.factIndex === input.factIndex);
         if (!fact) {
             throw new Error(`Fact not found: ${input.factIndex}`);
@@ -278,7 +278,7 @@ class DescriptionBuilder {
         }
 
         const factTypeParameter = addParameter(factTypeId);
-        const factHashParameter = addParameter(input.factHash);
+        const factHashParameter = addParameter(start[input.inputIndex].hash);
         return {
             factIndex: input.factIndex,
             factTypeParameter,
@@ -335,7 +335,7 @@ class DescriptionBuilder {
 }
 
 export function sqlFromSpecification(start: FactReference[], schema: string, bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
-    const feeds = buildFeeds(start, specification);
+    const feeds = buildFeeds(specification);
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
     const feedAndBookmark = feeds.map((feed, index) => ({
         feed,
@@ -344,19 +344,19 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
     const satisfiableFeedsAndBookmarks = feedAndBookmark.filter(fb =>
         descriptionBuilder.isSatisfiable(fb.feed, fb.feed.edges));
     const sqlQueries = satisfiableFeedsAndBookmarks.map(fb => {
-        const description = descriptionBuilder.buildDescription(fb.feed);
+        const description = descriptionBuilder.buildDescription(fb.feed, start);
         const sql = description.generateSqlQuery(schema, fb.bookmark, limit);
         return sql;
     });
     return sqlQueries;
 }
 
-export function sqlFromFeed(feed: Feed, schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
+export function sqlFromFeed(feed: Feed, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
     const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
     if (!descriptionBuilder.isSatisfiable(feed, feed.edges)) {
         return null;
     }
-    const description = descriptionBuilder.buildDescription(feed);
+    const description = descriptionBuilder.buildDescription(feed, start);
     const sql = description.generateSqlQuery(schema, bookmark, limit);
     return sql;
 }
