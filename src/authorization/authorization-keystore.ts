@@ -2,6 +2,8 @@ import {
     Authorization,
     AuthorizationEngine,
     AuthorizationRules,
+    DistributionEngine,
+    DistributionRules,
     FactEnvelope,
     FactFeed,
     FactRecord,
@@ -11,12 +13,11 @@ import {
     Query,
     Specification,
     Storage,
-    UserIdentity
+    UserIdentity,
+    buildFeeds
 } from "jinaga";
 
 import { Keystore } from "../keystore";
-import { DistributionEngine } from "jinaga/dist/distribution/distribution-engine";
-import { DistributionRules } from "jinaga/dist/distribution/distribution-rules";
 
 export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
@@ -50,8 +51,19 @@ export class AuthorizationKeystore implements Authorization {
         return this.store.query(start, query);
     }
 
-    read(userIdentity: UserIdentity | null, start: FactReference[], specification: Specification) {
-        return this.store.read(start, specification);
+    async read(userIdentity: UserIdentity | null, start: FactReference[], specification: Specification) {
+        if (this.distributionEngine) {
+            const userReference: FactReference | null = userIdentity
+                ? await this.keystore.getUserFact(userIdentity)
+                : null;
+            // Break the specification into feeds and check distribution.
+            const feeds = buildFeeds(specification);
+            const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
+            if (!canDistribute) {
+                throw new Forbidden("Unauthorized");
+            }
+        }
+        return await this.store.read(start, specification);
     }
 
     async feed(userIdentity: UserIdentity | null, feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
@@ -59,7 +71,7 @@ export class AuthorizationKeystore implements Authorization {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const canDistribute = await this.distributionEngine.canDistribute(feed, start, userReference);
+            const canDistribute = await this.distributionEngine.canDistributeToAll([feed], start, userReference);
             if (!canDistribute) {
                 throw new Forbidden("Unauthorized");
             }
@@ -89,6 +101,20 @@ export class AuthorizationKeystore implements Authorization {
         }
         else {
             return authorizedFacts;
+        }
+    }
+
+    async verifyDistribution(userIdentity: UserIdentity | null, feeds: Feed[], start: FactReference[]): Promise<void> {
+        if (!this.distributionEngine) {
+            return;
+        }
+
+        const userReference: FactReference | null = userIdentity
+            ? await this.keystore.getUserFact(userIdentity)
+            : null;
+        const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
+        if (!canDistribute) {
+            throw new Forbidden("Unauthorized");
         }
     }
 }

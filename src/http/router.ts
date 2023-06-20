@@ -322,7 +322,12 @@ export class HttpRouter {
             }
         }
 
-        const feedDefinitionsByHash = buildFeeds(specification).map(feed => {
+        // Verify that I can distribute all feeds to the user.
+        const feeds = buildFeeds(specification);
+        const userIdentity = serializeUserIdentity(user);
+        await this.authorization.verifyDistribution(userIdentity, feeds, start);
+
+        const feedDefinitionsByHash = feeds.map(feed => {
             const indexedStart = feed.inputs.map(input => ({
                 factReference: start[input.inputIndex],
                 index: input.inputIndex

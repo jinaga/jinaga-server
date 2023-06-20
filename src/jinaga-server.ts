@@ -4,6 +4,7 @@ import {
     Authorization,
     AuthorizationNoOp,
     AuthorizationRules,
+    DistributionRules,
     FactManager,
     Jinaga,
     MemoryStore,
@@ -27,7 +28,6 @@ import { Keystore } from "./keystore";
 import { MemoryFeedCache } from "./memory/memory-feed-cache";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
 import { PostgresStore } from "./postgres/postgres-store";
-import { DistributionRules } from "jinaga/dist/distribution/distribution-rules";
 
 
 export type JinagaServerConfig = {
