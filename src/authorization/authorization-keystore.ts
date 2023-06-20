@@ -7,6 +7,7 @@ import {
     FactRecord,
     FactReference,
     Feed,
+    Forbidden,
     Query,
     Specification,
     Storage,
@@ -14,17 +15,23 @@ import {
 } from "jinaga";
 
 import { Keystore } from "../keystore";
+import { DistributionEngine } from "jinaga/dist/distribution/distribution-engine";
+import { DistributionRules } from "jinaga/dist/distribution/distribution-rules";
 
 export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
+    private distributionEngine: DistributionEngine | null;
 
     constructor(
         private store: Storage,
         private keystore: Keystore,
-        authorizationRules: AuthorizationRules | null
+        authorizationRules: AuthorizationRules | null,
+        distributionRules: DistributionRules | null
     ) {
         this.authorizationEngine = authorizationRules &&
             new AuthorizationEngine(authorizationRules, store);
+        this.distributionEngine = distributionRules &&
+            new DistributionEngine(distributionRules, store);
     }
 
     async getOrCreateUserFact(userIdentity: UserIdentity) {
@@ -39,16 +46,25 @@ export class AuthorizationKeystore implements Authorization {
         return userFact;
     }
 
-    query(userIdentity: UserIdentity, start: FactReference, query: Query) {
+    query(userIdentity: UserIdentity | null, start: FactReference, query: Query) {
         return this.store.query(start, query);
     }
 
-    read(userIdentity: UserIdentity, start: FactReference[], specification: Specification) {
+    read(userIdentity: UserIdentity | null, start: FactReference[], specification: Specification) {
         return this.store.read(start, specification);
     }
 
-    feed(userIdentity: UserIdentity, feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
-        return this.store.feed(feed, start, bookmark);
+    async feed(userIdentity: UserIdentity | null, feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
+        if (this.distributionEngine) {
+            const userReference: FactReference | null = userIdentity
+                ? await this.keystore.getUserFact(userIdentity)
+                : null;
+            const canDistribute = await this.distributionEngine.canDistribute(feed, start, userReference);
+            if (!canDistribute) {
+                throw new Forbidden("Unauthorized");
+            }
+        }
+        return await this.store.feed(feed, start, bookmark);
     }
 
     load(userIdentity: UserIdentity, references: FactReference[]) {

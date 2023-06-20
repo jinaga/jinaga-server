@@ -167,7 +167,7 @@ function givenAuthorizationWithStorage(storage: MemoryStore) {
         .type('Like', j.for(likeUser))
         .type('Delete', j.for(deleteSender))
         ;
-    return new AuthorizationKeystore(storage, keystore, authorizationRules);
+    return new AuthorizationKeystore(storage, keystore, authorizationRules, null);
 }
 
 function givenOtherUser() {

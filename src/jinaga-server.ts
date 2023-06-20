@@ -27,6 +27,7 @@ import { Keystore } from "./keystore";
 import { MemoryFeedCache } from "./memory/memory-feed-cache";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
 import { PostgresStore } from "./postgres/postgres-store";
+import { DistributionRules } from "jinaga/dist/distribution/distribution-rules";
 
 
 export type JinagaServerConfig = {
@@ -35,7 +36,8 @@ export type JinagaServerConfig = {
     pgKeystore?: string | Pool,
     pgKeystoreSchema?: string,
     model?: Model,
-    authorization?: (a: AuthorizationRules) => AuthorizationRules
+    authorization?: (a: AuthorizationRules) => AuthorizationRules,
+    distribution?: (d: DistributionRules) => DistributionRules,
 };
 
 export type JinagaServerInstance = {
@@ -59,7 +61,8 @@ export class JinagaServer {
         const fork = new PassThroughFork(store);
         const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
-        const authorization = createAuthorization(authorizationRules, store, keystore);
+        const distributionRules = config.distribution ? config.distribution(new DistributionRules([])) : null;
+        const authorization = createAuthorization(authorizationRules, distributionRules, store, keystore);
         const feedCache = new MemoryFeedCache();
         const router = new HttpRouter(authorization, feedCache);
         const authentication = createAuthentication(store, keystore, authorizationRules);
@@ -106,9 +109,9 @@ function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool
     }
 }
 
-function createAuthorization(authorizationRules: AuthorizationRules | null, store: Storage, keystore: Keystore | null): Authorization {
+function createAuthorization(authorizationRules: AuthorizationRules | null, distributionRules: DistributionRules | null, store: Storage, keystore: Keystore | null): Authorization {
     if (keystore) {
-        const authorization = new AuthorizationKeystore(store, keystore, authorizationRules);
+        const authorization = new AuthorizationKeystore(store, keystore, authorizationRules, distributionRules);
         return authorization;
     }
     else {

@@ -44,8 +44,14 @@ function get<U>(method: ((req: RequestUser, params: { [key: string]: string }, q
                 }
             })
             .catch(error => {
-                Trace.error(error);
-                res.status(500).send(error.message);
+                if (error instanceof Forbidden) {
+                    res.type("text");
+                    res.status(403).send(error.message);
+                }
+                else {
+                    Trace.error(error);
+                    res.status(500).send(error.message);
+                }
                 next();
             });
     };
@@ -199,7 +205,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     };
 }
 
-function serializeUserIdentity(user: RequestUser) : UserIdentity | null {
+function serializeUserIdentity(user: RequestUser | null) : UserIdentity | null {
     if (!user) {
         return null;
     }
@@ -244,7 +250,7 @@ export class HttpRouter {
         };
     }
 
-    private async query(user: RequestUser, queryMessage: QueryMessage) : Promise<QueryResponse> {
+    private async query(user: RequestUser | null, queryMessage: QueryMessage) : Promise<QueryResponse> {
         const userIdentity = serializeUserIdentity(user);
         const query = fromDescriptiveString(queryMessage.query);
         const result = await this.authorization.query(userIdentity, queryMessage.start, query);
@@ -261,12 +267,12 @@ export class HttpRouter {
         };
     }
 
-    private async save(user: RequestUser, saveMessage: SaveMessage) : Promise<void> {
+    private async save(user: RequestUser | null, saveMessage: SaveMessage) : Promise<void> {
         const userIdentity = serializeUserIdentity(user);
         await this.authorization.save(userIdentity, saveMessage.facts);
     }
 
-    private async read(user: RequestUser, input: string): Promise<any[]> {
+    private async read(user: RequestUser | null, input: string): Promise<any[]> {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
@@ -279,7 +285,7 @@ export class HttpRouter {
         return extractResults(results);
     }
 
-    private async write(user: RequestUser, input: string): Promise<void> {
+    private async write(user: RequestUser | null, input: string): Promise<void> {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
@@ -297,7 +303,7 @@ export class HttpRouter {
         await this.authorization.save(userIdentity, factRecords);
     }
 
-    private async feeds(user: RequestUser, input: string): Promise<FeedsResponse> {
+    private async feeds(user: RequestUser | null, input: string): Promise<FeedsResponse> {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
@@ -340,7 +346,7 @@ export class HttpRouter {
         }
     }
 
-    private async feed(user: RequestUser, params: { [key: string]: string }, query: ParsedQs): Promise<FeedResponse | null> {
+    private async feed(user: RequestUser | null, params: { [key: string]: string }, query: ParsedQs): Promise<FeedResponse | null> {
         const feedHash = params["hash"];
         if (!feedHash) {
             return null;
@@ -370,7 +376,7 @@ export class HttpRouter {
         return response;
     }
 
-    private async getKnownFacts(user: RequestUser): Promise<Declaration> {
+    private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {
         if (user) {
             const userFact = await this.authorization.getOrCreateUserFact({
                 provider: user.provider,
