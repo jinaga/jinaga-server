@@ -64,7 +64,8 @@ export class JinagaServer {
         const distributionRules = config.distribution ? config.distribution(new DistributionRules([])) : null;
         const authorization = createAuthorization(authorizationRules, distributionRules, store, keystore);
         const feedCache = new MemoryFeedCache();
-        const router = new HttpRouter(authorization, feedCache);
+        // Retain backward compatibility until the user provides distribution rules.
+        const router = new HttpRouter(authorization, feedCache, distributionRules === null);
         const authentication = createAuthentication(store, keystore, authorizationRules);
         const network = new NetworkNoOp();
         const factManager = new FactManager(authentication, fork, source, store, network);

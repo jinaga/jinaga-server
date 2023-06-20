@@ -224,10 +224,12 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private authorization: Authorization, private feedCache: FeedCache) {
+    constructor(private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
-        router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
+        if (backwardCompatible) {
+            router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
+        }
         router.post('/load', post((user, loadMessage: LoadMessage) => this.load(user, loadMessage)));
         router.post('/save', postCreate((user, saveMessage: SaveMessage) => this.save(user, saveMessage)));
 
