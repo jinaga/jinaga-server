@@ -5,6 +5,8 @@ import {
     FactRecord,
     FactReference,
     Feed,
+    FeedResponse,
+    FeedsResponse,
     Forbidden,
     LoadMessage,
     LoadResponse,
@@ -21,7 +23,6 @@ import {
     computeObjectHash,
     fromDescriptiveString,
 } from "jinaga";
-import { FeedResponse, FeedsResponse } from "jinaga/dist/http/messages";
 
 import { FeedCache, FeedDefinition } from "./feed-cache";
 
