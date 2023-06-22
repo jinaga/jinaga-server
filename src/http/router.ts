@@ -1,14 +1,13 @@
 import { Handler, Router } from "express";
 import {
     Authorization,
-    buildFeeds,
-    computeObjectHash,
     Declaration,
     FactRecord,
     FactReference,
     Feed,
+    FeedResponse,
+    FeedsResponse,
     Forbidden,
-    fromDescriptiveString,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
@@ -20,10 +19,12 @@ import {
     SpecificationParser,
     Trace,
     UserIdentity,
+    buildFeeds,
+    computeObjectHash,
+    fromDescriptiveString,
 } from "jinaga";
-import { FeedResponse, FeedsResponse } from "jinaga/dist/http/messages";
 
-import { FeedCache } from "./feed-cache";
+import { FeedCache, FeedDefinition } from "./feed-cache";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -43,8 +44,14 @@ function get<U>(method: ((req: RequestUser, params: { [key: string]: string }, q
                 }
             })
             .catch(error => {
-                Trace.error(error);
-                res.status(500).send(error.message);
+                if (error instanceof Forbidden) {
+                    res.type("text");
+                    res.status(403).send(error.message);
+                }
+                else {
+                    Trace.error(error);
+                    res.status(500).send(error.message);
+                }
                 next();
             });
     };
@@ -198,7 +205,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     };
 }
 
-function serializeUserIdentity(user: RequestUser) : UserIdentity | null {
+function serializeUserIdentity(user: RequestUser | null) : UserIdentity | null {
     if (!user) {
         return null;
     }
@@ -217,10 +224,12 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private authorization: Authorization, private feedCache: FeedCache) {
+    constructor(private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
-        router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
+        if (backwardCompatible) {
+            router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
+        }
         router.post('/load', post((user, loadMessage: LoadMessage) => this.load(user, loadMessage)));
         router.post('/save', postCreate((user, saveMessage: SaveMessage) => this.save(user, saveMessage)));
 
@@ -243,7 +252,7 @@ export class HttpRouter {
         };
     }
 
-    private async query(user: RequestUser, queryMessage: QueryMessage) : Promise<QueryResponse> {
+    private async query(user: RequestUser | null, queryMessage: QueryMessage) : Promise<QueryResponse> {
         const userIdentity = serializeUserIdentity(user);
         const query = fromDescriptiveString(queryMessage.query);
         const result = await this.authorization.query(userIdentity, queryMessage.start, query);
@@ -260,12 +269,12 @@ export class HttpRouter {
         };
     }
 
-    private async save(user: RequestUser, saveMessage: SaveMessage) : Promise<void> {
+    private async save(user: RequestUser | null, saveMessage: SaveMessage) : Promise<void> {
         const userIdentity = serializeUserIdentity(user);
         await this.authorization.save(userIdentity, saveMessage.facts);
     }
 
-    private async read(user: RequestUser, input: string): Promise<any[]> {
+    private async read(user: RequestUser | null, input: string): Promise<any[]> {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
@@ -278,7 +287,7 @@ export class HttpRouter {
         return extractResults(results);
     }
 
-    private async write(user: RequestUser, input: string): Promise<void> {
+    private async write(user: RequestUser | null, input: string): Promise<void> {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
@@ -296,7 +305,7 @@ export class HttpRouter {
         await this.authorization.save(userIdentity, factRecords);
     }
 
-    private async feeds(user: RequestUser, input: string): Promise<FeedsResponse> {
+    private async feeds(user: RequestUser | null, input: string): Promise<FeedsResponse> {
         const knownFacts = await this.getKnownFacts(user);
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
@@ -304,35 +313,65 @@ export class HttpRouter {
         const specification = parser.parseSpecification();
         const start = this.selectStart(specification, declaration);
 
-        const feedDefinitions = buildFeeds(start, specification).map(feed => ({
-            hash: urlSafeHash(feed),
-            feed
-        }));
+        // Verify that the number of start facts equals the number of inputs
+        if (start.length !== specification.given.length) {
+            throw new Error(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
+        }
+        // Verify that the input type matches the start fact type
+        for (let i = 0; i < start.length; i++) {
+            if (start[i].type !== specification.given[i].type) {
+                throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
+            }
+        }
+
+        // Verify that I can distribute all feeds to the user.
+        const feeds = buildFeeds(specification);
+        const userIdentity = serializeUserIdentity(user);
+        await this.authorization.verifyDistribution(userIdentity, feeds, start);
+
+        const feedDefinitionsByHash = feeds.map(feed => {
+            const indexedStart = feed.inputs.map(input => ({
+                factReference: start[input.inputIndex],
+                index: input.inputIndex
+            }));
+            const feedDefinition: FeedDefinition = {
+                start: indexedStart,
+                feed
+            };
+            return {
+                hash: urlSafeHash(feed),
+                feedDefinition
+            };
+        });
         // Store all feeds in the cache.
-        for (const feedDefinition of feedDefinitions) {
-            await this.feedCache.storeFeed(feedDefinition.hash, feedDefinition.feed);
+        for (const d of feedDefinitionsByHash) {
+            await this.feedCache.storeFeed(d.hash, d.feedDefinition);
         }
 
         return {
-            feeds: feedDefinitions.map(f => f.hash)
+            feeds: feedDefinitionsByHash.map(f => f.hash)
         }
     }
 
-    private async feed(user: RequestUser, params: { [key: string]: string }, query: ParsedQs): Promise<FeedResponse | null> {
+    private async feed(user: RequestUser | null, params: { [key: string]: string }, query: ParsedQs): Promise<FeedResponse | null> {
         const feedHash = params["hash"];
         if (!feedHash) {
             return null;
         }
 
-        const feed = await this.feedCache.getFeed(feedHash);
-        if (!feed) {
+        const feedDefinition = await this.feedCache.getFeed(feedHash);
+        if (!feedDefinition) {
             return null;
         }
 
         const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const results = await this.authorization.feed(userIdentity, feed, bookmark);
+        const start = feedDefinition.start.reduce((start, input) => {
+            start[input.index] = input.factReference;
+            return start;
+        }, [] as FactReference[]);
+        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
             self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
@@ -344,7 +383,7 @@ export class HttpRouter {
         return response;
     }
 
-    private async getKnownFacts(user: RequestUser): Promise<Declaration> {
+    private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {
         if (user) {
             const userFact = await this.authorization.getOrCreateUserFact({
                 provider: user.provider,

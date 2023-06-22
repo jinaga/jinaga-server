@@ -261,10 +261,10 @@ export class PostgresStore implements Storage {
         return composer.compose(resultSets, factRecords);
     }
 
-    async feed(feed: Feed, bookmark: string): Promise<FactFeed> {
+    async feed(feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
         const factTypes: FactTypeMap = await this.loadFactTypesFromFeed(feed);
         const roleMap: RoleMap = await this.loadRolesFromFeed(feed, factTypes);
-        const sql = sqlFromFeed(feed, this.schema, bookmark, 100, factTypes, roleMap);
+        const sql = sqlFromFeed(feed, start, this.schema, bookmark, 100, factTypes, roleMap);
         if (!sql) {
             return {
                 tuples: [],

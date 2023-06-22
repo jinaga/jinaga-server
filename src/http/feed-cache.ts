@@ -1,6 +1,14 @@
-import { Feed } from "jinaga";
+import { FactReference, Feed } from "jinaga";
+
+export interface FeedDefinition {
+    start: {
+        factReference: FactReference,
+        index: number
+    }[],
+    feed: Feed
+}
 
 export interface FeedCache {
-    storeFeed(feedHash: string, feed: Feed): Promise<void>;
-    getFeed(feedHash: string): Promise<Feed | undefined>;
+    storeFeed(feedHash: string, feedDefinition: FeedDefinition): Promise<void>;
+    getFeed(feedHash: string): Promise<FeedDefinition | undefined>;
 }
