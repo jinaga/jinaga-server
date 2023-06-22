@@ -19,11 +19,12 @@ export class DistributedFactCache {
   }
 
   includesAll(references: FactReference[], userFact: FactReference | null): boolean {
+    const equalsUserReference = userFact ? factReferenceEquals(userFact) : () => false;
     this.removeOldBatches();
     return references.every(reference =>
       this.batches.some(batch =>
         batch.factReferences.some(factReferenceEquals(reference)) &&
-        (batch.userReference === null || batch.userReference === userFact)));
+        (batch.userReference === null || equalsUserReference(batch.userReference))));
   }
 
   removeOldBatches() {
