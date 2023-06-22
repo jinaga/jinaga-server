@@ -14,14 +14,18 @@ import {
     Specification,
     Storage,
     UserIdentity,
-    buildFeeds
+    buildFeeds,
+    factReferenceEquals
 } from "jinaga";
 
 import { Keystore } from "../keystore";
+import { distinct } from "../util/fn";
+import { DistributedFactCache } from "./distributed-fact-cache";
 
 export class AuthorizationKeystore implements Authorization {
     private authorizationEngine: AuthorizationEngine | null;
     private distributionEngine: DistributionEngine | null;
+    private distributedFacts: DistributedFactCache = new DistributedFactCache();
 
     constructor(
         private store: Storage,
@@ -75,12 +79,27 @@ export class AuthorizationKeystore implements Authorization {
             if (!canDistribute) {
                 throw new Forbidden("Unauthorized");
             }
+            const factFeed = await this.store.feed(feed, start, bookmark);
+            const factReferences = factFeed.tuples
+                .flatMap(tuple => tuple.facts)
+                .filter((value, index, self) => self.findIndex(factReferenceEquals(value)) === index);
+            this.distributedFacts.add(factReferences, userReference);
+            return factFeed;
         }
-        return await this.store.feed(feed, start, bookmark);
+        else {
+            return await this.store.feed(feed, start, bookmark);
+        }
     }
 
-    load(userIdentity: UserIdentity, references: FactReference[]) {
-        return this.store.load(references);
+    async load(userIdentity: UserIdentity, references: FactReference[]) {
+        if (this.distributionEngine) {
+            const userFact = userIdentity ? await this.keystore.getUserFact(userIdentity) : null;
+            const canDistribute = this.distributedFacts.includesAll(references, userFact);
+            if (!canDistribute) {
+                throw new Forbidden("Unauthorized");
+            }
+        }
+        return await this.store.load(references);
     }
 
     async save(userIdentity: UserIdentity | null, facts: FactRecord[]) {
