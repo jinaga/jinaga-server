@@ -280,6 +280,7 @@ export class HttpRouter {
         parser.skipWhitespace();
         const declaration = parser.parseDeclaration(knownFacts);
         const specification = parser.parseSpecification();
+        parser.expectEnd();
         const start = this.selectStart(specification, declaration);
 
         const userIdentity = serializeUserIdentity(user);
@@ -292,6 +293,7 @@ export class HttpRouter {
         const parser = new SpecificationParser(input);
         parser.skipWhitespace();
         var declaration = parser.parseDeclaration(knownFacts);
+        parser.expectEnd();
 
         const factRecords: FactRecord[] = [];
         for (const value of declaration) {
