@@ -22,6 +22,9 @@ import {
     buildFeeds,
     computeObjectHash,
     fromDescriptiveString,
+    parseLoadMessage,
+    parseQueryMessage,
+    parseSaveMessage,
 } from "jinaga";
 
 import { FeedCache, FeedDefinition } from "./feed-cache";
@@ -79,10 +82,13 @@ function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]
     };
 }
 
-function post<T, U>(method: (user: RequestUser, message: T, params?: { [key: string]: string }) => Promise<U>): Handler {
+function post<T, U>(
+    parse: (input: any) => T,
+    method: (user: RequestUser, message: T, params?: { [key: string]: string }) => Promise<U>
+): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        const message = <T>req.body;
+        const message = parse(req.body);
         if (!message) {
             throw new Error('Ensure that you have called app.use(express.json()).');
         }
@@ -117,7 +123,7 @@ function post<T, U>(method: (user: RequestUser, message: T, params?: { [key: str
 function postString<U>(method: (user: RequestUser, message: string) => Promise<U>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        const input = <string>req.body;
+        const input = parseString(req.body);
         if (!input || typeof(input) !== 'string') {
             res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
@@ -146,10 +152,13 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
     };
 }
 
-function postCreate<T>(method: (user: RequestUser, message: T) => Promise<void>): Handler {
+function postCreate<T>(
+    parse: (input: any) => T,
+    method: (user: RequestUser, message: T) => Promise<void>
+): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        const message = <T>req.body;
+        const message = parse(req.body);
         if (!message) {
             throw new Error('Ensure that you have called app.use(express.json()).');
         }
@@ -177,7 +186,7 @@ function postCreate<T>(method: (user: RequestUser, message: T) => Promise<void>)
 function postStringCreate(method: (user: RequestUser, message: string) => Promise<void>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        const input = <string>req.body;
+        const input = parseString(req.body);
         if (!input || typeof(input) !== 'string') {
             res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
@@ -228,14 +237,26 @@ export class HttpRouter {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
         if (backwardCompatible) {
-            router.post('/query', post((user, queryMessage: QueryMessage) => this.query(user, queryMessage)));
+            router.post('/query', post(
+                parseQueryMessage,
+                (user, queryMessage) => this.query(user, queryMessage)
+            ));
         }
-        router.post('/load', post((user, loadMessage: LoadMessage) => this.load(user, loadMessage)));
-        router.post('/save', postCreate((user, saveMessage: SaveMessage) => this.save(user, saveMessage)));
+        router.post('/load', post(
+            parseLoadMessage,
+            (user, loadMessage) => this.load(user, loadMessage)
+        ));
+        router.post('/save', postCreate(
+            parseSaveMessage,
+            (user, saveMessage) => this.save(user, saveMessage)
+        ));
 
         router.post('/read', postString((user, input: string) => this.read(user, input)));
         router.post('/write', postStringCreate((user, input: string) => this.write(user, input)));
-        router.post('/feeds', post((user, input: string) => this.feeds(user, input)));
+        router.post('/feeds', post(
+            parseString,
+            (user, input: string) => this.feeds(user, input)
+        ));
         router.get('/feeds/:hash', get((user, params, query) => this.feed(user, params, query)));
 
         this.handler = router;
@@ -419,6 +440,13 @@ export class HttpRouter {
             return declaredFact.declared.reference;
         });
     }
+}
+
+function parseString(input: any): string {
+    if (typeof input !== 'string') {
+        throw new Error("Expected a string. Check the content type of the request.");
+    }
+    return input;
 }
 
 function urlSafeHash(feed: Feed): string {
