@@ -63,8 +63,8 @@ export class AuthorizationKeystore implements Authorization {
             // Break the specification into feeds and check distribution.
             const feeds = buildFeeds(specification);
             const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
-            if (!canDistribute) {
-                throw new Forbidden("Unauthorized");
+            if (canDistribute.type === "failure") {
+                throw new Forbidden(canDistribute.reason);
             }
         }
         return await this.store.read(start, specification);
@@ -76,8 +76,8 @@ export class AuthorizationKeystore implements Authorization {
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
             const canDistribute = await this.distributionEngine.canDistributeToAll([feed], start, userReference);
-            if (!canDistribute) {
-                throw new Forbidden("Unauthorized");
+            if (canDistribute.type === "failure") {
+                throw new Forbidden(canDistribute.reason);
             }
             const factFeed = await this.store.feed(feed, start, bookmark);
             const factReferences = factFeed.tuples
@@ -132,8 +132,8 @@ export class AuthorizationKeystore implements Authorization {
             ? await this.keystore.getUserFact(userIdentity)
             : null;
         const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
-        if (!canDistribute) {
-            throw new Forbidden("Unauthorized");
+        if (canDistribute.type === "failure") {
+            throw new Forbidden(canDistribute.reason);
         }
     }
 }
