@@ -71,9 +71,7 @@ export class ConnectionFactory {
     }
 
     private createClient() {
-        return Trace.dependency('Postgres client', '', () => {
-            return this.postgresPool.connect();
-        });
+        return this.postgresPool.connect();
     }
 }
 
