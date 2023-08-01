@@ -1,6 +1,7 @@
 export { AuthenticationDevice } from "./authentication/authentication-device";
 export { AuthenticationSession } from "./authentication/authentication-session";
 export { AuthorizationKeystore } from "./authorization/authorization-keystore";
+export { DistributedFactCache } from "./authorization/distributed-fact-cache";
 export { Keystore } from "./keystore";
 export { FeedCache } from "./http/feed-cache";
 export { HttpRouter, RequestUser } from "./http/router";
