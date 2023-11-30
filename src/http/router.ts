@@ -50,6 +50,8 @@ function getOrStream<U>(
                     else {
                         res.type("application/x-jinaga-feed-stream");
                         res.set("Connection", "keep-alive");
+                        res.set("Cache-Control", "no-cache");
+                        res.set("Access-Control-Allow-Origin", "*");
                         res.flushHeaders();
                         req.on("close", () => {
                             response.close();
