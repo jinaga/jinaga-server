@@ -1,0 +1,11 @@
+POST {{replicatorUrl}}/write
+Content-Type: text/plain
+
+let creator: Jinaga.User = {
+  publicKey: "--- FAKE PUBLIC KEY ---"
+}
+
+let site: Blog.Site = {
+  creator,
+  domain: "michaelperry.net"
+}
