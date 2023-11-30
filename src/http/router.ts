@@ -56,11 +56,15 @@ function getOrStream<U>(
                         req.on("close", () => {
                             response.close();
                         });
+                        const timeout = setTimeout(() => {
+                            response.close();
+                        }, 5 * 60 * 1000);
                         response
                             .next(data => {
                                 res.write(JSON.stringify(data) + "\n\n");
                             })
                             .done(() => {
+                                clearTimeout(timeout);
                                 next();
                             });
                     }
