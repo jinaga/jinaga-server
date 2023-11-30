@@ -485,15 +485,15 @@ export class HttpRouter {
             bookmark: results.bookmark
         };
         const stream = new FeedStream();
-        console.log("Initial response");
+        Trace.info("Initial response");
         stream.feed(response);
         // To simulate a stream, feed the same response every second.
         const timeout = setInterval(() => {
-            console.log("Additional response");
+            Trace.info("Additional response");
             stream.feed(response);
         }, 1000);
         stream.done(() => {
-            console.log("Done");
+            Trace.info("Done");
             clearInterval(timeout);
         });
         return stream;
