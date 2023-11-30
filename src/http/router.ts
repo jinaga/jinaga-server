@@ -28,35 +28,78 @@ import {
 } from "jinaga";
 
 import { FeedCache, FeedDefinition } from "./feed-cache";
+import { Stream } from "./stream";
+import { FeedStream } from "./feed-stream";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
-function get<U>(method: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<U>)): Handler {
+function getOrStream<U>(
+    getMethod: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<U | null>),
+    streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<Stream<U> | null>)
+): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        method(user, req.params, req.query)
-            .then(response => {
-                if (!response) {
-                    res.sendStatus(404);
+        const accept = req.headers["accept"];
+        if (accept && accept.indexOf("application/x-jinaga-feed-stream") >= 0) {
+            streamMethod(user, req.params, req.query)
+                .then(response => {
+                    if (!response) {
+                        res.sendStatus(404);
+                        next();
+                    }
+                    else {
+                        res.type("application/x-jinaga-feed-stream");
+                        res.set("Connection", "keep-alive");
+                        res.flushHeaders();
+                        req.on("close", () => {
+                            response.close();
+                        });
+                        response
+                            .next(data => {
+                                res.write(JSON.stringify(data) + "\n\n");
+                            })
+                            .done(() => {
+                                next();
+                            });
+                    }
+                })
+                .catch(error => {
+                    if (error instanceof Forbidden) {
+                        res.type("text");
+                        res.status(403).send(error.message);
+                    }
+                    else {
+                        Trace.error(error);
+                        res.status(500).send(error.message);
+                    }
                     next();
-                }
-                else {
-                    res.type("json");
-                    res.send(JSON.stringify(response));
+                });
+        }
+        else {
+            getMethod(user, req.params, req.query)
+                .then(response => {
+                    if (!response) {
+                        res.sendStatus(404);
+                        next();
+                    }
+                    else {
+                        res.type("json");
+                        res.send(JSON.stringify(response));
+                        next();
+                    }
+                })
+                .catch(error => {
+                    if (error instanceof Forbidden) {
+                        res.type("text");
+                        res.status(403).send(error.message);
+                    }
+                    else {
+                        Trace.error(error);
+                        res.status(500).send(error.message);
+                    }
                     next();
-                }
-            })
-            .catch(error => {
-                if (error instanceof Forbidden) {
-                    res.type("text");
-                    res.status(403).send(error.message);
-                }
-                else {
-                    Trace.error(error);
-                    res.status(500).send(error.message);
-                }
-                next();
-            });
+                });
+        }
     };
 }
 
@@ -257,7 +300,9 @@ export class HttpRouter {
             parseString,
             (user, input: string) => this.feeds(user, input)
         ));
-        router.get('/feeds/:hash', get((user, params, query) => this.feed(user, params, query)));
+        router.get('/feeds/:hash', getOrStream<FeedResponse>(
+            (user, params, query) => this.feed(user, params, query),
+            (user, params, query) => this.streamFeed(user, params, query)));
 
         this.handler = router;
     }
@@ -404,6 +449,48 @@ export class HttpRouter {
             bookmark: results.bookmark
         };
         return response;
+    }
+
+    private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: ParsedQs): Promise<Stream<FeedResponse> | null> {
+        const feedHash = params["hash"];
+        if (!feedHash) {
+            return null;
+        }
+
+        const feedDefinition = await this.feedCache.getFeed(feedHash);
+        if (!feedDefinition) {
+            return null;
+        }
+
+        const bookmark = query["b"] as string ?? "";
+
+        const userIdentity = serializeUserIdentity(user);
+        const start = feedDefinition.start.reduce((start, input) => {
+            start[input.index] = input.factReference;
+            return start;
+        }, [] as FactReference[]);
+        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+        // Return distinct fact references from all the tuples.
+        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
+            self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+        );
+        const response: FeedResponse = {
+            references,
+            bookmark: results.bookmark
+        };
+        const stream = new FeedStream();
+        console.log("Initial response");
+        stream.feed(response);
+        // To simulate a stream, feed the same response every second.
+        const timeout = setInterval(() => {
+            console.log("Additional response");
+            stream.feed(response);
+        }, 1000);
+        stream.done(() => {
+            console.log("Done");
+            clearInterval(timeout);
+        });
+        return stream;
     }
 
     private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {
