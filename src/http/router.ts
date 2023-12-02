@@ -499,7 +499,7 @@ export class HttpRouter {
                 const matchingResults = results.filter(pr =>
                     feedDefinition.givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
                 if (matchingResults.length != 0) {
-                    bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+                    bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
                 }
             }
         ));
@@ -512,16 +512,18 @@ export class HttpRouter {
         return stream;
     }
 
-    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedDefinition, start: FactReference[], bookmark: string, stream: FeedStream) {
+    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedDefinition, start: FactReference[], bookmark: string, stream: FeedStream, skipIfEmpty = false): Promise<string> {
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) => self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
         );
-        const response: FeedResponse = {
-            references,
-            bookmark: results.bookmark
-        };
-        stream.feed(response);
+        if (!skipIfEmpty || references.length > 0) {
+            const response: FeedResponse = {
+                references,
+                bookmark: results.bookmark
+            };
+            stream.feed(response);
+        }
         return results.bookmark;
     }
 
