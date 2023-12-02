@@ -72,12 +72,12 @@ class QueryDescription {
     );
 
     constructor(
-        private readonly inputs: InputDescription[],
-        private readonly parameters: (string | number)[],
-        private readonly outputs: OutputDescription[],
-        private readonly facts: FactDescription[],
-        private readonly edges: EdgeDescription[],
-        private readonly existentialConditions: ExistentialConditionDescription[] = []
+        public readonly inputs: InputDescription[],
+        public readonly parameters: (string | number)[],
+        public readonly outputs: OutputDescription[],
+        public readonly facts: FactDescription[],
+        public readonly edges: EdgeDescription[],
+        public readonly existentialConditions: ExistentialConditionDescription[] = []
     ) {}
 
     public withParameter(parameter: string | number): { query: QueryDescription; parameterIndex: number; } {
@@ -224,39 +224,39 @@ class QueryDescription {
     outputLength(): number {
         return this.inputs.length + this.outputs.length;
     }
+}
 
-    generateResultSqlQuery(schema: string): SpecificationSqlQuery {
-        const allLabels = [ ...this.inputs, ...this.outputs ];
-        const columns = allLabels
-            .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
-            .join(", ");
-        const firstEdge = this.edges[0];
-        const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
-        const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
-        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
-        const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-        const joins: string[] = generateJoins(this.edges, writtenFactIndexes, schema);
-        const inputWhereClauses = this.inputs
-            .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
-            .join(" AND ");
-        const existentialWhereClauses = this.existentialConditions
-            .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema)})`)
-            .join("");
-        const orderByClause = this.outputs
-            .map(output => `f${output.factIndex}.fact_id ASC`)
-            .join(", ");
-        const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
-        return {
-            sql,
-            parameters: this.parameters,
-            labels: allLabels.map(label => ({
-                name: label.label,
-                type: label.type,
-                index: label.factIndex
-            })),
-            bookmark: "[]"
-        };
-    }
+function generateResultSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
+    const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
+    const columns = allLabels
+        .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
+        .join(", ");
+    const firstEdge = queryDescription.edges[0];
+    const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
+    const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
+    const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
+    const writtenFactIndexes = new Set<number>().add(firstFactIndex);
+    const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema);
+    const inputWhereClauses = queryDescription.inputs
+        .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+        .join(" AND ");
+    const existentialWhereClauses = queryDescription.existentialConditions
+        .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema)})`)
+        .join("");
+    const orderByClause = queryDescription.outputs
+        .map(output => `f${output.factIndex}.fact_id ASC`)
+        .join(", ");
+    const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+    return {
+        sql,
+        parameters: queryDescription.parameters,
+        labels: allLabels.map(label => ({
+            name: label.label,
+            type: label.type,
+            index: label.factIndex
+        })),
+        bookmark: "[]"
+    };
 }
 
 function existentialsWithInput(existentialConditions: ExistentialConditionDescription[], input: InputDescription, path: number[]): ExistentialConditionDescription[] {
@@ -991,7 +991,7 @@ export function resultSqlFromSpecification(start: FactReference[], specification
 }
 
 function createResultComposer(description: ResultDescription, parentFactIdLength: number, schema: string): ResultComposer {
-    const sqlQuery = description.queryDescription.generateResultSqlQuery(schema);
+    const sqlQuery = generateResultSqlQuery(description.queryDescription, schema);
     const resultProjection = description.resultProjection;
     const childResultComposers = description.childResultDescriptions
         .filter(child => child.queryDescription.isSatisfiable())
