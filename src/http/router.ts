@@ -527,15 +527,6 @@ export class HttpRouter {
         return results.bookmark;
     }
 
-    private async onResult(givenHash: string, inverse: SpecificationInverse, results: ProjectedResult[]): Promise<void> {
-        // Filter out results that do not match the given.
-        const matchingResults = results.filter(pr =>
-            givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
-        if (matchingResults.length === 0) {
-            return;
-        }
-    }
-
     private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {
         if (user) {
             const userFact = await this.authorization.getOrCreateUserFact({
