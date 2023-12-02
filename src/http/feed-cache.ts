@@ -1,6 +1,7 @@
 import { FactReference, Feed } from "jinaga";
 
 export interface FeedDefinition {
+    givenHash: string;
     start: {
         factReference: FactReference,
         index: number

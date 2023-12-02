@@ -8,6 +8,7 @@ import {
     FeedResponse,
     FeedsResponse,
     Forbidden,
+    invertSpecification,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
@@ -25,11 +26,15 @@ import {
     parseLoadMessage,
     parseQueryMessage,
     parseSaveMessage,
+    FactManager,
+    computeTupleSubsetHash,
+    ReferencesByName,
 } from "jinaga";
 
 import { FeedCache, FeedDefinition } from "./feed-cache";
 import { Stream } from "./stream";
 import { FeedStream } from "./feed-stream";
+import { SpecificationInverse } from "jinaga/dist/specification/inverse";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -282,7 +287,7 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
+    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
         if (backwardCompatible) {
@@ -403,12 +408,19 @@ export class HttpRouter {
         const userIdentity = serializeUserIdentity(user);
         await this.authorization.verifyDistribution(userIdentity, feeds, start);
 
+        const tuple = specification.given.reduce((tuple, label, index) => ({
+            ...tuple,
+            [label.name]: start[index]
+        }), {} as ReferencesByName);
+        const givenHash = computeObjectHash(tuple);
+
         const feedDefinitionsByHash = feeds.map(feed => {
             const indexedStart = feed.inputs.map(input => ({
                 factReference: start[input.inputIndex],
                 index: input.inputIndex
             }));
             const feedDefinition: FeedDefinition = {
+                givenHash,
                 start: indexedStart,
                 feed
             };
@@ -475,28 +487,50 @@ export class HttpRouter {
             start[input.index] = input.factReference;
             return start;
         }, [] as FactReference[]);
+
+        const stream = new FeedStream();
+        Trace.info("Initial response");
+        await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+        const inverses = invertSpecification(feedDefinition.feed.specification);
+        const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
+            inverse.inverseSpecification,
+            async (results) => {
+                // Filter out results that do not match the given.
+                const matchingResults = results.filter(pr =>
+                    feedDefinition.givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
+                if (matchingResults.length != 0) {
+                    await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+                }
+            }
+        ));
+        stream.done(() => {
+            Trace.info("Done");
+            for (const listener of listeners) {
+                this.factManager.removeSpecificationListener(listener);
+            }
+        });
+        return stream;
+    }
+
+    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedDefinition, start: FactReference[], bookmark: string, stream: FeedStream) {
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
-        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
-            self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) => self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
         );
         const response: FeedResponse = {
             references,
             bookmark: results.bookmark
         };
-        const stream = new FeedStream();
-        Trace.info("Initial response");
         stream.feed(response);
-        // To simulate a stream, feed the same response every second.
-        const timeout = setInterval(() => {
-            Trace.info("Additional response");
-            stream.feed(response);
-        }, 1000);
-        stream.done(() => {
-            Trace.info("Done");
-            clearInterval(timeout);
-        });
-        return stream;
+    }
+
+    private async onResult(givenHash: string, inverse: SpecificationInverse, results: ProjectedResult[]): Promise<void> {
+        // Filter out results that do not match the given.
+        const matchingResults = results.filter(pr =>
+            givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
+        if (matchingResults.length === 0) {
+            return;
+        }
     }
 
     private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {
