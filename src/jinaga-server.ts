@@ -62,11 +62,11 @@ export class JinagaServer {
         const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const distributionRules = config.distribution ? config.distribution(new DistributionRules([])) : null;
-        const authorization = createAuthorization(authorizationRules, distributionRules, store, keystore);
         const feedCache = new MemoryFeedCache();
         const authentication = createAuthentication(store, keystore, authorizationRules);
         const network = new NetworkNoOp();
         const factManager = new FactManager(authentication, fork, source, store, network);
+        const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
         // Retain backward compatibility until the user provides distribution rules.
         const router = new HttpRouter(factManager, authorization, feedCache, distributionRules === null);
         const j: Jinaga = new Jinaga(factManager, syncStatusNotifier);
@@ -110,13 +110,13 @@ function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool
     }
 }
 
-function createAuthorization(authorizationRules: AuthorizationRules | null, distributionRules: DistributionRules | null, store: Storage, keystore: Keystore | null): Authorization {
+function createAuthorization(authorizationRules: AuthorizationRules | null, distributionRules: DistributionRules | null, factManager: FactManager, store: Storage, keystore: Keystore | null): Authorization {
     if (keystore) {
-        const authorization = new AuthorizationKeystore(store, keystore, authorizationRules, distributionRules);
+        const authorization = new AuthorizationKeystore(factManager, store, keystore, authorizationRules, distributionRules);
         return authorization;
     }
     else {
-        return new AuthorizationNoOp(store);
+        return new AuthorizationNoOp(factManager, store);
     }
 }
 

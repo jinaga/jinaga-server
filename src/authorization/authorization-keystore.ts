@@ -6,6 +6,7 @@ import {
     DistributionRules,
     FactEnvelope,
     FactFeed,
+    FactManager,
     FactRecord,
     FactReference,
     Feed,
@@ -28,6 +29,7 @@ export class AuthorizationKeystore implements Authorization {
     private distributedFacts: DistributedFactCache = new DistributedFactCache();
 
     constructor(
+        private factManager: FactManager,
         private store: Storage,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null,
@@ -52,7 +54,7 @@ export class AuthorizationKeystore implements Authorization {
     }
 
     query(userIdentity: UserIdentity | null, start: FactReference, query: Query) {
-        return this.store.query(start, query);
+        return this.factManager.query(start, query);
     }
 
     async read(userIdentity: UserIdentity | null, start: FactReference[], specification: Specification) {
@@ -67,7 +69,7 @@ export class AuthorizationKeystore implements Authorization {
                 throw new Forbidden(canDistribute.reason);
             }
         }
-        return await this.store.read(start, specification);
+        return await this.factManager.read(start, specification);
     }
 
     async feed(userIdentity: UserIdentity | null, feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
@@ -99,12 +101,12 @@ export class AuthorizationKeystore implements Authorization {
                 throw new Forbidden("Unauthorized");
             }
         }
-        return await this.store.load(references);
+        return await this.factManager.load(references);
     }
 
     async save(userIdentity: UserIdentity | null, facts: FactRecord[]) {
         if (!this.authorizationEngine) {
-            const envelopes = await this.store.save(facts.map(fact => ({
+            const envelopes = await this.factManager.save(facts.map(fact => ({
                 fact,
                 signatures: []
             })));
@@ -115,7 +117,7 @@ export class AuthorizationKeystore implements Authorization {
         const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
         if (userIdentity) {
             const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
-            const envelopes = await this.store.save(signedFacts);
+            const envelopes = await this.factManager.save(signedFacts);
             return envelopes.map(envelope => envelope.fact);
         }
         else {
