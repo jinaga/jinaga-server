@@ -1,12 +1,5 @@
-import { FactReference, Label, Match, PathCondition, Specification } from "jinaga";
+import { FactReference, Label, Match, PathCondition } from "jinaga";
 import { FactTypeMap, RoleMap, ensureGetFactTypeId, getFactTypeId, getRoleId } from "./maps";
-import { existentialsWithEdge, existentialsWithInput, existentialsWithNewCondition } from "./specification-result-sql";
-
-interface SpecificationLabel {
-    name: string;
-    index: number;
-    type: string;
-}
 
 export interface FactDescription {
     type: string;
@@ -27,13 +20,6 @@ export interface ExistentialConditionDescription {
     existentialConditions: ExistentialConditionDescription[];
 }
 
-export interface SpecificationSqlQuery {
-    sql: string;
-    parameters: (string | number | number[])[];
-    labels: SpecificationLabel[];
-    bookmark: string;
-}
-
 export interface InputDescription {
     label: string;
     type: string;
@@ -48,7 +34,7 @@ export interface OutputDescription {
     factIndex: number;
 }
 
-export function countEdges(existentialConditions: ExistentialConditionDescription[]): number {
+function countEdges(existentialConditions: ExistentialConditionDescription[]): number {
     return existentialConditions.reduce((count, c) => count + c.edges.length + countEdges(c.existentialConditions),
         0);
 }
@@ -211,6 +197,78 @@ export class QueryDescription {
 
     outputLength(): number {
         return this.inputs.length + this.outputs.length;
+    }
+}
+
+function existentialsWithInput(existentialConditions: ExistentialConditionDescription[], input: InputDescription, path: number[]): ExistentialConditionDescription[] {
+    if (path.length === 1) {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                inputs: [...c.inputs, input]
+            } :
+            c
+        );
+    }
+    else {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                existentialConditions: existentialsWithInput(c.existentialConditions, input, path.slice(1))
+            } :
+            c
+        );
+    }
+}
+
+function existentialsWithEdge(existentialConditions: ExistentialConditionDescription[], edge: EdgeDescription, path: number[]): ExistentialConditionDescription[] {
+    if (path.length === 1) {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                edges: [...c.edges, edge]
+            } :
+            c
+        );
+    }
+    else {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                existentialConditions: existentialsWithEdge(c.existentialConditions, edge, path.slice(1))
+            } :
+            c
+        );
+    }
+}
+
+function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], exists: boolean, path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
+    if (path.length === 0) {
+        path = [existentialConditions.length];
+        existentialConditions = [
+            ...existentialConditions,
+            {
+                exists: exists,
+                inputs: [],
+                edges: [],
+                existentialConditions: []
+            }
+        ];
+        return { existentialConditions: existentialConditions, path };
+    }
+    else {
+        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(existentialConditions[path[0]].existentialConditions, exists, path.slice(1));
+        existentialConditions = existentialConditions.map((c, i) => i === path[0] ?
+            {
+                exists: c.exists,
+                inputs: c.inputs,
+                edges: c.edges,
+                existentialConditions: newExistentialConditions
+            } :
+            c
+        );
+        path = [path[0], ...newPath];
+        return { existentialConditions: existentialConditions, path };
     }
 }
 

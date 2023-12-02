@@ -14,11 +14,12 @@ import {
     ReferencesByName,
     SingularProjection,
     Specification,
-    SpecificationProjection
+    SpecificationProjection,
+    validateGiven
 } from "jinaga";
 
 import { FactTypeMap, RoleMap } from "./maps";
-import { EdgeDescription, ExistentialConditionDescription, FactByLabel, InputDescription, QueryDescription, QueryDescriptionBuider, SpecificationSqlQuery } from "./query-description";
+import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuider } from "./query-description";
 
 function generateResultSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
     const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
@@ -51,78 +52,6 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
         })),
         bookmark: "[]"
     };
-}
-
-export function existentialsWithInput(existentialConditions: ExistentialConditionDescription[], input: InputDescription, path: number[]): ExistentialConditionDescription[] {
-    if (path.length === 1) {
-        return existentialConditions.map((c, i) => i === path[0] ?
-            {
-                ...c,
-                inputs: [...c.inputs, input]
-            } :
-            c
-        );
-    }
-    else {
-        return existentialConditions.map((c, i) => i === path[0] ?
-            {
-                ...c,
-                existentialConditions: existentialsWithInput(c.existentialConditions, input, path.slice(1))
-            } :
-            c
-        );
-    }
-}
-
-export function existentialsWithEdge(existentialConditions: ExistentialConditionDescription[], edge: EdgeDescription, path: number[]): ExistentialConditionDescription[] {
-    if (path.length === 1) {
-        return existentialConditions.map((c, i) => i === path[0] ?
-            {
-                ...c,
-                edges: [...c.edges, edge]
-            } :
-            c
-        );
-    }
-    else {
-        return existentialConditions.map((c, i) => i === path[0] ?
-            {
-                ...c,
-                existentialConditions: existentialsWithEdge(c.existentialConditions, edge, path.slice(1))
-            } :
-            c
-        );
-    }
-}
-
-export function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], exists: boolean, path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
-    if (path.length === 0) {
-        path = [existentialConditions.length];
-        existentialConditions = [
-            ...existentialConditions,
-            {
-                exists: exists,
-                inputs: [],
-                edges: [],
-                existentialConditions: []
-            }
-        ];
-        return { existentialConditions: existentialConditions, path };
-    }
-    else {
-        const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(existentialConditions[path[0]].existentialConditions, exists, path.slice(1));
-        existentialConditions = existentialConditions.map((c, i) => i === path[0] ?
-            {
-                exists: c.exists,
-                inputs: c.inputs,
-                edges: c.edges,
-                existentialConditions: newExistentialConditions
-            } :
-            c
-        );
-        path = [path[0], ...newPath];
-        return { existentialConditions: existentialConditions, path };
-    }
 }
 
 function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string) {
@@ -235,6 +164,19 @@ interface IdentifiedResults {
 interface ChildResults {
     parentFactIds: number[];
     results: ProjectedResult[];
+}
+
+export interface SpecificationLabel {
+    name: string;
+    index: number;
+    type: string;
+}
+
+export interface SpecificationSqlQuery {
+    sql: string;
+    parameters: (string | number | number[])[];
+    labels: SpecificationLabel[];
+    bookmark: string;
 }
 
 export interface SqlQueryTree {
@@ -543,21 +485,8 @@ class ResultDescriptionBuilder {
     ) { }
 
     buildDescription(start: FactReference[], specification: Specification): ResultDescription {
-        // Verify that the number of start facts equals the number of inputs
-        if (start.length !== specification.given.length) {
-            throw new Error(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
-        }
-        // Verify that the input type matches the start fact type
-        for (let i = 0; i < start.length; i++) {
-            if (start[i].type !== specification.given[i].type) {
-                throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
-            }
-        }
+        validateGiven(start, specification);
 
-        // The QueryDescription is an immutable data type.
-        // Initialize it with the inputs and facts.
-        // The DescriptionBuilder will branch at various points, and
-        // build on the current query description along each branch.
         return this.createResultDescription(QueryDescription.unsatisfiable, specification.given, start, specification.matches, specification.projection, {}, []);
     }
 
