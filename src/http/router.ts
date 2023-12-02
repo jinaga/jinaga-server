@@ -178,7 +178,7 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         const input = parseString(req.body);
-        if (!input || typeof(input) !== 'string') {
+        if (!input || typeof (input) !== 'string') {
             res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
@@ -241,7 +241,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         const input = parseString(req.body);
-        if (!input || typeof(input) !== 'string') {
+        if (!input || typeof (input) !== 'string') {
             res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
@@ -268,7 +268,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     };
 }
 
-function serializeUserIdentity(user: RequestUser | null) : UserIdentity | null {
+function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     if (!user) {
         return null;
     }
@@ -329,7 +329,7 @@ export class HttpRouter {
         };
     }
 
-    private async query(user: RequestUser | null, queryMessage: QueryMessage) : Promise<QueryResponse> {
+    private async query(user: RequestUser | null, queryMessage: QueryMessage): Promise<QueryResponse> {
         const userIdentity = serializeUserIdentity(user);
         const query = fromDescriptiveString(queryMessage.query);
         const result = await this.authorization.query(userIdentity, queryMessage.start, query);
@@ -338,7 +338,7 @@ export class HttpRouter {
         };
     }
 
-    private async load(user: RequestUser, loadMessage: LoadMessage) : Promise<LoadResponse> {
+    private async load(user: RequestUser, loadMessage: LoadMessage): Promise<LoadResponse> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
         return {
@@ -346,7 +346,7 @@ export class HttpRouter {
         };
     }
 
-    private async save(user: RequestUser | null, saveMessage: SaveMessage) : Promise<void> {
+    private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
         await this.authorization.save(userIdentity, saveMessage.facts);
     }
@@ -480,7 +480,7 @@ export class HttpRouter {
             return null;
         }
 
-        const bookmark = query["b"] as string ?? "";
+        let bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
         const start = feedDefinition.start.reduce((start, input) => {
@@ -490,7 +490,7 @@ export class HttpRouter {
 
         const stream = new FeedStream();
         Trace.info("Initial response");
-        await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+        bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
         const inverses = invertSpecification(feedDefinition.feed.specification);
         const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
             inverse.inverseSpecification,
@@ -499,7 +499,7 @@ export class HttpRouter {
                 const matchingResults = results.filter(pr =>
                     feedDefinition.givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
                 if (matchingResults.length != 0) {
-                    await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+                    bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
                 }
             }
         ));
@@ -522,6 +522,7 @@ export class HttpRouter {
             bookmark: results.bookmark
         };
         stream.feed(response);
+        return results.bookmark;
     }
 
     private async onResult(givenHash: string, inverse: SpecificationInverse, results: ProjectedResult[]): Promise<void> {
@@ -557,7 +558,7 @@ export class HttpRouter {
         }
     }
 
-    private selectStart(specification: Specification, declaration: Declaration) : FactReference[] {
+    private selectStart(specification: Specification, declaration: Declaration): FactReference[] {
         // Select starting facts that match the inputs
         return specification.given.map(input => {
             const declaredFact = declaration.find(d => d.name === input.name);
