@@ -1,5 +1,6 @@
-import { Label } from "jinaga";
-import { existentialsWithInput, existentialsWithEdge, existentialsWithNewCondition } from "./specification-result-sql";
+import { FactReference, Label, Match, PathCondition, Specification } from "jinaga";
+import { FactTypeMap, RoleMap, ensureGetFactTypeId, getFactTypeId, getRoleId } from "./maps";
+import { existentialsWithEdge, existentialsWithInput, existentialsWithNewCondition } from "./specification-result-sql";
 
 interface SpecificationLabel {
     name: string;
@@ -210,5 +211,167 @@ export class QueryDescription {
 
     outputLength(): number {
         return this.inputs.length + this.outputs.length;
+    }
+}
+
+export type FactByLabel = {
+    [label: string]: FactDescription;
+};
+
+export class QueryDescriptionBuider {
+    constructor(
+        private factTypes: FactTypeMap,
+        private roleMap: RoleMap
+    ) { }
+
+    public addEdges(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
+        for (const match of matches) {
+            for (const condition of match.conditions) {
+                if (condition.type === "path") {
+                    ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, given, start, knownFacts, path, match.unknown, "", condition));
+                }
+                else if (condition.type === "existential") {
+                    // Apply the where clause and continue with the tuple where it is true.
+                    // The path describes which not-exists condition we are currently building on.
+                    // Because the path is not empty, labeled facts will be included in the output.
+                    const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, path);
+                    const { queryDescription: queryDescriptionConditional } = this.addEdges(queryDescriptionWithExistential, given, start, knownFacts, conditionalPath, condition.matches);
+
+                    // If the negative existential condition is not satisfiable, then
+                    // that means that the condition will always be true.
+                    // We can therefore skip the branch for the negative existential condition.
+                    if (queryDescriptionConditional.isSatisfiable()) {
+                        queryDescription = queryDescriptionConditional;
+                    }
+                }
+                if (!queryDescription.isSatisfiable()) {
+                    break;
+                }
+            }
+            if (!queryDescription.isSatisfiable()) {
+                break;
+            }
+        }
+        return {
+            queryDescription,
+            knownFacts
+        };
+    }
+
+    private addPathCondition(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
+        // If no input parameter has been allocated, allocate one now.
+        if (!knownFacts.hasOwnProperty(condition.labelRight)) {
+            const givenIndex = given.findIndex(given => given.name === condition.labelRight);
+            if (givenIndex < 0) {
+                throw new Error(`No input parameter found for label ${condition.labelRight}`);
+            }
+            const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
+                given[givenIndex],
+                ensureGetFactTypeId(this.factTypes, start[givenIndex].type),
+                start[givenIndex].hash,
+                path
+            );
+            queryDescription = newQueryDescription;
+            knownFacts = {
+                ...knownFacts,
+                [condition.labelRight]: factDescription
+            };
+        }
+
+        // Determine whether we have already written the output.
+        const knownFact = knownFacts[unknown.name];
+        const roleCount = condition.rolesLeft.length + condition.rolesRight.length;
+
+        // Walk up the right-hand side.
+        // This generates predecessor joins from a given or prior label.
+        let fact = knownFacts[condition.labelRight];
+        if (!fact) {
+            throw new Error(`Label ${condition.labelRight} not found. Known labels: ${Object.keys(knownFacts).join(", ")}`);
+        }
+        let type = fact.type;
+        let factIndex = fact.factIndex;
+        for (const [i, role] of condition.rolesRight.entries()) {
+            // If the type or role is not known, then no facts matching the condition can
+            // exist. The query is unsatisfiable.
+            const typeId = getFactTypeId(this.factTypes, type);
+            if (!typeId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+            const roleId = getRoleId(this.roleMap, typeId, role.name);
+            if (!roleId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+
+            const { query: queryWithParameter, parameterIndex: roleParameter } = queryDescription.withParameter(roleId);
+            if (i === roleCount - 1 && knownFact) {
+                // If we have already written the output, we can use the fact index.
+                queryDescription = queryWithParameter.withEdge(knownFact.factIndex, factIndex, roleParameter, path);
+                factIndex = knownFact.factIndex;
+            }
+            else {
+                // If we have not written the fact, we need to write it now.
+                const { query, factIndex: predecessorFactIndex } = queryWithParameter.withFact(role.predecessorType);
+                queryDescription = query.withEdge(predecessorFactIndex, factIndex, roleParameter, path);
+                factIndex = predecessorFactIndex;
+            }
+            type = role.predecessorType;
+        }
+
+        const rightType = type;
+
+        // Walk up the left-hand side.
+        // We will need to reverse this walk to generate successor joins.
+        type = unknown.type;
+        const newEdges: {
+            roleId: number;
+            declaringType: string;
+        }[] = [];
+        for (const role of condition.rolesLeft) {
+            // If the type or role is not known, then no facts matching the condition can
+            // exist. The query is unsatisfiable.
+            const typeId = getFactTypeId(this.factTypes, type);
+            if (!typeId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+            const roleId = getRoleId(this.roleMap, typeId, role.name);
+            if (!roleId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
+
+            newEdges.push({
+                roleId,
+                declaringType: type
+            });
+            type = role.predecessorType;
+        }
+
+        if (type !== rightType) {
+            throw new Error(`Type mismatch: ${type} is compared to ${rightType}`);
+        }
+
+        newEdges.reverse().forEach(({ roleId, declaringType }, i) => {
+            const { query: queryWithParameter, parameterIndex: roleParameter } = queryDescription.withParameter(roleId);
+            if (condition.rolesRight.length + i === roleCount - 1 && knownFact) {
+                queryDescription = queryWithParameter.withEdge(factIndex, knownFact.factIndex, roleParameter, path);
+                factIndex = knownFact.factIndex;
+            }
+            else {
+                const { query: queryWithFact, factIndex: successorFactIndex } = queryWithParameter.withFact(declaringType);
+                queryDescription = queryWithFact.withEdge(factIndex, successorFactIndex, roleParameter, path);
+                factIndex = successorFactIndex;
+            }
+        });
+
+        // If we have not captured the known fact, add it now.
+        if (!knownFact) {
+            knownFacts = { ...knownFacts, [unknown.name]: { factIndex, type: unknown.type } };
+            // If we have not written the output, write it now.
+            // Only write the output if we are not inside of an existential condition.
+            // Use the prefix, which will be set for projections.
+            if (path.length === 0) {
+                queryDescription = queryDescription.withOutput(prefix + unknown.name, unknown.type, factIndex);
+            }
+        }
+        return { queryDescription, knownFacts };
     }
 }
