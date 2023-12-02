@@ -1,11 +1,16 @@
 import {
+    AuthenticationNoOp,
     AuthorizationRules,
     dehydrateFact,
     ensure,
+    FactManager,
     FactRecord,
     hydrate,
     Jinaga as j,
-    MemoryStore
+    MemoryStore,
+    NetworkNoOp,
+    ObservableSource,
+    PassThroughFork
 } from "jinaga";
 
 import { AuthorizationKeystore } from "../../src/authorization/authorization-keystore";
@@ -160,6 +165,11 @@ function givenStorage() {
 function givenAuthorizationWithStorage(storage: MemoryStore) {
     const keystore = new MemoryKeystore();
     keystore.getOrCreateUserFact(givenMockUserIdentity());
+    const authentication = new AuthenticationNoOp();
+    const fork = new PassThroughFork(storage);
+    const observableSource = new ObservableSource(storage);
+    const network = new NetworkNoOp();
+    const factManager = new FactManager(authentication, fork, observableSource, storage, network);
     const authorizationRules = new AuthorizationRules(undefined)
         .any('Hashtag')
         .no('Jinaga.User')
@@ -167,7 +177,7 @@ function givenAuthorizationWithStorage(storage: MemoryStore) {
         .type('Like', j.for(likeUser))
         .type('Delete', j.for(deleteSender))
         ;
-    return new AuthorizationKeystore(storage, keystore, authorizationRules, null);
+    return new AuthorizationKeystore(factManager, storage, keystore, authorizationRules, null);
 }
 
 function givenOtherUser() {
