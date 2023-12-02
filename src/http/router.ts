@@ -18,7 +18,6 @@ import {
     ReferencesByName,
     SaveMessage,
     Specification,
-    SpecificationInverse,
     SpecificationParser,
     Trace,
     UserIdentity,
@@ -33,7 +32,6 @@ import {
 } from "jinaga";
 
 import { FeedCache, FeedDefinition } from "./feed-cache";
-import { FeedStream } from "./feed-stream";
 import { Stream } from "./stream";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
@@ -488,7 +486,7 @@ export class HttpRouter {
             return start;
         }, [] as FactReference[]);
 
-        const stream = new FeedStream();
+        const stream = new Stream<FeedResponse>();
         Trace.info("Initial response");
         bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
         const inverses = invertSpecification(feedDefinition.feed.specification);
@@ -512,7 +510,7 @@ export class HttpRouter {
         return stream;
     }
 
-    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedDefinition, start: FactReference[], bookmark: string, stream: FeedStream, skipIfEmpty = false): Promise<string> {
+    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedDefinition, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) => self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
