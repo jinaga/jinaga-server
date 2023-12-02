@@ -2,39 +2,39 @@ import { Handler, Router } from "express";
 import {
     Authorization,
     Declaration,
+    FactManager,
     FactRecord,
     FactReference,
     Feed,
     FeedResponse,
     FeedsResponse,
     Forbidden,
-    invertSpecification,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
     ProjectedResult,
     QueryMessage,
     QueryResponse,
+    ReferencesByName,
     SaveMessage,
     Specification,
+    SpecificationInverse,
     SpecificationParser,
     Trace,
     UserIdentity,
     buildFeeds,
     computeObjectHash,
+    computeTupleSubsetHash,
     fromDescriptiveString,
+    invertSpecification,
     parseLoadMessage,
     parseQueryMessage,
-    parseSaveMessage,
-    FactManager,
-    computeTupleSubsetHash,
-    ReferencesByName,
+    parseSaveMessage
 } from "jinaga";
 
 import { FeedCache, FeedDefinition } from "./feed-cache";
-import { Stream } from "./stream";
 import { FeedStream } from "./feed-stream";
-import { SpecificationInverse } from "jinaga/dist/specification/inverse";
+import { Stream } from "./stream";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
