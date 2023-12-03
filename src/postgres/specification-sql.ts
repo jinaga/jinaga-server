@@ -165,16 +165,27 @@ function parseBookmark(bookmark: string): number[] {
 export function sqlFromSpecification(start: FactReference[], schema: string, bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
     validateGiven(start, specification);
 
+    const labeledStart = start.map((s, index) => ({
+        name: specification.given[index].name,
+        reference: s
+    })).reduce((map, s) => {
+        map.set(s.name, s.reference);
+        return map;
+    }, new Map<string, FactReference>());
+
     const feeds = buildFeeds(specification);
     const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
     const feedAndBookmark = feeds.map((feed, index) => ({
         feed,
         bookmark: bookmarks[index]
     }));
-    const queryDescriptionsAndBookmarks = feedAndBookmark.map(fb => ({
-        queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed.specification, start),
-        bookmark: fb.bookmark
-    }));
+    const queryDescriptionsAndBookmarks = feedAndBookmark.map(fb => {
+        const feedStart = fb.feed.specification.given.map(s => labeledStart.get(s.name)!);
+        return {
+            queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed.specification, feedStart),
+            bookmark: fb.bookmark
+        };
+    });
     const satisfiableQueryDescriptionsAndBookmarks = queryDescriptionsAndBookmarks.filter(qb =>
         qb.queryDescription.isSatisfiable());
     const sqlQueries = satisfiableQueryDescriptionsAndBookmarks.map(qdb =>
