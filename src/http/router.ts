@@ -5,7 +5,8 @@ import {
     FactManager,
     FactRecord,
     FactReference,
-    Feed,
+    FeedCache,
+    FeedObject,
     FeedResponse,
     FeedsResponse,
     Forbidden,
@@ -31,7 +32,6 @@ import {
     parseSaveMessage
 } from "jinaga";
 
-import { FeedCache, FeedDefinition } from "./feed-cache";
 import { Stream } from "./stream";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
@@ -400,40 +400,21 @@ export class HttpRouter {
                 throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
             }
         }
+        
+        const namedStart = specification.given.reduce((map, label, index) => ({
+            ...map,
+            [label.name]: start[index]
+        }), {} as ReferencesByName);
 
         // Verify that I can distribute all feeds to the user.
         const feeds = buildFeeds(specification);
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.verifyDistribution(userIdentity, feeds, start);
+        await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
 
-        const tuple = specification.given.reduce((tuple, label, index) => ({
-            ...tuple,
-            [label.name]: start[index]
-        }), {} as ReferencesByName);
-        const givenHash = computeObjectHash(tuple);
-
-        const feedDefinitionsByHash = feeds.map(feed => {
-            const indexedStart = feed.inputs.map(input => ({
-                factReference: start[input.inputIndex],
-                index: input.inputIndex
-            }));
-            const feedDefinition: FeedDefinition = {
-                givenHash,
-                start: indexedStart,
-                feed
-            };
-            return {
-                hash: urlSafeHash(feed),
-                feedDefinition
-            };
-        });
-        // Store all feeds in the cache.
-        for (const d of feedDefinitionsByHash) {
-            await this.feedCache.storeFeed(d.hash, d.feedDefinition);
-        }
+        const feedHashes = this.feedCache.addFeeds(feeds, namedStart);
 
         return {
-            feeds: feedDefinitionsByHash.map(f => f.hash)
+            feeds: feedHashes
         }
     }
 
@@ -451,10 +432,7 @@ export class HttpRouter {
         const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.start.reduce((start, input) => {
-            start[input.index] = input.factReference;
-            return start;
-        }, [] as FactReference[]);
+        const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
@@ -481,21 +459,19 @@ export class HttpRouter {
         let bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.start.reduce((start, input) => {
-            start[input.index] = input.factReference;
-            return start;
-        }, [] as FactReference[]);
+        const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
+        const givenHash = computeObjectHash(feedDefinition.namedStart);
 
         const stream = new Stream<FeedResponse>();
         Trace.info("Initial response");
         bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
-        const inverses = invertSpecification(feedDefinition.feed.specification);
+        const inverses = invertSpecification(feedDefinition.feed);
         const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
             inverse.inverseSpecification,
             async (results) => {
                 // Filter out results that do not match the given.
                 const matchingResults = results.filter(pr =>
-                    feedDefinition.givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
+                    givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
                 if (matchingResults.length != 0) {
                     bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
                 }
@@ -510,7 +486,7 @@ export class HttpRouter {
         return stream;
     }
 
-    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedDefinition, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
+    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) => self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
@@ -566,11 +542,6 @@ function parseString(input: any): string {
         throw new Error("Expected a string. Check the content type of the request.");
     }
     return input;
-}
-
-function urlSafeHash(feed: Feed): string {
-    const base64 = computeObjectHash(feed);
-    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 function extractResults(obj: any): any {

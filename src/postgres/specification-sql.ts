@@ -1,7 +1,6 @@
 import {
     buildFeeds,
     FactReference,
-    Feed,
     Specification,
     validateGiven
 } from "jinaga";
@@ -180,9 +179,9 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
         bookmark: bookmarks[index]
     }));
     const queryDescriptionsAndBookmarks = feedAndBookmark.map(fb => {
-        const feedStart = fb.feed.specification.given.map(s => labeledStart.get(s.name)!);
+        const feedStart = fb.feed.given.map(s => labeledStart.get(s.name)!);
         return {
-            queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed.specification, feedStart),
+            queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed, feedStart),
             bookmark: fb.bookmark
         };
     });
@@ -193,9 +192,9 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
     return sqlQueries;
 }
 
-export function sqlFromFeed(feed: Feed, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
+export function sqlFromFeed(feed: Specification, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
     const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
-    const queryDescription = buildQueryDescription(queryDescriptionBuilder, feed.specification, start);
+    const queryDescription = buildQueryDescription(queryDescriptionBuilder, feed, start);
     if (!queryDescription.isSatisfiable()) {
         return null;
     }

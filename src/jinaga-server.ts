@@ -6,6 +6,7 @@ import {
     AuthorizationRules,
     DistributionRules,
     FactManager,
+    FeedCache,
     Jinaga,
     MemoryStore,
     Model,
@@ -25,7 +26,6 @@ import { AuthenticationSession } from "./authentication/authentication-session";
 import { AuthorizationKeystore } from "./authorization/authorization-keystore";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
-import { MemoryFeedCache } from "./memory/memory-feed-cache";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
 import { PostgresStore } from "./postgres/postgres-store";
 
@@ -62,7 +62,7 @@ export class JinagaServer {
         const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const distributionRules = config.distribution ? config.distribution(new DistributionRules([])) : null;
-        const feedCache = new MemoryFeedCache();
+        const feedCache = new FeedCache();
         const authentication = createAuthentication(store, keystore, authorizationRules);
         const network = new NetworkNoOp();
         const factManager = new FactManager(authentication, fork, source, store, network);

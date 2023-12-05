@@ -9,9 +9,9 @@ import {
     FactManager,
     FactRecord,
     FactReference,
-    Feed,
     Forbidden,
     Query,
+    ReferencesByName,
     Specification,
     Storage,
     UserIdentity,
@@ -20,7 +20,6 @@ import {
 } from "jinaga";
 
 import { Keystore } from "../keystore";
-import { distinct } from "../util/fn";
 import { DistributedFactCache } from "./distributed-fact-cache";
 
 export class AuthorizationKeystore implements Authorization {
@@ -62,9 +61,13 @@ export class AuthorizationKeystore implements Authorization {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
+            const namedStart = specification.given.reduce((map, label, index) => ({
+                ...map,
+                [label.name]: start[index]
+            }), {} as ReferencesByName);
             // Break the specification into feeds and check distribution.
             const feeds = buildFeeds(specification);
-            const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
+            const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, namedStart, userReference);
             if (canDistribute.type === "failure") {
                 throw new Forbidden(canDistribute.reason);
             }
@@ -72,16 +75,20 @@ export class AuthorizationKeystore implements Authorization {
         return await this.factManager.read(start, specification);
     }
 
-    async feed(userIdentity: UserIdentity | null, feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
+    async feed(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
         if (this.distributionEngine) {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const canDistribute = await this.distributionEngine.canDistributeToAll([feed], start, userReference);
+            const namedStart = specification.given.reduce((map, label, index) => ({
+                ...map,
+                [label.name]: start[index]
+            }), {} as ReferencesByName);
+            const canDistribute = await this.distributionEngine.canDistributeToAll([specification], namedStart, userReference);
             if (canDistribute.type === "failure") {
                 throw new Forbidden(canDistribute.reason);
             }
-            const factFeed = await this.store.feed(feed, start, bookmark);
+            const factFeed = await this.store.feed(specification, start, bookmark);
             const factReferences = factFeed.tuples
                 .flatMap(tuple => tuple.facts)
                 .filter((value, index, self) => self.findIndex(factReferenceEquals(value)) === index);
@@ -89,7 +96,7 @@ export class AuthorizationKeystore implements Authorization {
             return factFeed;
         }
         else {
-            return await this.store.feed(feed, start, bookmark);
+            return await this.store.feed(specification, start, bookmark);
         }
     }
 
@@ -125,7 +132,7 @@ export class AuthorizationKeystore implements Authorization {
         }
     }
 
-    async verifyDistribution(userIdentity: UserIdentity | null, feeds: Feed[], start: FactReference[]): Promise<void> {
+    async verifyDistribution(userIdentity: UserIdentity | null, feeds: Specification[], namedStart: ReferencesByName): Promise<void> {
         if (!this.distributionEngine) {
             return;
         }
@@ -133,7 +140,7 @@ export class AuthorizationKeystore implements Authorization {
         const userReference: FactReference | null = userIdentity
             ? await this.keystore.getUserFact(userIdentity)
             : null;
-        const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
+        const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, namedStart, userReference);
         if (canDistribute.type === "failure") {
             throw new Forbidden(canDistribute.reason);
         }
