@@ -9,11 +9,8 @@ import {
     FactReference,
     factReferenceEquals,
     FactTuple,
-    Feed,
     getAllFactTypes,
-    getAllFactTypesFromFeed,
     getAllRoles,
-    getAllRolesFromFeed,
     Join,
     PredecessorCollection,
     ProjectedResult,
@@ -261,7 +258,7 @@ export class PostgresStore implements Storage {
         return composer.compose(resultSets, factRecords);
     }
 
-    async feed(feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
+    async feed(feed: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
         const factTypes: FactTypeMap = await this.loadFactTypesFromFeed(feed);
         const roleMap: RoleMap = await this.loadRolesFromFeed(feed, factTypes);
         const sql = sqlFromFeed(feed, start, this.schema, bookmark, 100, factTypes, roleMap);
@@ -298,9 +295,9 @@ export class PostgresStore implements Storage {
         return factTypes;
     }
 
-    async loadFactTypesFromFeed(feed: Feed): Promise<FactTypeMap> {
+    async loadFactTypesFromFeed(feed: Specification): Promise<FactTypeMap> {
         const factTypes = this.factTypeMap;
-        const unknownFactTypes = getAllFactTypesFromFeed(feed)
+        const unknownFactTypes = getAllFactTypes(feed)
             .filter(factType => !factTypes.has(factType));
         if (unknownFactTypes.length > 0) {
             const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
@@ -363,9 +360,9 @@ export class PostgresStore implements Storage {
         return roleMap;
     }
 
-    async loadRolesFromFeed(feed: Feed, factTypes: FactTypeMap): Promise<RoleMap> {
+    async loadRolesFromFeed(feed: Specification, factTypes: FactTypeMap): Promise<RoleMap> {
         const roleMap = this.roleMap;
-        const unknownRoles = getAllRolesFromFeed(feed)
+        const unknownRoles = getAllRoles(feed)
             .map(r => ({
                 successor_type_id: getFactTypeId(factTypes, r.successorType)!,
                 role: r.name

@@ -6,11 +6,12 @@ import {
     DistributionRules,
     FactEnvelope,
     FactFeed,
+    FactManager,
     FactRecord,
     FactReference,
-    Feed,
     Forbidden,
     Query,
+    ReferencesByName,
     Specification,
     Storage,
     UserIdentity,
@@ -19,7 +20,6 @@ import {
 } from "jinaga";
 
 import { Keystore } from "../keystore";
-import { distinct } from "../util/fn";
 import { DistributedFactCache } from "./distributed-fact-cache";
 
 export class AuthorizationKeystore implements Authorization {
@@ -28,6 +28,7 @@ export class AuthorizationKeystore implements Authorization {
     private distributedFacts: DistributedFactCache = new DistributedFactCache();
 
     constructor(
+        private factManager: FactManager,
         private store: Storage,
         private keystore: Keystore,
         authorizationRules: AuthorizationRules | null,
@@ -52,7 +53,7 @@ export class AuthorizationKeystore implements Authorization {
     }
 
     query(userIdentity: UserIdentity | null, start: FactReference, query: Query) {
-        return this.store.query(start, query);
+        return this.factManager.query(start, query);
     }
 
     async read(userIdentity: UserIdentity | null, start: FactReference[], specification: Specification) {
@@ -60,26 +61,34 @@ export class AuthorizationKeystore implements Authorization {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
+            const namedStart = specification.given.reduce((map, label, index) => ({
+                ...map,
+                [label.name]: start[index]
+            }), {} as ReferencesByName);
             // Break the specification into feeds and check distribution.
             const feeds = buildFeeds(specification);
-            const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
+            const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, namedStart, userReference);
             if (canDistribute.type === "failure") {
                 throw new Forbidden(canDistribute.reason);
             }
         }
-        return await this.store.read(start, specification);
+        return await this.factManager.read(start, specification);
     }
 
-    async feed(userIdentity: UserIdentity | null, feed: Feed, start: FactReference[], bookmark: string): Promise<FactFeed> {
+    async feed(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
         if (this.distributionEngine) {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const canDistribute = await this.distributionEngine.canDistributeToAll([feed], start, userReference);
+            const namedStart = specification.given.reduce((map, label, index) => ({
+                ...map,
+                [label.name]: start[index]
+            }), {} as ReferencesByName);
+            const canDistribute = await this.distributionEngine.canDistributeToAll([specification], namedStart, userReference);
             if (canDistribute.type === "failure") {
                 throw new Forbidden(canDistribute.reason);
             }
-            const factFeed = await this.store.feed(feed, start, bookmark);
+            const factFeed = await this.store.feed(specification, start, bookmark);
             const factReferences = factFeed.tuples
                 .flatMap(tuple => tuple.facts)
                 .filter((value, index, self) => self.findIndex(factReferenceEquals(value)) === index);
@@ -87,7 +96,7 @@ export class AuthorizationKeystore implements Authorization {
             return factFeed;
         }
         else {
-            return await this.store.feed(feed, start, bookmark);
+            return await this.store.feed(specification, start, bookmark);
         }
     }
 
@@ -99,12 +108,12 @@ export class AuthorizationKeystore implements Authorization {
                 throw new Forbidden("Unauthorized");
             }
         }
-        return await this.store.load(references);
+        return await this.factManager.load(references);
     }
 
     async save(userIdentity: UserIdentity | null, facts: FactRecord[]) {
         if (!this.authorizationEngine) {
-            const envelopes = await this.store.save(facts.map(fact => ({
+            const envelopes = await this.factManager.save(facts.map(fact => ({
                 fact,
                 signatures: []
             })));
@@ -115,7 +124,7 @@ export class AuthorizationKeystore implements Authorization {
         const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
         if (userIdentity) {
             const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
-            const envelopes = await this.store.save(signedFacts);
+            const envelopes = await this.factManager.save(signedFacts);
             return envelopes.map(envelope => envelope.fact);
         }
         else {
@@ -123,7 +132,7 @@ export class AuthorizationKeystore implements Authorization {
         }
     }
 
-    async verifyDistribution(userIdentity: UserIdentity | null, feeds: Feed[], start: FactReference[]): Promise<void> {
+    async verifyDistribution(userIdentity: UserIdentity | null, feeds: Specification[], namedStart: ReferencesByName): Promise<void> {
         if (!this.distributionEngine) {
             return;
         }
@@ -131,7 +140,7 @@ export class AuthorizationKeystore implements Authorization {
         const userReference: FactReference | null = userIdentity
             ? await this.keystore.getUserFact(userIdentity)
             : null;
-        const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, start, userReference);
+        const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, namedStart, userReference);
         if (canDistribute.type === "failure") {
             throw new Forbidden(canDistribute.reason);
         }

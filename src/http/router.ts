@@ -2,9 +2,11 @@ import { Handler, Router } from "express";
 import {
     Authorization,
     Declaration,
+    FactManager,
     FactRecord,
     FactReference,
-    Feed,
+    FeedCache,
+    FeedObject,
     FeedResponse,
     FeedsResponse,
     Forbidden,
@@ -14,6 +16,7 @@ import {
     ProjectedResult,
     QueryMessage,
     QueryResponse,
+    ReferencesByName,
     SaveMessage,
     Specification,
     SpecificationParser,
@@ -21,42 +24,91 @@ import {
     UserIdentity,
     buildFeeds,
     computeObjectHash,
+    computeTupleSubsetHash,
     fromDescriptiveString,
+    invertSpecification,
     parseLoadMessage,
     parseQueryMessage,
-    parseSaveMessage,
+    parseSaveMessage
 } from "jinaga";
 
-import { FeedCache, FeedDefinition } from "./feed-cache";
+import { Stream } from "./stream";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
-function get<U>(method: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<U>)): Handler {
+function getOrStream<U>(
+    getMethod: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<U | null>),
+    streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<Stream<U> | null>)
+): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        method(user, req.params, req.query)
-            .then(response => {
-                if (!response) {
-                    res.sendStatus(404);
+        const accept = req.headers["accept"];
+        if (accept && accept.indexOf("application/x-jinaga-feed-stream") >= 0) {
+            streamMethod(user, req.params, req.query)
+                .then(response => {
+                    if (!response) {
+                        res.sendStatus(404);
+                        next();
+                    }
+                    else {
+                        res.type("application/x-jinaga-feed-stream");
+                        res.set("Connection", "keep-alive");
+                        res.set("Cache-Control", "no-cache");
+                        res.set("Access-Control-Allow-Origin", "*");
+                        res.flushHeaders();
+                        req.on("close", () => {
+                            response.close();
+                        });
+                        const timeout = setTimeout(() => {
+                            response.close();
+                        }, 5 * 60 * 1000);
+                        response
+                            .next(data => {
+                                res.write(JSON.stringify(data) + "\n\n");
+                            })
+                            .done(() => {
+                                clearTimeout(timeout);
+                                next();
+                            });
+                    }
+                })
+                .catch(error => {
+                    if (error instanceof Forbidden) {
+                        res.type("text");
+                        res.status(403).send(error.message);
+                    }
+                    else {
+                        Trace.error(error);
+                        res.status(500).send(error.message);
+                    }
                     next();
-                }
-                else {
-                    res.type("json");
-                    res.send(JSON.stringify(response));
+                });
+        }
+        else {
+            getMethod(user, req.params, req.query)
+                .then(response => {
+                    if (!response) {
+                        res.sendStatus(404);
+                        next();
+                    }
+                    else {
+                        res.type("json");
+                        res.send(JSON.stringify(response));
+                        next();
+                    }
+                })
+                .catch(error => {
+                    if (error instanceof Forbidden) {
+                        res.type("text");
+                        res.status(403).send(error.message);
+                    }
+                    else {
+                        Trace.error(error);
+                        res.status(500).send(error.message);
+                    }
                     next();
-                }
-            })
-            .catch(error => {
-                if (error instanceof Forbidden) {
-                    res.type("text");
-                    res.status(403).send(error.message);
-                }
-                else {
-                    Trace.error(error);
-                    res.status(500).send(error.message);
-                }
-                next();
-            });
+                });
+        }
     };
 }
 
@@ -124,7 +176,7 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         const input = parseString(req.body);
-        if (!input || typeof(input) !== 'string') {
+        if (!input || typeof (input) !== 'string') {
             res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
@@ -187,7 +239,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     return (req, res, next) => {
         const user = <RequestUser>req.user;
         const input = parseString(req.body);
-        if (!input || typeof(input) !== 'string') {
+        if (!input || typeof (input) !== 'string') {
             res.type("text");
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
@@ -214,7 +266,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     };
 }
 
-function serializeUserIdentity(user: RequestUser | null) : UserIdentity | null {
+function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     if (!user) {
         return null;
     }
@@ -233,7 +285,7 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
+    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
         if (backwardCompatible) {
@@ -257,7 +309,9 @@ export class HttpRouter {
             parseString,
             (user, input: string) => this.feeds(user, input)
         ));
-        router.get('/feeds/:hash', get((user, params, query) => this.feed(user, params, query)));
+        router.get('/feeds/:hash', getOrStream<FeedResponse>(
+            (user, params, query) => this.feed(user, params, query),
+            (user, params, query) => this.streamFeed(user, params, query)));
 
         this.handler = router;
     }
@@ -273,7 +327,7 @@ export class HttpRouter {
         };
     }
 
-    private async query(user: RequestUser | null, queryMessage: QueryMessage) : Promise<QueryResponse> {
+    private async query(user: RequestUser | null, queryMessage: QueryMessage): Promise<QueryResponse> {
         const userIdentity = serializeUserIdentity(user);
         const query = fromDescriptiveString(queryMessage.query);
         const result = await this.authorization.query(userIdentity, queryMessage.start, query);
@@ -282,7 +336,7 @@ export class HttpRouter {
         };
     }
 
-    private async load(user: RequestUser, loadMessage: LoadMessage) : Promise<LoadResponse> {
+    private async load(user: RequestUser, loadMessage: LoadMessage): Promise<LoadResponse> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
         return {
@@ -290,7 +344,7 @@ export class HttpRouter {
         };
     }
 
-    private async save(user: RequestUser | null, saveMessage: SaveMessage) : Promise<void> {
+    private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
         await this.authorization.save(userIdentity, saveMessage.facts);
     }
@@ -346,33 +400,21 @@ export class HttpRouter {
                 throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
             }
         }
+        
+        const namedStart = specification.given.reduce((map, label, index) => ({
+            ...map,
+            [label.name]: start[index]
+        }), {} as ReferencesByName);
 
         // Verify that I can distribute all feeds to the user.
         const feeds = buildFeeds(specification);
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.verifyDistribution(userIdentity, feeds, start);
+        await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
 
-        const feedDefinitionsByHash = feeds.map(feed => {
-            const indexedStart = feed.inputs.map(input => ({
-                factReference: start[input.inputIndex],
-                index: input.inputIndex
-            }));
-            const feedDefinition: FeedDefinition = {
-                start: indexedStart,
-                feed
-            };
-            return {
-                hash: urlSafeHash(feed),
-                feedDefinition
-            };
-        });
-        // Store all feeds in the cache.
-        for (const d of feedDefinitionsByHash) {
-            await this.feedCache.storeFeed(d.hash, d.feedDefinition);
-        }
+        const feedHashes = this.feedCache.addFeeds(feeds, namedStart);
 
         return {
-            feeds: feedDefinitionsByHash.map(f => f.hash)
+            feeds: feedHashes
         }
     }
 
@@ -390,10 +432,7 @@ export class HttpRouter {
         const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.start.reduce((start, input) => {
-            start[input.index] = input.factReference;
-            return start;
-        }, [] as FactReference[]);
+        const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
         // Return distinct fact references from all the tuples.
         const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
@@ -404,6 +443,62 @@ export class HttpRouter {
             bookmark: results.bookmark
         };
         return response;
+    }
+
+    private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: ParsedQs): Promise<Stream<FeedResponse> | null> {
+        const feedHash = params["hash"];
+        if (!feedHash) {
+            return null;
+        }
+
+        const feedDefinition = await this.feedCache.getFeed(feedHash);
+        if (!feedDefinition) {
+            return null;
+        }
+
+        let bookmark = query["b"] as string ?? "";
+
+        const userIdentity = serializeUserIdentity(user);
+        const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
+        const givenHash = computeObjectHash(feedDefinition.namedStart);
+
+        const stream = new Stream<FeedResponse>();
+        Trace.info("Initial response");
+        bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+        const inverses = invertSpecification(feedDefinition.feed);
+        const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
+            inverse.inverseSpecification,
+            async (results) => {
+                // Filter out results that do not match the given.
+                const matchingResults = results.filter(pr =>
+                    givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
+                if (matchingResults.length != 0) {
+                    bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
+                }
+            }
+        ));
+        stream.done(() => {
+            Trace.info("Done");
+            for (const listener of listeners) {
+                this.factManager.removeSpecificationListener(listener);
+            }
+        });
+        return stream;
+    }
+
+    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
+        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+        // Return distinct fact references from all the tuples.
+        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) => self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+        );
+        if (!skipIfEmpty || references.length > 0) {
+            const response: FeedResponse = {
+                references,
+                bookmark: results.bookmark
+            };
+            stream.feed(response);
+        }
+        return results.bookmark;
     }
 
     private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {
@@ -430,7 +525,7 @@ export class HttpRouter {
         }
     }
 
-    private selectStart(specification: Specification, declaration: Declaration) : FactReference[] {
+    private selectStart(specification: Specification, declaration: Declaration): FactReference[] {
         // Select starting facts that match the inputs
         return specification.given.map(input => {
             const declaredFact = declaration.find(d => d.name === input.name);
@@ -447,11 +542,6 @@ function parseString(input: any): string {
         throw new Error("Expected a string. Check the content type of the request.");
     }
     return input;
-}
-
-function urlSafeHash(feed: Feed): string {
-    const base64 = computeObjectHash(feed);
-    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 function extractResults(obj: any): any {

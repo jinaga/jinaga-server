@@ -1,15 +1,11 @@
 import {
     buildFeeds,
-    EdgeDescription as FeedEdgeDescription,
     FactReference,
-    Feed,
-    InputDescription as FeedInputDescription,
-    NotExistsConditionDescription as FeedNotExistsConditionDescription,
-    OutputDescription as FeedOutputDescription,
     Specification,
+    validateGiven
 } from "jinaga";
 
-import { FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "./maps";
+import { EdgeDescription, ExistentialConditionDescription, QueryDescription, QueryDescriptionBuider } from "./query-description";
 
 interface SpecificationLabel {
     type: string;
@@ -23,67 +19,40 @@ interface SpecificationSqlQuery {
     bookmark: string;
 };
 
-interface InputDescription {
-    factIndex: number;
-    factTypeParameter: number;
-    factHashParameter: number;
-}
-interface OutputDescription {
-    type: string;
-    factIndex: number;
-}
-interface EdgeDescription {
-    edgeIndex: number;
-    predecessorFactIndex: number;
-    successorFactIndex: number;
-    roleParameter: number;
-}
-interface NotExistsConditionDescription {
-    edges: EdgeDescription[];
-}
-class QueryDescription {
-    constructor(
-        private readonly inputs: InputDescription[],
-        private readonly parameters: (string | number)[],
-        private readonly outputs: OutputDescription[],
-        private readonly edges: EdgeDescription[],
-        private readonly notExistsConditions: NotExistsConditionDescription[] = []
-    ) {}
-
-    generateSqlQuery(schema: string, bookmark: string, limit: number): SpecificationSqlQuery {
-        const hashes = this.outputs
-            .map(output => `f${output.factIndex}.hash as hash${output.factIndex}`)
-            .join(", ");
-        const factIds = this.outputs
-            .map(output => `f${output.factIndex}.fact_id`)
-            .join(", ");
-        const firstEdge = this.edges[0];
-        const predecessorFact = this.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
-        const successorFact = this.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
-        const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
-        const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-        const joins: string[] = generateJoins(schema, this.edges, writtenFactIndexes);
-        const inputWhereClauses = this.inputs
-            .filter(input => input.factTypeParameter !== 0)
-            .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
-            .join(" AND ");
-        const notExistsWhereClauses = this.notExistsConditions
-            .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(schema, notExistsWhereClause, writtenFactIndexes)})`)
-            .join("");
-        const bookmarkParameter = this.parameters.length + 1;
-        const limitParameter = bookmarkParameter + 1;
-        const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
-        const bookmarkValue: number[] = parseBookmark(bookmark);
-        return {
-            sql,
-            parameters: [...this.parameters, bookmarkValue, limit],
-            labels: this.outputs.map(output => ({
-                type: output.type,
-                index: output.factIndex
-            })),
-            bookmark: "[]"
-        };
-    }
+function generateSqlQuery(queryDescription: QueryDescription, schema: string, bookmark: string, limit: number): SpecificationSqlQuery {
+    const hashes = queryDescription.outputs
+        .map(output => `f${output.factIndex}.hash as hash${output.factIndex}`)
+        .join(", ");
+    const factIds = queryDescription.outputs
+        .map(output => `f${output.factIndex}.fact_id`)
+        .join(", ");
+    const firstEdge = queryDescription.edges[0];
+    const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
+    const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
+    const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
+    const writtenFactIndexes = new Set<number>().add(firstFactIndex);
+    const joins: string[] = generateJoins(schema, queryDescription.edges, writtenFactIndexes);
+    const inputWhereClauses = queryDescription.inputs
+        .filter(input => input.factTypeParameter !== 0)
+        .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+        .join(" AND ");
+    const notExistsWhereClauses = (queryDescription.existentialConditions
+        .filter(c => c.exists === false))
+        .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(schema, notExistsWhereClause, writtenFactIndexes)})`)
+        .join("");
+    const bookmarkParameter = queryDescription.parameters.length + 1;
+    const limitParameter = bookmarkParameter + 1;
+    const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+    const bookmarkValue: number[] = parseBookmark(bookmark);
+    return {
+        sql,
+        parameters: [...queryDescription.parameters, bookmarkValue, limit],
+        labels: queryDescription.outputs.map(output => ({
+            type: output.type,
+            index: output.factIndex
+        })),
+        bookmark: "[]"
+    };
 }
 
 function generateJoins(schema: string, edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
@@ -130,7 +99,7 @@ function generateJoins(schema: string, edges: EdgeDescription[], writtenFactInde
     return joins;
 }
 
-function generateNotExistsWhereClause(schema: string, notExistsWhereClause: NotExistsConditionDescription, outerFactIndexes: Set<number>): string {
+function generateNotExistsWhereClause(schema: string, notExistsWhereClause: ExistentialConditionDescription, outerFactIndexes: Set<number>): string {
     const firstEdge = notExistsWhereClause.edges[0];
     const writtenFactIndexes = new Set<number>(outerFactIndexes);
     const firstJoin: string[] = [];
@@ -192,182 +161,52 @@ function parseBookmark(bookmark: string): number[] {
     }
 }
 
-class DescriptionBuilder {
-    constructor(
-        private factTypes: FactTypeMap,
-        private roleMap: RoleMap
-    ) { }
-
-    isSatisfiable(feed: Feed, edges: FeedEdgeDescription[]): boolean {
-        for (const edge of edges) {
-            const successor = feed.facts.find(f => f.factIndex === edge.successorFactIndex);
-            if (!successor) {
-                return false;
-            }
-
-            const predecessor = feed.facts.find(f => f.factIndex === edge.predecessorFactIndex);
-            if (!predecessor) {
-                return false;
-            }
-
-            const successorFactTypeId = getFactTypeId(this.factTypes, successor.factType);
-            if (!successorFactTypeId) {
-                return false;
-            }
-
-            if (!getRoleId(this.roleMap, successorFactTypeId, edge.roleName)) {
-                return false;
-            }
-
-            const predecessorFactTypeId = getFactTypeId(this.factTypes, predecessor.factType);
-            if (!predecessorFactTypeId) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    buildDescription(feed: Feed, start: FactReference[]): QueryDescription {
-        const parameters: (string | number)[] = [];
-        function addParameter(value: string | number) {
-            parameters.push(value);
-            return parameters.length;
-        }
-
-        // Allocate parameters for the inputs.
-        const inputs: InputDescription[] = feed.inputs.map(input =>
-            this.buildInputDescription(feed, input, start, addParameter)
-        );
-
-        // Allocate parameters for the edge roles.
-        const edges: EdgeDescription[] = feed.edges.map(edge =>
-            this.buildEdgeDescription(feed, edge, addParameter)
-        );
-
-        // Allocate parameters for the conditional roles.
-        const satisfiableNotExistsConditions = feed.notExistsConditions.filter(condition =>
-            this.isSatisfiable(feed, condition.edges)
-        );
-        const notExistsConditions: NotExistsConditionDescription[] = satisfiableNotExistsConditions.map(condition =>
-            this.buildNotExistsConditionDescription(feed, condition, addParameter)
-        );
-
-        const outputs: OutputDescription[] = feed.outputs.map(output =>
-            this.buildOutputDescription(feed, output)
-        );
-
-        return new QueryDescription(
-            inputs,
-            parameters,
-            outputs,
-            edges,
-            notExistsConditions
-        );
-    }
-
-    private buildInputDescription(feed: Feed, input: FeedInputDescription, start: FactReference[], addParameter: (value: string | number) => number): InputDescription {
-        const fact = feed.facts.find(f => f.factIndex === input.factIndex);
-        if (!fact) {
-            throw new Error(`Fact not found: ${input.factIndex}`);
-        }
-
-        const factTypeId = getFactTypeId(this.factTypes, fact.factType);
-        if (!factTypeId) {
-            throw new Error(`Fact type not found: ${fact.factType}`);
-        }
-
-        const factTypeParameter = addParameter(factTypeId);
-        const factHashParameter = addParameter(start[input.inputIndex].hash);
-        return {
-            factIndex: input.factIndex,
-            factTypeParameter,
-            factHashParameter
-        };
-    }
-
-    private buildEdgeDescription(feed: Feed, edge: FeedEdgeDescription, addParameter: (value: string | number) => number) {
-        const fact = feed.facts.find(f => f.factIndex === edge.successorFactIndex);
-        if (!fact) {
-            throw new Error(`Fact not found: ${edge.successorFactIndex}`);
-        }
-
-        const factTypeId = getFactTypeId(this.factTypes, fact.factType);
-        if (!factTypeId) {
-            throw new Error(`Fact type not found: ${fact.factType}`);
-        }
-
-        const roleId = getRoleId(this.roleMap, factTypeId, edge.roleName);
-        if (!roleId) {
-            throw new Error(`Role not found: ${fact.factType}.${edge.roleName}`);
-        }
-
-        const roleParameter = addParameter(roleId);
-        return <EdgeDescription>{
-            edgeIndex: edge.edgeIndex,
-            predecessorFactIndex: edge.predecessorFactIndex,
-            successorFactIndex: edge.successorFactIndex,
-            roleParameter
-        };
-    }
-
-    private buildOutputDescription(feed: Feed, output: FeedOutputDescription) {
-        const fact = feed.facts.find(f => f.factIndex === output.factIndex);
-        if (!fact) {
-            throw new Error(`Fact not found: ${output.factIndex}`);
-        }
-
-        return <OutputDescription>{
-            factIndex: output.factIndex,
-            type: fact.factType
-        };
-    }
-
-    private buildNotExistsConditionDescription(feed: Feed, condition: FeedNotExistsConditionDescription, addParameter: (value: string | number) => number): NotExistsConditionDescription {
-        const edges = condition.edges.map(edge =>
-            this.buildEdgeDescription(feed, edge, addParameter)
-        );
-
-        return {
-            edges
-        }
-    }
-}
-
 export function sqlFromSpecification(start: FactReference[], schema: string, bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
-    // Verify that the number of start facts equals the number of inputs
-    if (start.length !== specification.given.length) {
-        throw new Error(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
-    }
-    // Verify that the input type matches the start fact type
-    for (let i = 0; i < start.length; i++) {
-        if (start[i].type !== specification.given[i].type) {
-            throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
-        }
-    }
+    validateGiven(start, specification);
+
+    const labeledStart = start.map((s, index) => ({
+        name: specification.given[index].name,
+        reference: s
+    })).reduce((map, s) => {
+        map.set(s.name, s.reference);
+        return map;
+    }, new Map<string, FactReference>());
 
     const feeds = buildFeeds(specification);
-    const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
+    const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
     const feedAndBookmark = feeds.map((feed, index) => ({
         feed,
         bookmark: bookmarks[index]
     }));
-    const satisfiableFeedsAndBookmarks = feedAndBookmark.filter(fb =>
-        descriptionBuilder.isSatisfiable(fb.feed, fb.feed.edges));
-    const sqlQueries = satisfiableFeedsAndBookmarks.map(fb => {
-        const description = descriptionBuilder.buildDescription(fb.feed, start);
-        const sql = description.generateSqlQuery(schema, fb.bookmark, limit);
-        return sql;
+    const queryDescriptionsAndBookmarks = feedAndBookmark.map(fb => {
+        const feedStart = fb.feed.given.map(s => labeledStart.get(s.name)!);
+        return {
+            queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed, feedStart),
+            bookmark: fb.bookmark
+        };
     });
+    const satisfiableQueryDescriptionsAndBookmarks = queryDescriptionsAndBookmarks.filter(qb =>
+        qb.queryDescription.isSatisfiable());
+    const sqlQueries = satisfiableQueryDescriptionsAndBookmarks.map(qdb =>
+        generateSqlQuery(qdb.queryDescription, schema, qdb.bookmark, limit));
     return sqlQueries;
 }
 
-export function sqlFromFeed(feed: Feed, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
-    const descriptionBuilder = new DescriptionBuilder(factTypes, roleMap);
-    if (!descriptionBuilder.isSatisfiable(feed, feed.edges)) {
+export function sqlFromFeed(feed: Specification, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
+    const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
+    const queryDescription = buildQueryDescription(queryDescriptionBuilder, feed, start);
+    if (!queryDescription.isSatisfiable()) {
         return null;
     }
-    const description = descriptionBuilder.buildDescription(feed, start);
-    const sql = description.generateSqlQuery(schema, bookmark, limit);
+    const sql = generateSqlQuery(queryDescription, schema, bookmark, limit);
     return sql;
+}
+
+function buildQueryDescription(queryDescriptionBuilder: QueryDescriptionBuider, specification: Specification, start: FactReference[]): QueryDescription {
+    const { queryDescription } = queryDescriptionBuilder.addEdges(
+        QueryDescription.unsatisfiable,
+        specification.given,
+        start, {}, [],
+        specification.matches);
+    return queryDescription;
 }
