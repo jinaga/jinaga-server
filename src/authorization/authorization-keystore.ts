@@ -111,24 +111,50 @@ export class AuthorizationKeystore implements Authorization {
         return await this.factManager.load(references);
     }
 
-    async save(userIdentity: UserIdentity | null, facts: FactRecord[]) {
-        if (!this.authorizationEngine) {
-            const envelopes = await this.factManager.save(facts.map(fact => ({
-                fact,
-                signatures: []
-            })));
-            return envelopes.map(envelope => envelope.fact);
-        }
-
-        const userFact = userIdentity ? await this.keystore.getUserFact(userIdentity) : null;
-        const authorizedFacts = await this.authorizationEngine.authorizeFacts(facts, userFact);
-        if (userIdentity) {
-            const signedFacts = await this.keystore.signFacts(userIdentity, authorizedFacts);
-            const envelopes = await this.factManager.save(signedFacts);
-            return envelopes.map(envelope => envelope.fact);
+    async save(userIdentity: UserIdentity | null, envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
+        if (this.authorizationEngine) {
+            const userFact = userIdentity ? await this.keystore.getUserFact(userIdentity) : null;
+            const results = await this.authorizationEngine.authorizeFactsNew(envelopes, userFact);
+            const userKeys : string[] = (userFact && userFact.fields.hasOwnProperty("publicKey"))
+                ? [ userFact.fields.publicKey ]
+                : [];
+            const factsToSign = results
+                .filter(r => r.verdict === "Accept" && r.newPublicKeys.some(k => userKeys.includes(k)))
+                .map(r => r.fact);
+            const signedFacts = (userIdentity && factsToSign.length > 0)
+                ? await this.keystore.signFacts(userIdentity, factsToSign)
+                : [];
+            const authorizedEnvelopes: FactEnvelope[] = results.map(r => {
+                const isFact = factReferenceEquals(r.fact);
+                const envelope = envelopes.find(e => isFact(e.fact));
+                if (!envelope) {
+                    throw new Error("Fact not found in envelopes.");
+                }
+                if (r.verdict === "Accept") {
+                    const signedFact = signedFacts.find(f => isFact(f.fact));
+                    const userSignatures = signedFact
+                        ? signedFact.signatures
+                        : [];
+                    return {
+                        fact: r.fact,
+                        signatures: envelope.signatures
+                            .filter(s => r.newPublicKeys.includes(s.publicKey))
+                            .concat(userSignatures)
+                    };
+                }
+                else if (r.verdict === "Existing") {
+                    return envelope;
+                }
+                else {
+                    throw new Error("Unexpected verdict.");
+                }
+            });
+            const savedEnvelopes = await this.factManager.save(authorizedEnvelopes);
+            return savedEnvelopes;
         }
         else {
-            return authorizedFacts;
+            const savedEnvelopes = await this.factManager.save(envelopes);
+            return savedEnvelopes;
         }
     }
 
