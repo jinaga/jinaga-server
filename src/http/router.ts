@@ -346,7 +346,11 @@ export class HttpRouter {
 
     private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, saveMessage.facts);
+        await this.authorization.save(userIdentity, saveMessage.facts
+            .map(fact => ({
+                fact: fact,
+                signatures: []
+            })));
     }
 
     private async read(user: RequestUser | null, input: string): Promise<any[]> {
@@ -379,7 +383,11 @@ export class HttpRouter {
         }
 
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, factRecords);
+        await this.authorization.save(userIdentity, factRecords
+            .map(fact => ({
+                fact: fact,
+                signatures: []
+            })));
     }
 
     private async feeds(user: RequestUser | null, input: string): Promise<FeedsResponse> {

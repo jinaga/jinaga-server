@@ -7,7 +7,6 @@ import {
     FactEnvelope,
     FactFeed,
     FactManager,
-    FactRecord,
     FactReference,
     Forbidden,
     Query,
@@ -114,7 +113,7 @@ export class AuthorizationKeystore implements Authorization {
     async save(userIdentity: UserIdentity | null, envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         if (this.authorizationEngine) {
             const userFact = userIdentity ? await this.keystore.getUserFact(userIdentity) : null;
-            const results = await this.authorizationEngine.authorizeFactsNew(envelopes, userFact);
+            const results = await this.authorizationEngine.authorizeFacts(envelopes, userFact);
             const userKeys : string[] = (userFact && userFact.fields.hasOwnProperty("publicKey"))
                 ? [ userFact.fields.publicKey ]
                 : [];
