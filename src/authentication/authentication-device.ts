@@ -35,7 +35,7 @@ export class AuthenticationDevice implements Authentication {
         const deviceFact = await this.keystore.getOrCreateDeviceFact(this.localDeviceIdentity);
 
         if (this.authorizationEngine) {
-            const results = await this.authorizationEngine.authorizeFactsNew(envelopes, deviceFact);
+            const results = await this.authorizationEngine.authorizeFacts(envelopes, deviceFact);
             const authorizedEnvelopes: FactEnvelope[] = results.map(r => {
                 const isFact = factReferenceEquals(r.fact);
                 const envelope = envelopes.find(e => isFact(e.fact));

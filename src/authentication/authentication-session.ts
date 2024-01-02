@@ -43,7 +43,7 @@ export class AuthenticationSession implements Authentication {
         const userFact = await this.keystore.getUserFact(this.userIdentity);
 
         if (this.authorizationEngine) {
-            const results = await this.authorizationEngine.authorizeFactsNew(envelopes, userFact);
+            const results = await this.authorizationEngine.authorizeFacts(envelopes, userFact);
             const authorizedEnvelopes: FactEnvelope[] = results.map(r => {
                 const isFact = factReferenceEquals(r.fact);
                 const envelope = envelopes.find(e => isFact(e.fact));
