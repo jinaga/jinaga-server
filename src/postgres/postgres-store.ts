@@ -1,23 +1,16 @@
 import {
     canonicalPredecessors,
-    Direction,
-    ExistentialCondition,
     FactEnvelope,
     FactFeed,
-    FactPath,
     FactRecord,
     FactReference,
     factReferenceEquals,
     FactTuple,
     getAllFactTypes,
     getAllRoles,
-    Join,
     PredecessorCollection,
     ProjectedResult,
-    PropertyCondition,
-    Query,
     Specification,
-    Step,
     Storage,
     TopologicalSorter
 } from "jinaga";
@@ -51,7 +44,6 @@ import {
 } from "./maps";
 import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
-import { sqlFromSteps } from "./sql";
 
 interface FactTypeResult {
     rows: {
@@ -125,21 +117,6 @@ function loadFactTuple(labels: SpecificationLabel[], row: Row): FactTuple {
     };
 }
 
-function loadFactPath(pathLength: number, factTypeNames: string[], r: Row): FactPath {
-    let path: FactPath = [];
-    for (let i = 0; i < pathLength; i++) {
-        const hash = r['hash' + (i + 2)];
-        if (!hash) {
-            throw new Error(`Cannot find column 'hash${i + 2}'`);
-        }
-        path.push({
-            type: factTypeNames[i],
-            hash: hash
-        });
-    }
-    return path;
-}
-
 export class PostgresStore implements Storage {
     private connectionFactory: ConnectionFactory;
     private factTypeMap: FactTypeMap = emptyFactTypeMap();
@@ -204,32 +181,6 @@ export class PostgresStore implements Storage {
         }
     }
 
-    async query(start: FactReference, query: Query): Promise<FactPath[]> {
-        if (query.steps.length === 0) {
-            return [[start]];
-        }
-
-        try {
-            const factTypes = await this.loadFactTypesFromSteps(query.steps, start.type);
-            const roleMap = await this.loadRolesFromSteps(query.steps, factTypes, start.type);
-
-            const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap, this.schema);
-            if (!sqlQuery) {
-                throw new Error(`Could not generate SQL for query "${query.toDescriptiveString()}" starting at "${start.type}"`);
-            }
-            if (sqlQuery.empty) {
-                return [];
-            }
-            const { rows } = await this.connectionFactory.with(async (connection) => {
-                return await connection.query(sqlQuery.sql, sqlQuery.parameters);
-            });
-            return rows.map(row => loadFactPath(sqlQuery.pathLength, sqlQuery.factTypeNames, row));
-        }
-        catch (e) {
-            throw new Error(`Could not generate SQL for query "${query.toDescriptiveString()}" starting at "${start.type}": ${e}`);
-        }
-    }
-
     async read(start: FactReference[], specification: Specification): Promise<ProjectedResult[]> {
         const factTypes = await this.loadFactTypesFromSpecification(specification);
         const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
@@ -279,22 +230,6 @@ export class PostgresStore implements Storage {
         };
     }
 
-    private async loadFactTypesFromSteps(steps: Step[], startType: string): Promise<FactTypeMap> {
-        const factTypes = this.factTypeMap;
-        const unknownFactTypes = [...allFactTypes(steps), startType]
-            .filter(factType => !factTypes.has(factType))
-            .filter(distinct);
-        if (unknownFactTypes.length > 0) {
-            const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
-                return await loadFactTypes(unknownFactTypes, connection, this.schema);
-            });
-            const merged = mergeFactTypes(this.factTypeMap, loadedFactTypes);
-            this.factTypeMap = merged;
-            return merged;
-        }
-        return factTypes;
-    }
-
     async loadFactTypesFromFeed(feed: Specification): Promise<FactTypeMap> {
         const factTypes = this.factTypeMap;
         const unknownFactTypes = getAllFactTypes(feed)
@@ -323,21 +258,6 @@ export class PostgresStore implements Storage {
             return merged;
         }
         return factTypes;
-    }
-
-    private async loadRolesFromSteps(steps: Step[], factTypes: FactTypeMap, initialType: string) {
-        const roleMap = this.roleMap;
-        const unknownRoles = allRoles(steps, factTypes, getFactTypeId(factTypes, initialType))
-            .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
-        if (unknownRoles.length > 0) {
-            const loadedRoles = await this.connectionFactory.with(async (connection) => {
-                return await loadRoles(unknownRoles, roleMap, connection, this.schema);
-            });
-            const merged = mergeRoleMaps(this.roleMap, loadedRoles);
-            this.roleMap = merged;
-            return merged;
-        }
-        return roleMap;
     }
 
     async loadRolesFromSpecification(specification: Specification, factTypes: FactTypeMap): Promise<RoleMap> {
@@ -892,51 +812,6 @@ async function insertSignatures(envelopes: FactEnvelope[], allFacts: FactMap, fa
             ON CONFLICT DO NOTHING`;
         await connection.query(sql, signatureParameters);
     }
-}
-
-function allFactTypes(steps: Step[]): string[] {
-    const factTypes = steps
-        .filter(step => step instanceof PropertyCondition && step.name === 'type')
-        .map(step => (step as PropertyCondition).value);
-    const childFactTypes = steps
-        .filter(step => step instanceof ExistentialCondition)
-        .flatMap(step => allFactTypes((step as ExistentialCondition).steps));
-    return [...factTypes, ...childFactTypes].filter(distinct);
-}
-
-function allRoles(steps: Step[], factTypes: FactTypeMap, initialTypeId: number | undefined) {
-    let roles: { successor_type_id: number; role: string }[] = [];
-    let successor_type_id = initialTypeId;
-    let role: string | undefined = undefined;
-
-    for (const step of steps) {
-        if (step instanceof PropertyCondition) {
-            if (step.name === 'type') {
-                successor_type_id = getFactTypeId(factTypes, step.value);
-                if (successor_type_id && role) {
-                    roles.push({ successor_type_id: successor_type_id, role });
-                }
-                role = undefined;
-            }
-        }
-        else if (step instanceof Join) {
-            if (step.direction === Direction.Predecessor) {
-                if (successor_type_id) {
-                    roles.push({ successor_type_id: successor_type_id, role: step.role });
-                }
-                role = undefined;
-            }
-            else {
-                role = step.role;
-            }
-            successor_type_id = undefined;
-        }
-        else if (step instanceof ExistentialCondition) {
-            roles = roles.concat(allRoles(step.steps, factTypes, successor_type_id));
-        }
-    }
-
-    return roles;
 }
 
 function predecessorsOf(fact: FactRecord): FactReference[] {

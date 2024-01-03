@@ -14,8 +14,6 @@ import {
     LoadResponse,
     ProfileMessage,
     ProjectedResult,
-    QueryMessage,
-    QueryResponse,
     ReferencesByName,
     SaveMessage,
     Specification,
@@ -25,10 +23,8 @@ import {
     buildFeeds,
     computeObjectHash,
     computeTupleSubsetHash,
-    fromDescriptiveString,
     invertSpecification,
     parseLoadMessage,
-    parseQueryMessage,
     parseSaveMessage
 } from "jinaga";
 
@@ -285,15 +281,9 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
+    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
-        if (backwardCompatible) {
-            router.post('/query', post(
-                parseQueryMessage,
-                (user, queryMessage) => this.query(user, queryMessage)
-            ));
-        }
         router.post('/load', post(
             parseLoadMessage,
             (user, loadMessage) => this.load(user, loadMessage)
@@ -324,15 +314,6 @@ export class HttpRouter {
         return {
             userFact: userFact,
             profile: user.profile
-        };
-    }
-
-    private async query(user: RequestUser | null, queryMessage: QueryMessage): Promise<QueryResponse> {
-        const userIdentity = serializeUserIdentity(user);
-        const query = fromDescriptiveString(queryMessage.query);
-        const result = await this.authorization.query(userIdentity, queryMessage.start, query);
-        return {
-            results: result
         };
     }
 

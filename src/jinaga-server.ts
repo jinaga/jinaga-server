@@ -67,8 +67,7 @@ export class JinagaServer {
         const network = new NetworkNoOp();
         const factManager = new FactManager(fork, source, store, network);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
-        // Retain backward compatibility until the user provides distribution rules.
-        const router = new HttpRouter(factManager, authorization, feedCache, distributionRules === null);
+        const router = new HttpRouter(factManager, authorization, feedCache);
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {

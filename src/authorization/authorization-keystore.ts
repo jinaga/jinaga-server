@@ -9,7 +9,6 @@ import {
     FactManager,
     FactReference,
     Forbidden,
-    Query,
     ReferencesByName,
     Specification,
     Storage,
@@ -49,10 +48,6 @@ export class AuthorizationKeystore implements Authorization {
         ];
         await this.store.save(envelopes);
         return userFact;
-    }
-
-    query(userIdentity: UserIdentity | null, start: FactReference, query: Query) {
-        return this.factManager.query(start, query);
     }
 
     async read(userIdentity: UserIdentity | null, start: FactReference[], specification: Specification) {
