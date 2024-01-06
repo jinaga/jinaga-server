@@ -129,14 +129,20 @@ const model = buildModel(b => b
     )
 );
 
-function randomRoot() {
+function randomIdentifier() {
     const bytes = new Uint8Array(8);
     for (let i = 0; i < 8; i++) {
         bytes[i] = Math.random() * 0xFF;
     }
-    const identifier = encode(bytes);
+    return encode(bytes);
+}
 
-    return new Root(identifier);
+function randomRoot() {
+    return new Root(randomIdentifier());
+}
+
+function randomTenant(creator) {
+    return new Tenant(randomIdentifier(), creator);
 }
 
 const successorsOfRoot = model.given(Root).match((root, facts) =>
@@ -323,7 +329,7 @@ describe("Jinaga as a user", () => {
         }));
         session = withSession({ user: {
             provider: "test",
-            id: "test-user",
+            id: randomIdentifier(),
             profile: {
                 displayName: "Test User"
             }
@@ -375,7 +381,7 @@ describe("Jinaga as a user", () => {
         const device = await j.local();
 
         const defaultTenant = await j.fact(new DefaultTenant(
-            new Tenant("test-tenant", user),
+            randomTenant(user),
             device,
             []
         ));
@@ -395,7 +401,7 @@ describe("Jinaga as a user", () => {
         const { userFact: user } = await j.login();
 
         const membership = await j.fact(new Membership(
-            new Tenant("test-tenant", user),
+            randomTenant(user),
             user
         ));
 
@@ -407,7 +413,7 @@ describe("Jinaga as a user", () => {
         const { userFact: user } = await j.login();
 
         const membership = await j.fact(new Membership(
-            new Tenant("test-tenant", user),
+            randomTenant(user),
             user
         ));
         await j.fact(new MembershipDeleted(membership));
@@ -420,7 +426,7 @@ describe("Jinaga as a user", () => {
         const { userFact: user } = await j.login();
 
         const membership = await j.fact(new Membership(
-            new Tenant("test-tenant", user),
+            randomTenant(user),
             user
         ));
         const deleted = await j.fact(new MembershipDeleted(membership));
