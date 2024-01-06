@@ -1,5 +1,5 @@
 const { encode } = require("@stablelib/base64");
-const { ensure, Jinaga, buildModel, Device, User, UserName } = require("jinaga");
+const { buildModel, Device, User, UserName } = require("jinaga");
 const { JinagaServer } = require("./jinaga-server");
 
 const host = "db";
@@ -130,13 +130,13 @@ const model = buildModel(b => b
 );
 
 function randomRoot() {
-    const num = Math.random();
-    const identifier = encode(num);
+    const bytes = new Uint8Array(8);
+    for (let i = 0; i < 8; i++) {
+        bytes[i] = Math.random() * 0xFF;
+    }
+    const identifier = encode(bytes);
 
-    return {
-        type: "IntegrationTest.Root",
-        identifier
-    };
+    return new Root(identifier);
 }
 
 const successorsOfRoot = model.given(Root).match((root, facts) =>
