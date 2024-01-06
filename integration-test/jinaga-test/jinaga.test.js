@@ -1,10 +1,210 @@
 const { encode } = require("@stablelib/base64");
-const { ensure, Jinaga } = require("jinaga");
+const { ensure, Jinaga, buildModel, Device, User, UserName } = require("jinaga");
 const { JinagaServer } = require("./jinaga-server");
 
 const host = "db";
 // const host = "localhost";
 const connectionString = `postgresql://dev:devpw@${host}:5432/integrationtest`;
+
+class Root {
+    static Type = "IntegrationTest.Root";
+    type = Root.Type;
+
+    constructor(identifier) {
+        this.identifier = identifier;
+    }
+}
+
+class Successor {
+    static Type = "IntegrationTest.Successor";
+    type = Successor.Type;
+
+    constructor(identifier, predecessor) {
+        this.identifier = identifier;
+        this.predecessor = predecessor;
+    }
+}
+
+class UnknownType {
+    static Type = "IntegrationTest.UnknownType";
+    type = UnknownType.Type;
+
+    constructor(predecessor) {
+        this.predecessor = predecessor;
+    }
+}
+
+class Configuration {
+    static Type = "Configuration";
+    type = Configuration.Type;
+
+    constructor(from) {
+        this.from = from;
+    }
+}
+
+class Tenant {
+    static Type = "MyApplication.Tenant";
+    type = Tenant.Type;
+
+    constructor(identifier, creator) {
+        this.identifier = identifier;
+        this.creator = creator;
+    }
+}
+
+class DefaultTenant {
+    static Type = "MyApplication.DefaultTenant";
+    type = DefaultTenant.Type;
+
+    constructor(tenant, device, prior) {
+        this.tenant = tenant;
+        this.device = device;
+        this.prior = prior;
+    }
+}
+
+class Membership {
+    static Type = "MyApplication.Membership";
+    type = Membership.Type;
+
+    constructor(tenant, creator) {
+        this.tenant = tenant;
+        this.creator = creator;
+    }
+}
+
+class MembershipDeleted {
+    static Type = "MyApplication.Membership.Deleted";
+    type = MembershipDeleted.Type;
+
+    constructor(membership) {
+        this.membership = membership;
+    }
+}
+
+class MembershipRestored {
+    static Type = "MyApplication.Membership.Restored";
+    type = MembershipRestored.Type;
+
+    constructor(deleted) {
+        this.deleted = deleted;
+    }
+}
+
+const model = buildModel(b => b
+    .type(Root)
+    .type(Successor, m => m
+        .predecessor("predecessor", Root)
+    )
+    .type(UnknownType, m => m
+        .predecessor("predecessor", Root)
+    )
+    .type(User)
+    .type(UserName, m => m
+        .predecessor("user", User)
+        .predecessor("prior", UserName)
+    )
+    .type(Device)
+    .type(Configuration, m => m
+        .predecessor("from", Device)
+    )
+    .type(Tenant, m => m
+        .predecessor("creator", User)
+    )
+    .type(DefaultTenant, m => m
+        .predecessor("tenant", Tenant)
+        .predecessor("device", Device)
+        .predecessor("prior", DefaultTenant)
+    )
+    .type(Membership, m => m
+        .predecessor("tenant", Tenant)
+        .predecessor("creator", User)
+    )
+    .type(MembershipDeleted, m => m
+        .predecessor("membership", Membership)
+    )
+    .type(MembershipRestored, m => m
+        .predecessor("deleted", MembershipDeleted)
+    )
+);
+
+function randomRoot() {
+    const num = Math.random();
+    const identifier = encode(num);
+
+    return {
+        type: "IntegrationTest.Root",
+        identifier
+    };
+}
+
+const successorsOfRoot = model.given(Root).match((root, facts) =>
+    facts.ofType(Successor)
+        .join(s => s.predecessor, root)
+);
+
+const unknownOfRoot = model.given(Root).match((root, facts) =>
+    facts.ofType(UnknownType)
+        .join(s => s.predecessor, root)
+);
+
+const configurationFromDevice = model.given(Device).match((device, facts) =>
+    facts.ofType(Configuration)
+        .join(s => s.from, device)
+);
+
+const namesOfUser = model.given(User).match((user, facts) =>
+    facts.ofType(UserName)
+        .join(name => name.user, user)
+        .notExists(name => facts.ofType(UserName)
+            .join(next => next.prior, name)
+        )
+);
+
+const defaultTenantsOfDevice = model.given(Device).match((device, facts) =>
+    facts.ofType(DefaultTenant)
+        .join(defaultTenant => defaultTenant.device, device)
+        .notExists(defaultTenant => facts.ofType(DefaultTenant)
+            .join(next => next.prior, defaultTenant)
+        )
+);
+
+const membershipsForUser = model.given(User).match((user, facts) =>
+    facts.ofType(Membership)
+        .join(membership => membership.creator, user)
+        .notExists(membership => facts.ofType(MembershipDeleted)
+            .join(deleted => deleted.membership, membership)
+            .notExists(deleted => facts.ofType(MembershipRestored)
+                .join(restored => restored.deleted, deleted)
+            )
+        )
+);
+
+async function check(callback) {
+    const { j, close } = JinagaServer.create({
+        pgKeystore: connectionString,
+        pgStore:    connectionString
+    });
+
+    try {
+        await callback(j);
+    }
+    finally {
+        await close();
+    }
+}
+
+function authorization(a) {
+    return a
+        .type(UserName, n => n.user)
+        .type(Tenant, t => t.creator)
+        .type(DefaultTenant, t => t.tenant.creator)
+        .type(Membership, m => m.tenant.creator)
+        .type(MembershipDeleted, d => d.membership.tenant.creator)
+        .type(MembershipRestored, r => r.deleted.membership.tenant.creator)
+        ;
+}
 
 describe("Jinaga as a device", () => {
     let j;
@@ -39,11 +239,7 @@ describe("Jinaga as a device", () => {
     it("should save a successor fact", async () => {
         const root = await j.fact(randomRoot());
 
-        const successor = await j.fact({
-            type: "IntegrationTest.Successor",
-            identifier: "test-successor",
-            predecessor: root
-        });
+        const successor = await j.fact(new Successor("test-successor", root));
 
         expect(successor.identifier).toEqual("test-successor");
         expect(successor.predecessor).toEqual(root);
@@ -52,19 +248,15 @@ describe("Jinaga as a device", () => {
     it("should query a successor fact", async () => {
         const root = await j.fact(randomRoot());
 
-        const successor = await j.fact({
-            type: "IntegrationTest.Successor",
-            identifier: "test-successor",
-            predecessor: root
-        });
-        const successors = await j.query(root, j.for(successorsOfRoot));
+        const successor = await j.fact(new Successor("test-successor", root));
+        const successors = await j.query(successorsOfRoot, root);
 
         expect(successors).toEqual([successor]);
     })
 
     it("should query a type that has never been seen", async () => {
         const root = await j.fact(randomRoot());
-        const unknown = await j.query(root, j.for(unknownOfRoot));
+        const unknown = await j.query(unknownOfRoot, root);
 
         expect(unknown).toEqual([]);
     });
@@ -72,16 +264,8 @@ describe("Jinaga as a device", () => {
     it("should save a successor fact twice", async () => {
         const root = await j.fact(randomRoot());
 
-        await j.fact({
-            type: "IntegrationTest.Successor",
-            identifier: "test-successor",
-            predecessor: root
-        });
-        const successor = await j.fact({
-            type: "IntegrationTest.Successor",
-            identifier: "test-successor",
-            predecessor: root
-        });
+        await j.fact(new Successor("test-successor", root));
+        const successor = await j.fact(new Successor("test-successor", root));
 
         expect(successor.identifier).toEqual("test-successor");
         expect(successor.predecessor).toEqual(root);
@@ -89,11 +273,7 @@ describe("Jinaga as a device", () => {
 
 
     it("should save multiple facts", async () => {
-        const successor = await j.fact({
-            type: "IntegrationTest.Successor",
-            identifier: "test-successor",
-            predecessor: randomRoot()
-        });
+        const successor = await j.fact(new Successor("test-successor", randomRoot()));
 
         expect(successor.identifier).toEqual("test-successor");
         expect(successor.predecessor.type).toEqual("IntegrationTest.Root");
@@ -108,16 +288,13 @@ describe("Jinaga as a device", () => {
     it("should get device information", async () => {
         const device = await j.local();
 
-        await j.fact({
-            type: "Configuration",
-            from: device
-        });
+        await j.fact(new Configuration(device));
 
         await check(async j => {
             const checkDevice = await j.local();
             expect(checkDevice).toEqual(device);
 
-            const configurations = await j.query(checkDevice, j.for(configurationFromDevice));
+            const configurations = await j.query(configurationFromDevice, checkDevice);
 
             expect(configurations.length).toEqual(1);
             expect(configurations[0].type).toEqual("Configuration");
@@ -139,6 +316,7 @@ describe("Jinaga as a user", () => {
             done = resolve;
         });
         ({ j: jDevice, close, withSession } = JinagaServer.create({
+            model,
             pgKeystore: connectionString,
             pgStore:    connectionString,
             authorization
@@ -183,15 +361,10 @@ describe("Jinaga as a user", () => {
     it("should save user name", async () => {
         const { userFact: user, profile } = await j.login();
 
-        const userName = {
-            type: "MyApplication.UserName",
-            value: profile.displayName,
-            from: user,
-            prior: []
-        };
+        const userName = new UserName([], user, profile.displayName);
         await j.fact(userName);
 
-        const userNames = await jDevice.query(user, Jinaga.for(namesOfUser));
+        const userNames = await jDevice.query(namesOfUser, user);
 
         expect(userNames.length).toEqual(1);
         expect(userNames[0].value).toEqual("Test User");
@@ -201,226 +374,59 @@ describe("Jinaga as a user", () => {
         const { userFact: user } = await j.login();
         const device = await j.local();
 
-        const defaultTenant = await j.fact({
-            type: "MyApplication.DefaultTenant",
-            tenant: {
-                type: "MyApplication.Tenant",
-                identifier: "test-tenant",
-                creator: user
-            },
-            device
-        });
+        const defaultTenant = await j.fact(new DefaultTenant(
+            new Tenant("test-tenant", user),
+            device,
+            []
+        ));
 
-        const defaultTenants = await jDevice.query(device, Jinaga.for(defaultTenantsOfDevice));
+        const defaultTenants = await jDevice.query(defaultTenantsOfDevice, device);
         expect(defaultTenants).toEqual([defaultTenant]);
     });
 
     it("should find no memberships", async () => {
         const { userFact: user } = await j.login();
 
-        const memberships = await j.query(user, Jinaga.for(membershipsForUser));
+        const memberships = await j.query(membershipsForUser, user);
         expect(memberships).toEqual([]);
     });
 
     it("should find assigned membership", async () => {
         const { userFact: user } = await j.login();
 
-        const membership = await j.fact({
-            type: "MyApplication.Membership",
-            tenant: {
-                type: "MyApplication.Tenant",
-                identifier: "test-tenant",
-                creator: user
-            },
+        const membership = await j.fact(new Membership(
+            new Tenant("test-tenant", user),
             user
-        });
+        ));
 
-        const memberships = await j.query(user, Jinaga.for(membershipsForUser));
+        const memberships = await j.query(membershipsForUser, user);
         expect(memberships).toEqual([membership]);
     });
 
     it("should not find deleted membership", async () => {
         const { userFact: user } = await j.login();
 
-        const membership = await j.fact({
-            type: "MyApplication.Membership",
-            tenant: {
-                type: "MyApplication.Tenant",
-                identifier: "test-tenant",
-                creator: user
-            },
+        const membership = await j.fact(new Membership(
+            new Tenant("test-tenant", user),
             user
-        });
-        await j.fact({
-            type: "MyApplication.Membership.Deleted",
-            membership
-        });
+        ));
+        await j.fact(new MembershipDeleted(membership));
 
-        const memberships = await j.query(user, Jinaga.for(membershipsForUser));
+        const memberships = await j.query(membershipsForUser, user);
         expect(memberships).toEqual([]);
     });
 
     it("should find restored membership", async () => {
         const { userFact: user } = await j.login();
 
-        const membership = await j.fact({
-            type: "MyApplication.Membership",
-            tenant: {
-                type: "MyApplication.Tenant",
-                identifier: "test-tenant",
-                creator: user
-            },
+        const membership = await j.fact(new Membership(
+            new Tenant("test-tenant", user),
             user
-        });
-        const deleted = await j.fact({
-            type: "MyApplication.Membership.Deleted",
-            membership
-        });
-        await j.fact({
-            type: "MyApplication.Membership.Restored",
-            deleted
-        });
+        ));
+        const deleted = await j.fact(new MembershipDeleted(membership));
+        await j.fact(new MembershipRestored(deleted));
 
-        const memberships = await j.query(user, Jinaga.for(membershipsForUser));
+        const memberships = await j.query(membershipsForUser, user);
         expect(memberships).toEqual([membership]);
     });
 })
-
-function randomRoot() {
-    const num = Math.random();
-    const identifier = encode(num);
-
-    return {
-        type: "IntegrationTest.Root",
-        identifier
-    };
-}
-
-function successorsOfRoot(root) {
-    return Jinaga.match({
-        type: "IntegrationTest.Successor",
-        predecessor: root
-    });
-}
-
-function unknownOfRoot(root) {
-    return Jinaga.match({
-        type: "IntegrationTest.UnknownType",
-        predecessor: root
-    });
-}
-
-function configurationFromDevice(device) {
-    return Jinaga.match({
-        type: "Configuration",
-        from: device
-    });
-}
-
-function namesOfUser(user) {
-    return Jinaga.match({
-        type: "MyApplication.UserName",
-        from: user
-    }).suchThat(nameIsCurrent);
-}
-
-function nameIsCurrent(name) {
-    return Jinaga.notExists({
-        type: "MyApplication.UserName",
-        prior: [name]
-    });
-}
-
-function nameUser(name) {
-    ensure(name).has("from", "Jinaga.User");
-    return Jinaga.match(name.from);
-}
-
-function defaultTenantIsCurrent(defaultTenant) {
-    return Jinaga.notExists({
-        type: "MyApplication.DefaultTenant",
-        prior: [defaultTenant]
-    });
-}
-
-function defaultTenantsOfDevice(device) {
-    return Jinaga.match({
-        type: "MyApplication.DefaultTenant",
-        device
-    }).suchThat(defaultTenantIsCurrent);
-}
-
-function tenantCreator(tenant) {
-    ensure(tenant).has("creator", "Jinaga.User");
-    return Jinaga.match(tenant.creator);
-}
-
-function defaultTenantCreator(defaultTenant) {
-    ensure(defaultTenant)
-        .has("tenant", "MyApplication.Tenant")
-        .has("creator", "Jinaga.User");
-    return Jinaga.match(defaultTenant.tenant.creator);
-}
-
-function membershipsForUser(user) {
-    return Jinaga.match({
-        type: "MyApplication.Membership",
-        user
-    }).suchThat(Jinaga.not(membershipIsDeleted));
-}
-
-function membershipIsDeleted(membership) {
-    return Jinaga.exists({
-        type: "MyApplication.Membership.Deleted",
-        membership
-    }).suchThat(Jinaga.not(membershipIsRestored));
-}
-
-function membershipIsRestored(deleted) {
-    return Jinaga.exists({
-        type: "MyApplication.Membership.Restored",
-        deleted
-    });
-}
-
-function tenantOfMembership(membership) {
-    ensure(membership).has("tenant", "MyApplication.Tenant");
-    return Jinaga.match(membership.tenant);
-}
-
-function deletedMembership(deleted) {
-    ensure(deleted).has("membership", "MyApplication.Membership");
-    return Jinaga.match(deleted.membership);
-}
-
-function restoredMembership(restored) {
-    ensure(restored)
-        .has("deleted", "MyApplication.Membership.Deleted")
-        .has("membership", "MyApplication.Membership");
-    return Jinaga.match(restored.deleted.membership);
-}
-
-async function check(callback) {
-    const { j, close } = JinagaServer.create({
-        pgKeystore: connectionString,
-        pgStore:    connectionString
-    });
-
-    try {
-        await callback(j);
-    }
-    finally {
-        await close();
-    }
-}
-
-function authorization(a) {
-    return a
-        .type("MyApplication.UserName", Jinaga.for(nameUser))
-        .type("MyApplication.Tenant", Jinaga.for(tenantCreator))
-        .type("MyApplication.DefaultTenant", Jinaga.for(defaultTenantCreator))
-        .type("MyApplication.Membership", Jinaga.for(tenantOfMembership).then(tenantCreator))
-        .type("MyApplication.Membership.Deleted", Jinaga.for(deletedMembership).then(tenantOfMembership).then(tenantCreator))
-        .type("MyApplication.Membership.Restored", Jinaga.for(restoredMembership).then(tenantOfMembership).then(tenantCreator))
-        ;
-}
