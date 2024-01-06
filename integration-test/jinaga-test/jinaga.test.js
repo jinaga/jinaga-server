@@ -352,6 +352,8 @@ describe("Jinaga as a user", () => {
     });
 
     it("should not allow an unauthorized fact", async () => {
+        await j.login();
+
         try {
             await j.fact({
                 type: "IntegrationTest.Unauthorized",
