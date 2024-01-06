@@ -320,8 +320,9 @@ export class HttpRouter {
     private async load(user: RequestUser, loadMessage: LoadMessage): Promise<LoadResponse> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
+        const facts = result.map(r => r.fact);
         return {
-            facts: result
+            facts
         };
     }
 

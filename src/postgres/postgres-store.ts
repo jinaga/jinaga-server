@@ -5,14 +5,14 @@ import {
     FactRecord,
     FactReference,
     factReferenceEquals,
+    FactSignature,
     FactTuple,
     getAllFactTypes,
     getAllRoles,
     PredecessorCollection,
     ProjectedResult,
     Specification,
-    Storage,
-    TopologicalSorter
+    Storage
 } from "jinaga";
 import { Pool, PoolClient } from "pg";
 
@@ -88,6 +88,8 @@ interface AncestorResult {
         name: string;
         hash: string;
         data: string;
+        public_key: string;
+        signature: string;
     }[];
 }
 
@@ -204,7 +206,8 @@ export class PostgresStore implements Storage {
         const factReferences: FactReference[] = composer.findFactReferences(resultSets);
 
         // Load the references into a fact tree
-        const factRecords = await this.load(factReferences);
+        const factEnvelopes = await this.load(factReferences);
+        const factRecords = factEnvelopes.map(envelope => envelope.fact);
 
         return composer.compose(resultSets, factRecords);
     }
@@ -327,7 +330,7 @@ export class PostgresStore implements Storage {
         return existing;
     }
 
-    async load(references: FactReference[]): Promise<FactRecord[]> {
+    async load(references: FactReference[]): Promise<FactEnvelope[]> {
         if (references.length === 0) {
             return [];
         }
@@ -339,23 +342,30 @@ export class PostgresStore implements Storage {
         const factParameters = flatten(references, (f) =>
             [f.hash, factTypes.get(f.type)]);
         const sql =
-            'SELECT f.fact_type_id, t.name, f.hash, f.data ' +
-            `FROM ${this.schema}.fact f ` +
-            `JOIN ${this.schema}.fact_type t ` +
-            '  ON f.fact_type_id = t.fact_type_id ' +
-            'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
-            '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
-            'UNION ' +
-            'SELECT f2.fact_type_id, t.name, f2.hash, f2.data ' +
-            `FROM ${this.schema}.fact f1 ` +
-            'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
-            '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
-            `JOIN ${this.schema}.ancestor a ` +
-            '  ON a.fact_id = f1.fact_id ' +
-            `JOIN ${this.schema}.fact f2 ` +
-            '  ON f2.fact_id = a.ancestor_fact_id ' +
-            `JOIN ${this.schema}.fact_type t ` +
-            '  ON t.fact_type_id = f2.fact_type_id;';
+            'SELECT f.fact_type_id, f.hash, f.data, s.public_key, s.signature ' +
+            'FROM (SELECT f.fact_type_id, t.name, f.hash, f.data ' +
+                `FROM ${this.schema}.fact f ` +
+                `JOIN ${this.schema}.fact_type t ` +
+                '  ON f.fact_type_id = t.fact_type_id ' +
+                'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
+                '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
+                'UNION ' +
+                'SELECT f2.fact_type_id, t.name, f2.hash, f2.data ' +
+                `FROM ${this.schema}.fact f1 ` +
+                'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
+                '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
+                `JOIN ${this.schema}.ancestor a ` +
+                '  ON a.fact_id = f1.fact_id ' +
+                `JOIN ${this.schema}.fact f2 ` +
+                '  ON f2.fact_id = a.ancestor_fact_id ' +
+                `JOIN ${this.schema}.fact_type t ` +
+                '  ON t.fact_type_id = f2.fact_type_id) as f ' +
+            'LEFT JOIN (SELECT p.public_key, s.signature, s.fact_id ' +
+                `FROM ${this.schema}.signature s ` +
+                `JOIN ${this.schema}.public_key p ` +
+                '  ON p.public_key_id = s.public_key_id) as s ' +
+            'ON s.fact_id = f.fact_id ' +
+            'ORDER BY f.fact_id, s.public_key;';
         const result: AncestorResult = await this.connectionFactory.with(async (connection) => {
             return await connection.query(sql, factParameters);
         })
@@ -364,17 +374,40 @@ export class PostgresStore implements Storage {
             emptyFactTypeMap()
         );
         this.factTypeMap = mergeFactTypes(this.factTypeMap, resultFactTypes);
-        const sorter = new TopologicalSorter<FactRecord>();
         const records = result.rows.map((r) => {
             const { fields, predecessors }: { fields: {}, predecessors: PredecessorCollection } = r.data as any;
-            return <FactRecord>{
+            const fact: FactRecord = {
                 type: r.name,
                 hash: r.hash,
                 fields,
                 predecessors
+            };
+            const signature: FactSignature = {
+                publicKey: r.public_key,
+                signature: r.signature
+            };
+            return {
+                fact,
+                signature
             }
         });
-        return sorter.sort(records, (p, r) => r);
+        // Group the records by fact type and hash.
+        const envelopes: FactEnvelope[] = records.reduce((acc: FactEnvelope[], record) => {
+            // Because the records are sorted by fact ID, we can just look at the last envelope.
+            const last = acc.length > 0 ? acc[acc.length - 1] : undefined;
+            if (last && last.fact.type === record.fact.type && last.fact.hash === record.fact.hash) {
+                last.signatures.push(record.signature);
+            }
+            else {
+                acc.push({
+                    fact: record.fact,
+                    signatures: [record.signature]
+                });
+            }
+            return acc;
+        }, []);
+        // Assuming that the facts were inserted in topological order, they don't need to be sorted.
+        return envelopes;
     }
 
     private async loadFactTypesFromReferences(references: FactReference[]): Promise<FactTypeMap> {
