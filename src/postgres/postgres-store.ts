@@ -342,15 +342,15 @@ export class PostgresStore implements Storage {
         const factParameters = flatten(references, (f) =>
             [f.hash, factTypes.get(f.type)]);
         const sql =
-            'SELECT f.fact_type_id, f.hash, f.data, s.public_key, s.signature ' +
-            'FROM (SELECT f.fact_type_id, t.name, f.hash, f.data ' +
+            'SELECT f.fact_type_id, f.name, f.hash, f.data, s.public_key, s.signature ' +
+            'FROM (SELECT f.fact_id, f.fact_type_id, t.name, f.hash, f.data ' +
                 `FROM ${this.schema}.fact f ` +
                 `JOIN ${this.schema}.fact_type t ` +
                 '  ON f.fact_type_id = t.fact_type_id ' +
                 'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
                 '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
                 'UNION ' +
-                'SELECT f2.fact_type_id, t.name, f2.hash, f2.data ' +
+                'SELECT f2.fact_id, f2.fact_type_id, t.name, f2.hash, f2.data ' +
                 `FROM ${this.schema}.fact f1 ` +
                 'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
                 '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
@@ -397,6 +397,12 @@ export class PostgresStore implements Storage {
             const last = acc.length > 0 ? acc[acc.length - 1] : undefined;
             if (last && last.fact.type === record.fact.type && last.fact.hash === record.fact.hash) {
                 last.signatures.push(record.signature);
+            }
+            else if (record.signature.signature === null) {
+                acc.push({
+                    fact: record.fact,
+                    signatures: []
+                });
             }
             else {
                 acc.push({
