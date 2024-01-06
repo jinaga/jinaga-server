@@ -380,10 +380,12 @@ describe("Jinaga as a user", () => {
         const { userFact: user } = await j.login();
         const device = await j.local();
 
+        const prior = await jDevice.query(defaultTenantsOfDevice, device);
+
         const defaultTenant = await j.fact(new DefaultTenant(
             randomTenant(user),
             device,
-            []
+            prior
         ));
 
         const defaultTenants = await jDevice.query(defaultTenantsOfDevice, device);
