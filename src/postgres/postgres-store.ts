@@ -1,25 +1,18 @@
 import {
     canonicalPredecessors,
-    Direction,
-    ExistentialCondition,
     FactEnvelope,
     FactFeed,
-    FactPath,
     FactRecord,
     FactReference,
     factReferenceEquals,
+    FactSignature,
     FactTuple,
     getAllFactTypes,
     getAllRoles,
-    Join,
     PredecessorCollection,
     ProjectedResult,
-    PropertyCondition,
-    Query,
     Specification,
-    Step,
-    Storage,
-    TopologicalSorter
+    Storage
 } from "jinaga";
 import { Pool, PoolClient } from "pg";
 
@@ -51,7 +44,6 @@ import {
 } from "./maps";
 import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
-import { sqlFromSteps } from "./sql";
 
 interface FactTypeResult {
     rows: {
@@ -96,6 +88,8 @@ interface AncestorResult {
         name: string;
         hash: string;
         data: string;
+        public_key: string;
+        signature: string;
     }[];
 }
 
@@ -123,21 +117,6 @@ function loadFactTuple(labels: SpecificationLabel[], row: Row): FactTuple {
         facts,
         bookmark: bookmark.join(".")
     };
-}
-
-function loadFactPath(pathLength: number, factTypeNames: string[], r: Row): FactPath {
-    let path: FactPath = [];
-    for (let i = 0; i < pathLength; i++) {
-        const hash = r['hash' + (i + 2)];
-        if (!hash) {
-            throw new Error(`Cannot find column 'hash${i + 2}'`);
-        }
-        path.push({
-            type: factTypeNames[i],
-            hash: hash
-        });
-    }
-    return path;
 }
 
 export class PostgresStore implements Storage {
@@ -204,32 +183,6 @@ export class PostgresStore implements Storage {
         }
     }
 
-    async query(start: FactReference, query: Query): Promise<FactPath[]> {
-        if (query.steps.length === 0) {
-            return [[start]];
-        }
-
-        try {
-            const factTypes = await this.loadFactTypesFromSteps(query.steps, start.type);
-            const roleMap = await this.loadRolesFromSteps(query.steps, factTypes, start.type);
-
-            const sqlQuery = sqlFromSteps(start, query.steps, factTypes, roleMap, this.schema);
-            if (!sqlQuery) {
-                throw new Error(`Could not generate SQL for query "${query.toDescriptiveString()}" starting at "${start.type}"`);
-            }
-            if (sqlQuery.empty) {
-                return [];
-            }
-            const { rows } = await this.connectionFactory.with(async (connection) => {
-                return await connection.query(sqlQuery.sql, sqlQuery.parameters);
-            });
-            return rows.map(row => loadFactPath(sqlQuery.pathLength, sqlQuery.factTypeNames, row));
-        }
-        catch (e) {
-            throw new Error(`Could not generate SQL for query "${query.toDescriptiveString()}" starting at "${start.type}": ${e}`);
-        }
-    }
-
     async read(start: FactReference[], specification: Specification): Promise<ProjectedResult[]> {
         const factTypes = await this.loadFactTypesFromSpecification(specification);
         const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
@@ -253,7 +206,8 @@ export class PostgresStore implements Storage {
         const factReferences: FactReference[] = composer.findFactReferences(resultSets);
 
         // Load the references into a fact tree
-        const factRecords = await this.load(factReferences);
+        const factEnvelopes = await this.load(factReferences);
+        const factRecords = factEnvelopes.map(envelope => envelope.fact);
 
         return composer.compose(resultSets, factRecords);
     }
@@ -277,22 +231,6 @@ export class PostgresStore implements Storage {
             tuples,
             bookmark: tuples.length > 0 ? tuples[tuples.length - 1].bookmark : bookmark
         };
-    }
-
-    private async loadFactTypesFromSteps(steps: Step[], startType: string): Promise<FactTypeMap> {
-        const factTypes = this.factTypeMap;
-        const unknownFactTypes = [...allFactTypes(steps), startType]
-            .filter(factType => !factTypes.has(factType))
-            .filter(distinct);
-        if (unknownFactTypes.length > 0) {
-            const loadedFactTypes = await this.connectionFactory.with(async (connection) => {
-                return await loadFactTypes(unknownFactTypes, connection, this.schema);
-            });
-            const merged = mergeFactTypes(this.factTypeMap, loadedFactTypes);
-            this.factTypeMap = merged;
-            return merged;
-        }
-        return factTypes;
     }
 
     async loadFactTypesFromFeed(feed: Specification): Promise<FactTypeMap> {
@@ -323,21 +261,6 @@ export class PostgresStore implements Storage {
             return merged;
         }
         return factTypes;
-    }
-
-    private async loadRolesFromSteps(steps: Step[], factTypes: FactTypeMap, initialType: string) {
-        const roleMap = this.roleMap;
-        const unknownRoles = allRoles(steps, factTypes, getFactTypeId(factTypes, initialType))
-            .filter(r => !hasRole(roleMap, r.successor_type_id, r.role));
-        if (unknownRoles.length > 0) {
-            const loadedRoles = await this.connectionFactory.with(async (connection) => {
-                return await loadRoles(unknownRoles, roleMap, connection, this.schema);
-            });
-            const merged = mergeRoleMaps(this.roleMap, loadedRoles);
-            this.roleMap = merged;
-            return merged;
-        }
-        return roleMap;
     }
 
     async loadRolesFromSpecification(specification: Specification, factTypes: FactTypeMap): Promise<RoleMap> {
@@ -407,7 +330,7 @@ export class PostgresStore implements Storage {
         return existing;
     }
 
-    async load(references: FactReference[]): Promise<FactRecord[]> {
+    async load(references: FactReference[]): Promise<FactEnvelope[]> {
         if (references.length === 0) {
             return [];
         }
@@ -419,23 +342,30 @@ export class PostgresStore implements Storage {
         const factParameters = flatten(references, (f) =>
             [f.hash, factTypes.get(f.type)]);
         const sql =
-            'SELECT f.fact_type_id, t.name, f.hash, f.data ' +
-            `FROM ${this.schema}.fact f ` +
-            `JOIN ${this.schema}.fact_type t ` +
-            '  ON f.fact_type_id = t.fact_type_id ' +
-            'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
-            '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
-            'UNION ' +
-            'SELECT f2.fact_type_id, t.name, f2.hash, f2.data ' +
-            `FROM ${this.schema}.fact f1 ` +
-            'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
-            '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
-            `JOIN ${this.schema}.ancestor a ` +
-            '  ON a.fact_id = f1.fact_id ' +
-            `JOIN ${this.schema}.fact f2 ` +
-            '  ON f2.fact_id = a.ancestor_fact_id ' +
-            `JOIN ${this.schema}.fact_type t ` +
-            '  ON t.fact_type_id = f2.fact_type_id;';
+            'SELECT f.fact_type_id, f.name, f.hash, f.data, s.public_key, s.signature ' +
+            'FROM (SELECT f.fact_id, f.fact_type_id, t.name, f.hash, f.data ' +
+                `FROM ${this.schema}.fact f ` +
+                `JOIN ${this.schema}.fact_type t ` +
+                '  ON f.fact_type_id = t.fact_type_id ' +
+                'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
+                '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
+                'UNION ' +
+                'SELECT f2.fact_id, f2.fact_type_id, t.name, f2.hash, f2.data ' +
+                `FROM ${this.schema}.fact f1 ` +
+                'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
+                '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
+                `JOIN ${this.schema}.ancestor a ` +
+                '  ON a.fact_id = f1.fact_id ' +
+                `JOIN ${this.schema}.fact f2 ` +
+                '  ON f2.fact_id = a.ancestor_fact_id ' +
+                `JOIN ${this.schema}.fact_type t ` +
+                '  ON t.fact_type_id = f2.fact_type_id) as f ' +
+            'LEFT JOIN (SELECT p.public_key, s.signature, s.fact_id ' +
+                `FROM ${this.schema}.signature s ` +
+                `JOIN ${this.schema}.public_key p ` +
+                '  ON p.public_key_id = s.public_key_id) as s ' +
+            'ON s.fact_id = f.fact_id ' +
+            'ORDER BY f.fact_id, s.public_key;';
         const result: AncestorResult = await this.connectionFactory.with(async (connection) => {
             return await connection.query(sql, factParameters);
         })
@@ -444,17 +374,46 @@ export class PostgresStore implements Storage {
             emptyFactTypeMap()
         );
         this.factTypeMap = mergeFactTypes(this.factTypeMap, resultFactTypes);
-        const sorter = new TopologicalSorter<FactRecord>();
         const records = result.rows.map((r) => {
             const { fields, predecessors }: { fields: {}, predecessors: PredecessorCollection } = r.data as any;
-            return <FactRecord>{
+            const fact: FactRecord = {
                 type: r.name,
                 hash: r.hash,
                 fields,
                 predecessors
+            };
+            const signature: FactSignature = {
+                publicKey: r.public_key,
+                signature: r.signature
+            };
+            return {
+                fact,
+                signature
             }
         });
-        return sorter.sort(records, (p, r) => r);
+        // Group the records by fact type and hash.
+        const envelopes: FactEnvelope[] = records.reduce((acc: FactEnvelope[], record) => {
+            // Because the records are sorted by fact ID, we can just look at the last envelope.
+            const last = acc.length > 0 ? acc[acc.length - 1] : undefined;
+            if (last && last.fact.type === record.fact.type && last.fact.hash === record.fact.hash) {
+                last.signatures.push(record.signature);
+            }
+            else if (record.signature.signature === null) {
+                acc.push({
+                    fact: record.fact,
+                    signatures: []
+                });
+            }
+            else {
+                acc.push({
+                    fact: record.fact,
+                    signatures: [record.signature]
+                });
+            }
+            return acc;
+        }, []);
+        // Assuming that the facts were inserted in topological order, they don't need to be sorted.
+        return envelopes;
     }
 
     private async loadFactTypesFromReferences(references: FactReference[]): Promise<FactTypeMap> {
@@ -892,51 +851,6 @@ async function insertSignatures(envelopes: FactEnvelope[], allFacts: FactMap, fa
             ON CONFLICT DO NOTHING`;
         await connection.query(sql, signatureParameters);
     }
-}
-
-function allFactTypes(steps: Step[]): string[] {
-    const factTypes = steps
-        .filter(step => step instanceof PropertyCondition && step.name === 'type')
-        .map(step => (step as PropertyCondition).value);
-    const childFactTypes = steps
-        .filter(step => step instanceof ExistentialCondition)
-        .flatMap(step => allFactTypes((step as ExistentialCondition).steps));
-    return [...factTypes, ...childFactTypes].filter(distinct);
-}
-
-function allRoles(steps: Step[], factTypes: FactTypeMap, initialTypeId: number | undefined) {
-    let roles: { successor_type_id: number; role: string }[] = [];
-    let successor_type_id = initialTypeId;
-    let role: string | undefined = undefined;
-
-    for (const step of steps) {
-        if (step instanceof PropertyCondition) {
-            if (step.name === 'type') {
-                successor_type_id = getFactTypeId(factTypes, step.value);
-                if (successor_type_id && role) {
-                    roles.push({ successor_type_id: successor_type_id, role });
-                }
-                role = undefined;
-            }
-        }
-        else if (step instanceof Join) {
-            if (step.direction === Direction.Predecessor) {
-                if (successor_type_id) {
-                    roles.push({ successor_type_id: successor_type_id, role: step.role });
-                }
-                role = undefined;
-            }
-            else {
-                role = step.role;
-            }
-            successor_type_id = undefined;
-        }
-        else if (step instanceof ExistentialCondition) {
-            roles = roles.concat(allRoles(step.steps, factTypes, successor_type_id));
-        }
-    }
-
-    return roles;
 }
 
 function predecessorsOf(fact: FactRecord): FactReference[] {

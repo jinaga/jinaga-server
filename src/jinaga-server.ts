@@ -65,11 +65,10 @@ export class JinagaServer {
         const feedCache = new FeedCache();
         const authentication = createAuthentication(store, keystore, authorizationRules);
         const network = new NetworkNoOp();
-        const factManager = new FactManager(authentication, fork, source, store, network);
+        const factManager = new FactManager(fork, source, store, network);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
-        // Retain backward compatibility until the user provides distribution rules.
-        const router = new HttpRouter(factManager, authorization, feedCache, distributionRules === null);
-        const j: Jinaga = new Jinaga(factManager, syncStatusNotifier);
+        const router = new HttpRouter(factManager, authorization, feedCache);
+        const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {
             for (const pool of Object.values(pools)) {
@@ -187,8 +186,8 @@ async function withSession(store: Storage, keystore: Keystore | null, authorizat
     const fork = new PassThroughFork(store);
     const observableSource = new ObservableSource(store);
     const network = new NetworkNoOp();
-    const factManager = new FactManager(authentication, fork, observableSource, store, network);
-    const j = new Jinaga(factManager, syncStatusNotifier);
+    const factManager = new FactManager(fork, observableSource, store, network);
+    const j = new Jinaga(authentication, factManager, syncStatusNotifier);
     await callback(j);
 }
 

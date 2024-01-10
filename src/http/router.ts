@@ -14,8 +14,6 @@ import {
     LoadResponse,
     ProfileMessage,
     ProjectedResult,
-    QueryMessage,
-    QueryResponse,
     ReferencesByName,
     SaveMessage,
     Specification,
@@ -25,10 +23,8 @@ import {
     buildFeeds,
     computeObjectHash,
     computeTupleSubsetHash,
-    fromDescriptiveString,
     invertSpecification,
     parseLoadMessage,
-    parseQueryMessage,
     parseSaveMessage
 } from "jinaga";
 
@@ -285,15 +281,9 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache, backwardCompatible: boolean) {
+    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
-        if (backwardCompatible) {
-            router.post('/query', post(
-                parseQueryMessage,
-                (user, queryMessage) => this.query(user, queryMessage)
-            ));
-        }
         router.post('/load', post(
             parseLoadMessage,
             (user, loadMessage) => this.load(user, loadMessage)
@@ -327,26 +317,22 @@ export class HttpRouter {
         };
     }
 
-    private async query(user: RequestUser | null, queryMessage: QueryMessage): Promise<QueryResponse> {
-        const userIdentity = serializeUserIdentity(user);
-        const query = fromDescriptiveString(queryMessage.query);
-        const result = await this.authorization.query(userIdentity, queryMessage.start, query);
-        return {
-            results: result
-        };
-    }
-
     private async load(user: RequestUser, loadMessage: LoadMessage): Promise<LoadResponse> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
+        const facts = result.map(r => r.fact);
         return {
-            facts: result
+            facts
         };
     }
 
     private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, saveMessage.facts);
+        await this.authorization.save(userIdentity, saveMessage.facts
+            .map(fact => ({
+                fact: fact,
+                signatures: []
+            })));
     }
 
     private async read(user: RequestUser | null, input: string): Promise<any[]> {
@@ -379,7 +365,11 @@ export class HttpRouter {
         }
 
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, factRecords);
+        await this.authorization.save(userIdentity, factRecords
+            .map(fact => ({
+                fact: fact,
+                signatures: []
+            })));
     }
 
     private async feeds(user: RequestUser | null, input: string): Promise<FeedsResponse> {
