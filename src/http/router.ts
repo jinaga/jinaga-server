@@ -64,7 +64,7 @@ function getOrStream<U>(
                             })
                             .done(() => {
                                 clearTimeout(timeout);
-                                res.socket.end();
+                                res.socket?.end();
                             });
                     }
                 })
