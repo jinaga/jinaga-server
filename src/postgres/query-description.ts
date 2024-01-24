@@ -1,5 +1,5 @@
 import { FactReference, Label, Match, PathCondition } from "jinaga";
-import { FactTypeMap, RoleMap, ensureGetFactTypeId, getFactTypeId, getRoleId } from "./maps";
+import { FactTypeMap, RoleMap, getFactTypeId, getRoleId } from "./maps";
 
 export interface FactDescription {
     type: string;
@@ -323,9 +323,13 @@ export class QueryDescriptionBuider {
             if (givenIndex < 0) {
                 throw new Error(`No input parameter found for label ${condition.labelRight}`);
             }
+            const factTypeId = getFactTypeId(this.factTypes, start[givenIndex].type);
+            if (!factTypeId) {
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
+            }
             const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
                 given[givenIndex],
-                ensureGetFactTypeId(this.factTypes, start[givenIndex].type),
+                factTypeId,
                 start[givenIndex].hash,
                 path
             );

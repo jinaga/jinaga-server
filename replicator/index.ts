@@ -18,7 +18,7 @@ app.use(express.text());
 app.use(cors());
 
 const pgConnection = process.env.JINAGA_POSTGRESQL ||
-  'postgresql://raasuser:raaspw@localhost:5432/raas';
+  'postgresql://appuser:apppw@localhost:5432/appdb';
 const { handler } = JinagaServer.create({
   pgStore: pgConnection
 });
