@@ -15,9 +15,6 @@ export class GraphSerializer
     ) {}
 
     serialize(result: FactEnvelope[]) {
-        // Write the current index
-        this.write(`---\n${this.index.toString()}\n\n`);
-
         // Write the facts
         for (const fact of result) {
             // Skip facts that have already been written

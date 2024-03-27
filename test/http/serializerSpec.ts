@@ -9,7 +9,7 @@ describe("GraphSerializer", () => {
 
         serializer.serialize([]);
 
-        expect(output).toBe("---\n0\n\n");
+        expect(output).toBe("");
     });
 
     it("should write a graph with one fact without signatures", () => {
@@ -30,7 +30,7 @@ describe("GraphSerializer", () => {
             signatures: []
         }]);
 
-        expect(output).toBe("---\n0\n\n\"MyApp.Root\"\n{}\n{\"identifier\":\"root\"}\n\n");
+        expect(output).toBe("\"MyApp.Root\"\n{}\n{\"identifier\":\"root\"}\n\n");
     });
 
     it("should write a graph with two facts without signatures", () => {
@@ -62,7 +62,7 @@ describe("GraphSerializer", () => {
             signatures: []
         }]);
 
-        expect(output).toBe("---\n0\n\n\"MyApp.Root\"\n{}\n{}\n\n\"MyApp.Child\"\n{\"root\":0}\n{}\n\n");
+        expect(output).toBe("\"MyApp.Root\"\n{}\n{}\n\n\"MyApp.Child\"\n{\"root\":0}\n{}\n\n");
     });
 
     it("should not repeat a fact", () => {
@@ -89,7 +89,7 @@ describe("GraphSerializer", () => {
             signatures: []
         }]);
 
-        expect(output).toBe("---\n0\n\n\"MyApp.Root\"\n{}\n{}\n\n");
+        expect(output).toBe("\"MyApp.Root\"\n{}\n{}\n\n");
     });
 
     it("should write a graph with two facts with signatures", () => {
@@ -131,7 +131,6 @@ describe("GraphSerializer", () => {
         }]);
 
         expect(output).toBe(
-            "---\n0\n\n" +
             "PK0\n\"public\"\n\n" +
             "\"MyApp.Root\"\n{}\n{}\nPK0\n\"signature\"\n\n" +
             "PK1\n\"public2\"\n\n" +
