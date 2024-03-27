@@ -65,6 +65,33 @@ describe("GraphSerializer", () => {
         expect(output).toBe("---\n0\n\n\"MyApp.Root\"\n{}\n{}\n\n\"MyApp.Child\"\n{\"root\":0}\n{}\n\n");
     });
 
+    it("should not repeat a fact", () => {
+        let output = "";
+        const serializer = new GraphSerializer(chunk => {
+            output += chunk;
+        });
+
+        serializer.serialize([{
+            fact: {
+                type: "MyApp.Root",
+                hash: "roothash",
+                fields: {},
+                predecessors: {}
+            },
+            signatures: []
+        }, {
+            fact: {
+                type: "MyApp.Root",
+                hash: "roothash",
+                fields: {},
+                predecessors: {}
+            },
+            signatures: []
+        }]);
+
+        expect(output).toBe("---\n0\n\n\"MyApp.Root\"\n{}\n{}\n\n");
+    });
+
     it("should write a graph with two facts with signatures", () => {
         let output = "";
         const serializer = new GraphSerializer(chunk => {

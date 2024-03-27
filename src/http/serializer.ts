@@ -20,6 +20,12 @@ export class GraphSerializer
 
         // Write the facts
         for (const fact of result) {
+            // Skip facts that have already been written
+            const key = fact.fact.type + ":" + fact.fact.hash;
+            if (this.indexByFactReference.hasOwnProperty(key)) {
+                continue;
+            }
+
             // Write any new public keys
             for (const signature of fact.signatures) {
                 if (!this.publicKeys.includes(signature.publicKey)) {
@@ -48,7 +54,6 @@ export class GraphSerializer
 
             this.write("\n\n");
 
-            const key = fact.fact.type + ":" + fact.fact.hash;
             this.indexByFactReference[key] = this.index;
             this.index++;
         }
