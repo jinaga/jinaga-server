@@ -41,7 +41,7 @@ export class GraphSerializer
             const predecessorIndexes = JSON.stringify(this.getPredecessorIndexes(fact.fact.predecessors));
             const factFields = JSON.stringify(fact.fact.fields);
 
-            this.write(`${factType}\n${predecessorIndexes}\n${factFields}`);
+            let output = `${factType}\n${predecessorIndexes}\n${factFields}`;
 
             // Write the signatures
             for (const signature of fact.signatures) {
@@ -49,10 +49,12 @@ export class GraphSerializer
                 const publicKey = `PK${publicKeyIndex.toString()}`;
                 const signatureString = JSON.stringify(signature.signature);
 
-                this.write(`\n${publicKey}\n${signatureString}`);
+                output += `\n${publicKey}\n${signatureString}`;
             }
 
-            this.write("\n\n");
+            output += "\n\n";
+
+            this.write(output);
 
             this.indexByFactReference[key] = this.index;
             this.index++;
