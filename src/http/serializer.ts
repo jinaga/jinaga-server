@@ -69,6 +69,9 @@ export class GraphSerializer
 
     private getFactIndex(reference: FactReference): number {
         const key = reference.type + ":" + reference.hash;
+        if (!this.indexByFactReference.hasOwnProperty(key)) {
+            throw new Error(`Fact reference not found in graph: ${key}`);
+        }
         return this.indexByFactReference[key];
     }
 }
