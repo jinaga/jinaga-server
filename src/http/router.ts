@@ -1,7 +1,8 @@
-import { Handler, Router } from "express";
+import { Handler, MediaType, Response, Router } from "express";
 import {
     Authorization,
     Declaration,
+    FactEnvelope,
     FactManager,
     FactRecord,
     FactReference,
@@ -29,6 +30,7 @@ import {
 } from "jinaga";
 
 import { Stream } from "./stream";
+import { GraphSerializer } from "./serializer";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -132,7 +134,8 @@ function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]
 
 function post<T, U>(
     parse: (input: any) => T,
-    method: (user: RequestUser, message: T, params?: { [key: string]: string }) => Promise<U>
+    method: (user: RequestUser, message: T, params?: { [key: string]: string }) => Promise<U>,
+    output: (result: U, res: Response, accepts: (type: string) => string | false) => void
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
@@ -147,8 +150,7 @@ function post<T, U>(
                     next();
                 }
                 else {
-                    res.type("json");
-                    res.send(JSON.stringify(response));
+                    output(response, res, (type) => req.accepts(type));
                     next();
                 }
             })
@@ -272,6 +274,29 @@ function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     };
 }
 
+function outputGraph(result: FactEnvelope[], res: Response, accepts: (type: string) => string | false) {
+    if (accepts("application/x-jinaga-graph-v1")) {
+        res.type("application/x-jinaga-graph-v1");
+        const serializer = new GraphSerializer(
+            (chunk: string) => res.write(chunk)
+        );
+        serializer.serialize(result);
+        res.end();
+    }
+    else {
+        res.type("json");
+        const loadResponse: LoadResponse = {
+            facts: result.map(r => r.fact)
+        };
+        res.send(JSON.stringify(loadResponse));
+    }
+}
+
+function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: string) => string | false) {
+    res.type("json");
+    res.send(JSON.stringify(result));
+}
+
 export interface RequestUser {
     provider: string;
     id: string;
@@ -286,7 +311,8 @@ export class HttpRouter {
         router.get('/login', getAuthenticate(user => this.login(user)));
         router.post('/load', post(
             parseLoadMessage,
-            (user, loadMessage) => this.load(user, loadMessage)
+            (user, loadMessage) => this.load(user, loadMessage),
+            outputGraph
         ));
         router.post('/save', postCreate(
             parseSaveMessage,
@@ -297,7 +323,8 @@ export class HttpRouter {
         router.post('/write', postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', post(
             parseString,
-            (user, input: string) => this.feeds(user, input)
+            (user, input: string, accepts) => this.feeds(user, input),
+            outputFeeds
         ));
         router.get('/feeds/:hash', getOrStream<FeedResponse>(
             (user, params, query) => this.feed(user, params, query),
@@ -317,13 +344,11 @@ export class HttpRouter {
         };
     }
 
-    private async load(user: RequestUser, loadMessage: LoadMessage): Promise<LoadResponse> {
+    private async load(user: RequestUser, loadMessage: LoadMessage): Promise<FactEnvelope[]> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
         const facts = result.map(r => r.fact);
-        return {
-            facts
-        };
+        return result;
     }
 
     private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
