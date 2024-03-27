@@ -135,7 +135,7 @@ function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]
 function post<T, U>(
     parse: (input: any) => T,
     method: (user: RequestUser, message: T, params?: { [key: string]: string }) => Promise<U>,
-    output: (result: U, res: Response, accepts: (type: string) => string[]) => void
+    output: (result: U, res: Response, accepts: (type: string) => string | false) => void
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
@@ -150,7 +150,7 @@ function post<T, U>(
                     next();
                 }
                 else {
-                    output(response, res, req.accepts);
+                    output(response, res, (type) => req.accepts(type));
                     next();
                 }
             })
@@ -274,7 +274,7 @@ function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     };
 }
 
-function outputGraph(result: FactEnvelope[], res: Response, accepts: (type: string) => string[]) {
+function outputGraph(result: FactEnvelope[], res: Response, accepts: (type: string) => string | false) {
     if (accepts("application/x-jinaga-graph-v1")) {
         res.type("application/x-jinaga-graph-v1");
         const serializer = new GraphSerializer(
@@ -292,7 +292,7 @@ function outputGraph(result: FactEnvelope[], res: Response, accepts: (type: stri
     }
 }
 
-function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: string) => string[]) {
+function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: string) => string | false) {
     res.type("json");
     res.send(JSON.stringify(result));
 }

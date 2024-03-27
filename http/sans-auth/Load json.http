@@ -1,0 +1,64 @@
+POST {{replicatorUrl}}/load
+Content-Type: application/json
+
+{
+  "references": [
+    {
+      "type": "Blog.Site",
+      "hash": "TYqyG1x5B9tnr2CQ4CeS4w24PCDZ68+oAn4fFZuLiz9SwU6zFts1yJ9j+5qVcDwDe09JyiqM131XNKTjyBxl8A=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "NXwyFdA9Ho/jjxK/kzrYLQGR7RSsVSBMP8wQKpUUD16a6dzKO1KqhdhiwVLkU5J4Ggj9srS6sWAtWPcurOLosw=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "bhUyxmpTnk6In9f89ewG5wkRXg4XiA5NZVsPNMQpC660Zqe7fQ/HqLZxhkNgIzIM+g+TnBtZKgLZ22FrNFYB7A=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "SR9ds5h9cbsk4xiv07+dK/tqc2AJ8wBsqV1WeHUWWKpByYgMjq+X79Ivk4myh1l4ziLN3bwFY7gmwcshk4VR0A=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "xFGSw+ML+MkdjBjk9sByWA+0H+tuKZBEjqxSbHjOwtQbBLuBmpnZyPSVmAVENgCUuSH/jPAR1BNR6bYFnlU94w=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "S5tqNVQotjW36n/6nV05zeSlI6LqpwngrZMoOUKUF/dC/rWzN9KeXg1WiytNladXWeubnv2viXc7mscaFusxzw=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "gNgw5K+fLPLHUutmHrZzbfH6gEHeBmp4JAxyaVmyqCEw3FE7UHuqmMP57uF4cTBXjIFYaO9z6OQCU7n0HcN/hg=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "gH4sRzv1EFh86/JZrGfQ9f8RMoFYbceTQZ0F19Wv8wCbb4Gcl6VyRYhC4juoxID05LLewgTdC1BRAr5d6U+9cg=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "28SxBrQy5HQT18TnpO7DV8SIqf0JqHDcyM3Ki+t04Y30k9JK5xAZWRq29fzAuLG5HzPrlUCtboEEGUFx57rjnw=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "3eRv61mTYL7UcFKZFJ8ktlqMvGtdlzkQId4DDPSAcgVLDvtuO94vrfhtAz1OlpkfLWIcTmmXQALZ9Dn7Fp1yvQ=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "7vc/bnXHk4QNTpfVwxckKQ3d/irK50ACHcqOzjJRZt6S1gDzBGZbZzejq+8++k/kiU51u4jpNozmnn4hKIjKCg=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "2nEQmHzY5h0J5kBP7u+DoyJPRu1hamujH7lYfxmD4tHJdjHfSm3aBksMkSTkQZSpklN1umvBAxWBCWYtdGjaTA=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "gBpjaWtz8D349i2uM099qcVeUOWqcfnhiAmMgSe2HhLvBE39t7L7cR6mPJvQOZP9b4XvLhtkZf2g7/4MG3VNMA=="
+    },
+    {
+      "type": "Blog.Site",
+      "hash": "7+vN8JyXxWawX/QAmvB+zH705KEh5fwqKf+lmN3vq6IC7XGWmeU9RR17tYBbwrkkFHsN/cFm2TCEgCL0eblRBQ=="
+    }
+  ],
+  "bookmark": "15"
+}
