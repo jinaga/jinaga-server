@@ -1,0 +1,21 @@
+POST {{replicatorUrl}}/load
+Authorization: oauth2 authorization_code
+Content-Type: application/json
+Accept: application/x-jinaga-graph-v1
+
+{
+  "references": [
+    {
+      "type": "Blog.Post",
+      "hash": "XiDu5OWoNUwZhTBs+mwHrxjBDlFjBmDIgEt9ZXmCeMq8uv3Tv89Am6GQSt2ppl4wGG1UWMFxd9tstg5NMSSjKg=="
+    },
+    {
+      "type": "Blog.Post.Title",
+      "hash": "n+hKtiGWHVu16UlxKY73Va+jsriQ/UxVFn3DCdXQEccWeXN5/SIxhWXmuMlfzelpHjuwPgCyeyid/jJrkJRRtQ=="
+    },
+    {
+      "type": "Blog.Post.Title",
+      "hash": "iuRHB3Zkj0P3+b7XPvbEzA/ANdJ3C8Bm1dJ/nW8I9Tb+9VdHQP5g2bpp8hwS4KqzecgG6KSG6VCNOY7RoaEsIQ=="
+    }
+  ]
+}
