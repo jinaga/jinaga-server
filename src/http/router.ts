@@ -330,6 +330,55 @@ export class HttpRouter {
             (user, params, query) => this.feed(user, params, query),
             (user, params, query) => this.streamFeed(user, params, query)));
 
+        // Respond to OPTIONS requests to describe the actions and content types
+        // that are supported.
+        router.options('/login', (req, res) => {
+            res.set('Allow', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Accept');
+            res.set('Accept', 'application/json');
+            res.status(204).send();
+        });
+        router.options('/load', (req, res) => {
+            res.set('Allow', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
+            res.set('Content-Type', 'application/json');
+            res.set('Accept', 'application/json');
+            res.status(204).send();
+        });
+        router.options('/save', (req, res) => {
+            res.set('Allow', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
+            res.set('Content-Type', 'application/json');
+            res.set('Accept', 'application/json');
+            res.status(204).send();
+        });
+        router.options('/read', (req, res) => {
+            res.set('Allow', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
+            res.set('Content-Type', 'text/plain');
+            res.set('Accept', 'application/json');
+            res.status(204).send();
+        });
+        router.options('/write', (req, res) => {
+            res.set('Allow', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type');
+            res.set('Content-Type', 'text/plain');
+            res.status(204).send();
+        });
+        router.options('/feeds', (req, res) => {
+            res.set('Allow', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
+            res.set('Content-Type', 'text/plain');
+            res.set('Accept', 'application/json');
+            res.status(204).send();
+        });
+        router.options('/feeds/:hash', (req, res) => {
+            res.set('Allow', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Accept');
+            res.set('Accept', 'application/json, application/x-jinaga-feed-stream');
+            res.status(204).send();
+        });
+
         this.handler = router;
     }
 
@@ -347,7 +396,6 @@ export class HttpRouter {
     private async load(user: RequestUser, loadMessage: LoadMessage): Promise<FactEnvelope[]> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
-        const facts = result.map(r => r.fact);
         return result;
     }
 
