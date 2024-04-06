@@ -1,4 +1,3 @@
-import { createInterface } from 'readline';
 import { Handler, NextFunction, Request, Response, Router } from "express";
 import {
     Authorization,
@@ -12,12 +11,14 @@ import {
     FeedResponse,
     FeedsResponse,
     Forbidden,
+    GraphDeserializer,
+    GraphSerializer,
+    GraphSource,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
     ProjectedResult,
     ReferencesByName,
-    SaveMessage,
     Specification,
     SpecificationParser,
     Trace,
@@ -29,10 +30,8 @@ import {
     parseLoadMessage,
     parseSaveMessage
 } from "jinaga";
-
-import { GraphSerializer } from "./serializer";
+import { createInterface } from 'readline';
 import { Stream } from "./stream";
-import { GraphDeserializer, GraphSource } from "./deserializer";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
