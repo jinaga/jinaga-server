@@ -58,7 +58,11 @@ describe("GraphDeserializer", () => {
     });
 
     it("should read a graph with two facts with signatures", async () => {
-        const input = "\"MyApp.Root\"\n{}\n{}\n\nPK0\n\"signature\"\n\n\"MyApp.Child\"\n{\"root\":0}\n{}\n\n";
+        const input =
+            "PK0\n\"public\"\n\n" +
+            "\"MyApp.Root\"\n{}\n{}\nPK0\n\"signature\"\n\n" +
+            "PK1\n\"public2\"\n\n" +
+            "\"MyApp.Child\"\n{\"root\":0}\n{}\nPK0\n\"signature1\"\nPK1\n\"signature2\"\n\n";
         const readLine = createReadLine(input);
         const deserializer = new GraphDeserializer(readLine);
         const envelopes = await readAll(deserializer);
@@ -70,7 +74,7 @@ describe("GraphDeserializer", () => {
                 predecessors: {}
             },
             signatures: [{
-                publicKey: "signature",
+                publicKey: "public",
                 signature: "signature"
             }]
         }, {
@@ -85,15 +89,27 @@ describe("GraphDeserializer", () => {
                     }
                 }
             },
-            signatures: []
+            signatures: [
+              {
+                "publicKey": "public",
+                "signature": "signature1",
+              }, {
+                "publicKey": "public2",
+                "signature": "signature2",
+              },
+            ],
         }]);
     });
 });
 
 function createReadLine(input: string) {
     const lines = input.split("\n");
+    if (lines[lines.length - 1] === "") {
+        lines.pop();
+    }
     return async () => {
-        return lines.shift() || null;
+        const line = lines.shift();
+        return line !== undefined ? line : null;
     };
 }
 

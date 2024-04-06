@@ -20,30 +20,52 @@ export class GraphDeserializer implements GraphSource {
         let envelopes: FactEnvelope[] = [];
         let line: string | null;
         while ((line = await this.readLine()) !== null) {
-            // Read the fact
-            const type = JSON.parse(line);
-            const predecessorIndexes = await this.parseNextJSONLine();
-            const fields = await this.parseNextJSONLine();
-
-            const predecessors = this.getPredecessorReferences(predecessorIndexes);
-
-            const hash = computeHash(fields, predecessors);
-            this.factReferences.push({ type, hash });
-            const fact: FactRecord = { type, hash, predecessors, fields };
-
-            const signatures = await this.readSignatures();
-
-            envelopes.push({ fact, signatures });
-
-            // Periodically handle a batch of envelopes
-            if (envelopes.length >= 20) {
-                await onEnvelopes(envelopes);
-                envelopes = [];
+            if (line.startsWith("PK")) {
+                const index = parseInt(line.substring(2));
+                await this.readPublicKey(index);
+            }
+            else {
+                const type = JSON.parse(line);
+                envelopes = await this.readEnvelope(type, envelopes, onEnvelopes);
             }
         }
         if (envelopes.length > 0) {
             await onEnvelopes(envelopes);
         }
+    }
+
+    private async readPublicKey(index: number) {
+        if (index !== this.publicKeys.length) {
+            throw new Error(`Public key index ${index} is out of order`);
+        }
+        const publicKey = await this.parseNextJSONLine();
+        const emptyLine = await this.readLine();
+        if (emptyLine !== "") {
+            throw new Error(`Expected empty line after public key, but got "${emptyLine}"`);
+        }
+        this.publicKeys.push(publicKey);
+    }
+
+    private async readEnvelope(type: string, envelopes: FactEnvelope[], onEnvelopes: (envelopes: FactEnvelope[]) => Promise<void>) {
+        const predecessorIndexes = await this.parseNextJSONLine();
+        const fields = await this.parseNextJSONLine();
+
+        const predecessors = this.getPredecessorReferences(predecessorIndexes);
+
+        const hash = computeHash(fields, predecessors);
+        this.factReferences.push({ type, hash });
+        const fact: FactRecord = { type, hash, predecessors, fields };
+
+        const signatures = await this.readSignatures();
+
+        envelopes.push({ fact, signatures });
+
+        // Periodically handle a batch of envelopes
+        if (envelopes.length >= 20) {
+            await onEnvelopes(envelopes);
+            envelopes = [];
+        }
+        return envelopes;
     }
 
     private getPredecessorReferences(predecessorIndexes: any) {
