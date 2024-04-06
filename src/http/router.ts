@@ -1,4 +1,4 @@
-import { Handler, MediaType, Response, Router } from "express";
+import { Handler, NextFunction, Request, Response, Router } from "express";
 import {
     Authorization,
     Declaration,
@@ -29,8 +29,8 @@ import {
     parseSaveMessage
 } from "jinaga";
 
-import { Stream } from "./stream";
 import { GraphSerializer } from "./serializer";
+import { Stream } from "./stream";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -306,7 +306,12 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache) {
+    constructor(
+        private factManager: FactManager,
+        private authorization: Authorization,
+        private feedCache: FeedCache,
+        allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
+    ) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
         router.post('/load', post(
@@ -330,54 +335,86 @@ export class HttpRouter {
             (user, params, query) => this.feed(user, params, query),
             (user, params, query) => this.streamFeed(user, params, query)));
 
-        // Respond to OPTIONS requests to describe the actions and content types
+        // Specify the allowed origins.
+        function applyAllowOrigin(sendResponse: (req: Request, res: Response) => void) {
+            return (req: Request, res: Response, next: NextFunction) => {
+                let requestOrigin = req.get('Origin');
+
+                if (typeof allowedOrigin === 'string') {
+                    // If allowedOrigin is a string, use it as the value of the Access-Control-Allow-Origin header
+                    res.set('Access-Control-Allow-Origin', allowedOrigin);
+                    sendResponse(req, res);
+                } else if (Array.isArray(allowedOrigin)) {
+                    // If allowedOrigin is an array, check if the request's origin is in the array
+                    if (requestOrigin && allowedOrigin.includes(requestOrigin)) {
+                        res.set('Access-Control-Allow-Origin', requestOrigin);
+                    }
+                    sendResponse(req, res);
+                } else if (typeof allowedOrigin === 'function' && requestOrigin) {
+                    // If allowedOrigin is a function, call it with the request's origin
+                    allowedOrigin(requestOrigin, (err, allow) => {
+                        if (err) {
+                            next(err);
+                        } else if (allow) {
+                            res.set('Access-Control-Allow-Origin', requestOrigin);
+                        }
+                        sendResponse(req, res);
+                    });
+                } else {
+                    sendResponse(req, res);
+                }
+            };
+        }
+
+        // Respond to OPTIONS requests to describe the methods and content types
         // that are supported.
-        router.options('/login', (req, res) => {
+        router.options('/login', applyAllowOrigin((req, res) => {
             res.set('Allow', 'GET, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Accept');
-            res.set('Accept', 'application/json');
+            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Accept, Authorization');
             res.status(204).send();
-        });
-        router.options('/load', (req, res) => {
+        }));
+        router.options('/load', applyAllowOrigin((req, res) => {
             res.set('Allow', 'POST, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
-            res.set('Content-Type', 'application/json');
-            res.set('Accept', 'application/json');
+            res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization');
+            res.set('Accept-Post', 'application/json');
             res.status(204).send();
-        });
-        router.options('/save', (req, res) => {
+        }));
+        router.options('/save', applyAllowOrigin((req, res) => {
             res.set('Allow', 'POST, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
-            res.set('Content-Type', 'application/json');
-            res.set('Accept', 'application/json');
+            res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization');
+            res.set('Accept-Post', 'application/json');
             res.status(204).send();
-        });
-        router.options('/read', (req, res) => {
+        }));
+        router.options('/read', applyAllowOrigin((req, res) => {
             res.set('Allow', 'POST, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
-            res.set('Content-Type', 'text/plain');
-            res.set('Accept', 'application/json');
+            res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization');
+            res.set('Accept-Post', 'text/plain');
             res.status(204).send();
-        });
-        router.options('/write', (req, res) => {
+        }));
+        router.options('/write', applyAllowOrigin((req, res) => {
             res.set('Allow', 'POST, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type');
-            res.set('Content-Type', 'text/plain');
+            res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            res.set('Accept-Post', 'text/plain');
             res.status(204).send();
-        });
-        router.options('/feeds', (req, res) => {
+        }));
+        router.options('/feeds', applyAllowOrigin((req, res) => {
             res.set('Allow', 'POST, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
-            res.set('Content-Type', 'text/plain');
-            res.set('Accept', 'application/json');
+            res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization');
+            res.set('Accept-Post', 'text/plain');
             res.status(204).send();
-        });
-        router.options('/feeds/:hash', (req, res) => {
+        }));
+        router.options('/feeds/:hash', applyAllowOrigin((req, res) => {
             res.set('Allow', 'GET, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Accept');
-            res.set('Accept', 'application/json, application/x-jinaga-feed-stream');
+            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Accept, Authorization');
             res.status(204).send();
-        });
+        }));
 
         this.handler = router;
     }

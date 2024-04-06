@@ -15,7 +15,6 @@ const server = http.createServer(app);
 app.set('port', process.env.PORT || 8080);
 app.use(express.json());
 app.use(express.text());
-app.use(cors());
 
 const pgConnection = process.env.JINAGA_POSTGRESQL ||
   'postgresql://appuser:apppw@localhost:5432/appdb';

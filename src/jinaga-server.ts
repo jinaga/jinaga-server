@@ -38,6 +38,7 @@ export type JinagaServerConfig = {
     model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     distribution?: (d: DistributionRules) => DistributionRules,
+    origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
 };
 
 export type JinagaServerInstance = {
@@ -67,7 +68,7 @@ export class JinagaServer {
         const network = new NetworkNoOp();
         const factManager = new FactManager(fork, source, store, network);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
-        const router = new HttpRouter(factManager, authorization, feedCache);
+        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*');
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {
