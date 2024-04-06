@@ -1,4 +1,3 @@
-import cors = require("cors");
 import express = require("express");
 import * as http from "http";
 import { JinagaServer } from "../src";
