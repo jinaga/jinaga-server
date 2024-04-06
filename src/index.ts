@@ -3,6 +3,7 @@ export { AuthenticationSession } from "./authentication/authentication-session";
 export { AuthorizationKeystore } from "./authorization/authorization-keystore";
 export { DistributedFactCache } from "./authorization/distributed-fact-cache";
 export { HttpRouter, RequestUser } from "./http/router";
+export { GraphSerializer } from "./http/serializer";
 export { Stream } from "./http/stream";
 export { JinagaServer, JinagaServerConfig, JinagaServerInstance, tracePool } from "./jinaga-server";
 export { Keystore } from "./keystore";
