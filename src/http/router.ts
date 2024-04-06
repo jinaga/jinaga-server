@@ -1,3 +1,4 @@
+import { createInterface } from 'readline';
 import { Handler, NextFunction, Request, Response, Router } from "express";
 import {
     Authorization,
@@ -31,6 +32,7 @@ import {
 
 import { GraphSerializer } from "./serializer";
 import { Stream } from "./stream";
+import { GraphDeserializer, GraphSource } from "./deserializer";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -203,15 +205,12 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
 }
 
 function postCreate<T>(
-    parse: (input: any) => T,
+    parse: (request: Request) => T,
     method: (user: RequestUser, message: T) => Promise<void>
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        const message = parse(req.body);
-        if (!message) {
-            throw new Error('Ensure that you have called app.use(express.json()).');
-        }
+        const message = parse(req);
         method(user, message)
             .then(_ => {
                 res.sendStatus(201);
@@ -274,6 +273,39 @@ function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     };
 }
 
+function inputSaveMessage(req: Request): GraphSource {
+    if (req.is('application/x-jinaga-graph-v1')) {
+        // Convert the request into a function that reads one line at a time.
+        const lineReader = createInterface({
+            input: req,
+            crlfDelay: Infinity
+        });
+        const readLine = async () => {
+            const line = await lineReader[Symbol.asyncIterator]().next();
+            if (line.done) {
+                return null;
+            }
+            return line.value;
+        }
+
+        return new GraphDeserializer(readLine);
+    }
+    else {
+        return {
+            read: async (onEnvelopes) => {
+                const message = parseSaveMessage(req.body);
+                if (!message) {
+                    throw new Error('Ensure that you have called app.use(express.json()).');
+                }
+                await onEnvelopes(message.facts.map(fact => ({
+                    fact: fact,
+                    signatures: []
+                })));
+            }
+        };
+    }
+}
+
 function outputGraph(result: FactEnvelope[], res: Response, accepts: (type: string) => string | false) {
     if (accepts("application/x-jinaga-graph-v1")) {
         res.type("application/x-jinaga-graph-v1");
@@ -320,8 +352,8 @@ export class HttpRouter {
             outputGraph
         ));
         router.post('/save', postCreate(
-            parseSaveMessage,
-            (user, saveMessage) => this.save(user, saveMessage)
+            inputSaveMessage,
+            (user, graphSource) => this.save(user, graphSource)
         ));
 
         router.post('/read', postString((user, input: string) => this.read(user, input)));
@@ -379,13 +411,11 @@ export class HttpRouter {
         return result;
     }
 
-    private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
+    private async save(user: RequestUser | null, graphSource: GraphSource): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, saveMessage.facts
-            .map(fact => ({
-                fact: fact,
-                signatures: []
-            })));
+        await graphSource.read(async (envelopes) => {
+            await this.authorization.save(userIdentity, envelopes);
+        });
     }
 
     private async read(user: RequestUser | null, input: string): Promise<any[]> {

@@ -1,6 +1,6 @@
 import { FactEnvelope, FactReference, PredecessorCollection } from "jinaga";
 
-type IndexPredecessorCollection = {
+export type IndexPredecessorCollection = {
     [role: string]: number | number[];
 };
 
