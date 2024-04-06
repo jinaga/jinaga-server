@@ -1,0 +1,6 @@
+POST {{replicatorUrl}}/save
+Content-Type: application/x-jinaga-graph-v1
+
+"Test.Root"
+{}
+{"identifier":"rootfact"}

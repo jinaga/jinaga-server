@@ -1,0 +1,13 @@
+POST {{replicatorUrl}}/save
+Content-Type: application/json
+
+{
+    "facts": [{
+        "type": "Test.Root",
+        "hash": "sdkjbks",
+        "predecessors": {},
+        "fields": {
+            "identifier": "rootfact"
+        }
+    }]
+}
