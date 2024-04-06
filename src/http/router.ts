@@ -376,7 +376,7 @@ export class HttpRouter {
             .intendedForPost('application/json')
             .returningContent();
         this.setOptions(router, '/save')
-            .intendedForPost('application/json')
+            .intendedForPost('application/json', 'application/x-jinaga-graph-v1')
             .returningNoContent();
         this.setOptions(router, '/read')
             .intendedForPost('text/plain')
