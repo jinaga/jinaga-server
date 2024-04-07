@@ -30,8 +30,8 @@ import {
     parseLoadMessage,
     parseSaveMessage
 } from "jinaga";
-import { createInterface } from 'readline';
 import { Stream } from "./stream";
+import { createLineReader } from "./line-reader";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -275,17 +275,7 @@ function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
 function inputSaveMessage(req: Request): GraphSource {
     if (req.is('application/x-jinaga-graph-v1')) {
         // Convert the request into a function that reads one line at a time.
-        const lineReader = createInterface({
-            input: req,
-            crlfDelay: Infinity
-        });
-        const readLine = async () => {
-            const line = await lineReader[Symbol.asyncIterator]().next();
-            if (line.done) {
-                return null;
-            }
-            return line.value;
-        }
+        const readLine = createLineReader(req);
 
         return new GraphDeserializer(readLine);
     }
