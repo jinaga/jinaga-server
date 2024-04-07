@@ -2,6 +2,7 @@ export { AuthenticationDevice } from "./authentication/authentication-device";
 export { AuthenticationSession } from "./authentication/authentication-session";
 export { AuthorizationKeystore } from "./authorization/authorization-keystore";
 export { DistributedFactCache } from "./authorization/distributed-fact-cache";
+export { createLineReader } from "./http/line-reader";
 export { HttpRouter, RequestUser } from "./http/router";
 export { Stream } from "./http/stream";
 export { JinagaServer, JinagaServerConfig, JinagaServerInstance, tracePool } from "./jinaga-server";
