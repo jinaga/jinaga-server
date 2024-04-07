@@ -1,22 +1,37 @@
-export function createLineReaderUsingEvents(stream: NodeJS.ReadableStream): () => Promise<string | null> {
+const PauseAt = 10;
+const ResumeAt = 5;
+
+export function createLineReader(stream: NodeJS.ReadableStream): () => Promise<string | null> {
     // Store the bytes read so far that have not yet been processed.
     let buffer = Buffer.alloc(0);
-    let linesRead: string[] = [];
-    let error: Error | null = null;
-    let done = false;
+    // Store a queue of promises that resolve to the next line read.
+    let promiseQueue: Promise<string | null>[] = [];
+    // Initialize the queue.
+    let resolve: (value: string | null) => void;
+    let reject: (reason: any) => void;
+    promiseQueue.push(new Promise<string | null>((res, rej) => { resolve = res; reject = rej; }));
 
     stream.on('data', (data: Buffer) => {
-        let newline: number;
+        let newline = -1;
         // Look for the first newline in the data.
         while ((newline = data.indexOf(10)) >= 0) {
             // Extract the line from the data.
             let line = Buffer.concat([buffer, data.slice(0, newline)]).toString();
-            buffer = data.slice(newline + 1);
+            data = data.slice(newline + 1);
+            buffer = Buffer.alloc(0);
             if (line.charCodeAt(0) === 0xFEFF) {
                 // Remove BOM
                 line = line.slice(1);
             }
-            linesRead.concat(line);
+            // Resolve the promise with the line.
+            resolve(line);
+            // Create a new promise for the next line.
+            promiseQueue.push(new Promise<string | null>((res, rej) => { resolve = res; reject = rej; }));
+
+            // Apply backpressure if the promise queue gets too deep
+            if (promiseQueue.length > PauseAt) {
+                stream.pause();
+            }
         }
         // Append the remaining data to the buffer.
         buffer = Buffer.concat([buffer, data]);
@@ -31,37 +46,24 @@ export function createLineReaderUsingEvents(stream: NodeJS.ReadableStream): () =
         }
         // If the stream ends with a newline, then don't add an empty line.
         if (line.length > 0) {
-            linesRead.concat(line);
+            resolve(line);
+            promiseQueue.push(new Promise<string | null>((res, rej) => { resolve = res; reject = rej; }));
         }
-        done = true;
+        resolve(null);
     });
 
     stream.on('error', (e: Error) => {
-        error = e;
+        reject(e);
     });
 
-    const generator = async function*() {
-        while (true) {
-            if (error) {
-                throw error;
-            } else if (linesRead.length > 0) {
-                yield linesRead.shift()!;
-            } else if (done) {
-                return;
-            } else {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
+    return () => {
+        if (promiseQueue.length === 0) {
+            throw new Error("Line reader has been closed.");
         }
-    }
-
-    const iterator = generator();
-    const readLine = async () => {
-        const line = await iterator.next();
-        if (line.done) {
-            return null;
+        const promise = promiseQueue.shift()!;
+        if (stream.isPaused() && promiseQueue.length <= ResumeAt) {
+            stream.resume();
         }
-        return line.value;
-    }
-
-    return readLine;
+        return promise;
+    };
 }
