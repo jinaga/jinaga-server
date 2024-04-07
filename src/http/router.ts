@@ -284,7 +284,12 @@ function inputSaveMessage(req: Request): GraphSource {
             if (line.done) {
                 return null;
             }
-            return line.value;
+            let value = line.value;
+            if (value.charCodeAt(0) === 0xFEFF) {
+                // Remove BOM
+                value = value.slice(1);
+            }
+            return value;
         }
 
         return new GraphDeserializer(readLine);
