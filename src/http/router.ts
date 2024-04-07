@@ -1,4 +1,4 @@
-import { Handler, MediaType, Response, Router } from "express";
+import { Handler, NextFunction, Request, Response, Router } from "express";
 import {
     Authorization,
     Declaration,
@@ -11,12 +11,14 @@ import {
     FeedResponse,
     FeedsResponse,
     Forbidden,
+    GraphDeserializer,
+    GraphSerializer,
+    GraphSource,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
     ProjectedResult,
     ReferencesByName,
-    SaveMessage,
     Specification,
     SpecificationParser,
     Trace,
@@ -28,9 +30,8 @@ import {
     parseLoadMessage,
     parseSaveMessage
 } from "jinaga";
-
+import { createInterface } from 'readline';
 import { Stream } from "./stream";
-import { GraphSerializer } from "./serializer";
 
 interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
 
@@ -203,15 +204,12 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
 }
 
 function postCreate<T>(
-    parse: (input: any) => T,
+    parse: (request: Request) => T,
     method: (user: RequestUser, message: T) => Promise<void>
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
-        const message = parse(req.body);
-        if (!message) {
-            throw new Error('Ensure that you have called app.use(express.json()).');
-        }
+        const message = parse(req);
         method(user, message)
             .then(_ => {
                 res.sendStatus(201);
@@ -274,6 +272,39 @@ function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     };
 }
 
+function inputSaveMessage(req: Request): GraphSource {
+    if (req.is('application/x-jinaga-graph-v1')) {
+        // Convert the request into a function that reads one line at a time.
+        const lineReader = createInterface({
+            input: req,
+            crlfDelay: Infinity
+        });
+        const readLine = async () => {
+            const line = await lineReader[Symbol.asyncIterator]().next();
+            if (line.done) {
+                return null;
+            }
+            return line.value;
+        }
+
+        return new GraphDeserializer(readLine);
+    }
+    else {
+        return {
+            read: async (onEnvelopes) => {
+                const message = parseSaveMessage(req.body);
+                if (!message) {
+                    throw new Error('Ensure that you have called app.use(express.json()).');
+                }
+                await onEnvelopes(message.facts.map(fact => ({
+                    fact: fact,
+                    signatures: []
+                })));
+            }
+        };
+    }
+}
+
 function outputGraph(result: FactEnvelope[], res: Response, accepts: (type: string) => string | false) {
     if (accepts("application/x-jinaga-graph-v1")) {
         res.type("application/x-jinaga-graph-v1");
@@ -306,7 +337,12 @@ export interface RequestUser {
 export class HttpRouter {
     handler: Handler;
 
-    constructor(private factManager: FactManager, private authorization: Authorization, private feedCache: FeedCache) {
+    constructor(
+        private factManager: FactManager,
+        private authorization: Authorization,
+        private feedCache: FeedCache,
+        private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
+    ) {
         const router = Router();
         router.get('/login', getAuthenticate(user => this.login(user)));
         router.post('/load', post(
@@ -315,8 +351,8 @@ export class HttpRouter {
             outputGraph
         ));
         router.post('/save', postCreate(
-            parseSaveMessage,
-            (user, saveMessage) => this.save(user, saveMessage)
+            inputSaveMessage,
+            (user, graphSource) => this.save(user, graphSource)
         ));
 
         router.post('/read', postString((user, input: string) => this.read(user, input)));
@@ -329,6 +365,30 @@ export class HttpRouter {
         router.get('/feeds/:hash', getOrStream<FeedResponse>(
             (user, params, query) => this.feed(user, params, query),
             (user, params, query) => this.streamFeed(user, params, query)));
+
+        // Respond to OPTIONS requests to describe the methods and content types
+        // that are supported.
+        this.setOptions(router, '/login')
+            .intendedForGet()
+            .returningContent();
+        this.setOptions(router, '/load')
+            .intendedForPost('application/json')
+            .returningContent();
+        this.setOptions(router, '/save')
+            .intendedForPost('application/json', 'application/x-jinaga-graph-v1')
+            .returningNoContent();
+        this.setOptions(router, '/read')
+            .intendedForPost('text/plain')
+            .returningContent();
+        this.setOptions(router, '/write')
+            .intendedForPost('text/plain')
+            .returningNoContent();
+        this.setOptions(router, '/feeds')
+            .intendedForPost('text/plain')
+            .returningContent();
+        this.setOptions(router, '/feeds/:hash')
+            .intendedForGet()
+            .returningContent();
 
         this.handler = router;
     }
@@ -347,17 +407,14 @@ export class HttpRouter {
     private async load(user: RequestUser, loadMessage: LoadMessage): Promise<FactEnvelope[]> {
         const userIdentity = serializeUserIdentity(user);
         const result = await this.authorization.load(userIdentity, loadMessage.references);
-        const facts = result.map(r => r.fact);
         return result;
     }
 
-    private async save(user: RequestUser | null, saveMessage: SaveMessage): Promise<void> {
+    private async save(user: RequestUser | null, graphSource: GraphSource): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, saveMessage.facts
-            .map(fact => ({
-                fact: fact,
-                signatures: []
-            })));
+        await graphSource.read(async (envelopes) => {
+            await this.authorization.save(userIdentity, envelopes);
+        });
     }
 
     private async read(user: RequestUser | null, input: string): Promise<any[]> {
@@ -550,6 +607,77 @@ export class HttpRouter {
             return declaredFact.declared.reference;
         });
     }
+
+    private setOptions(router: Router, path: string): OptionsConfiguration {
+        const addOptions = (allowedMethods: string[], allowedHeaders: string[], allowedTypes: string[]) => {
+            router.options(path, this.applyAllowOrigin((req, res) => {
+                res.set('Allow', allowedMethods.join(', '));
+                res.set('Access-Control-Allow-Methods', allowedMethods.join(', '));
+                res.set('Access-Control-Allow-Headers', allowedHeaders.join(', '));
+                if (allowedTypes.length > 0) {
+                    res.set('Accept-Post', allowedTypes.join(', '));
+                }
+                res.status(204).send();
+            }));
+        }
+
+        return {
+            intendedForGet: () => {
+                addOptions(['GET', 'OPTIONS'], ['Accept', 'Authorization'], []);
+                return {
+                    returningContent: () => { },
+                    returningNoContent: () => { }
+                };
+            },
+            intendedForPost: (...contentTypes: string[]) => {
+                return {
+                    returningContent: () => {
+                        addOptions(
+                            ['POST', 'OPTIONS'],
+                            ['Content-Type', 'Accept', 'Authorization'],
+                            contentTypes);
+                    },
+                    returningNoContent: () => {
+                        addOptions(
+                            ['POST', 'OPTIONS'],
+                            ['Content-Type', 'Authorization'],
+                            contentTypes);
+                    }
+                };
+            }
+        };
+    }
+
+    private applyAllowOrigin(sendResponse: (req: Request, res: Response) => void) {
+        // Specify the allowed origins.
+        return (req: Request, res: Response, next: NextFunction) => {
+            let requestOrigin = req.get('Origin');
+
+            if (typeof this.allowedOrigin === 'string') {
+                // If allowedOrigin is a string, use it as the value of the Access-Control-Allow-Origin header
+                res.set('Access-Control-Allow-Origin', this.allowedOrigin);
+                sendResponse(req, res);
+            } else if (Array.isArray(this.allowedOrigin)) {
+                // If allowedOrigin is an array, check if the request's origin is in the array
+                if (requestOrigin && this.allowedOrigin.includes(requestOrigin)) {
+                    res.set('Access-Control-Allow-Origin', requestOrigin);
+                }
+                sendResponse(req, res);
+            } else if (typeof this.allowedOrigin === 'function' && requestOrigin) {
+                // If allowedOrigin is a function, call it with the request's origin
+                this.allowedOrigin(requestOrigin, (err, allow) => {
+                    if (err) {
+                        next(err);
+                    } else if (allow) {
+                        res.set('Access-Control-Allow-Origin', requestOrigin);
+                    }
+                    sendResponse(req, res);
+                });
+            } else {
+                sendResponse(req, res);
+            }
+        };
+    }
 }
 
 function parseString(input: any): string {
@@ -573,4 +701,14 @@ function extractResults(obj: any): any {
     else {
         return obj;
     }
+}
+
+interface OptionsConfiguration {
+    intendedForGet(): ResponseConfiguration;
+    intendedForPost(...contentTypes: string[]): ResponseConfiguration;
+}
+
+interface ResponseConfiguration {
+    returningContent(): void;
+    returningNoContent(): void;
 }

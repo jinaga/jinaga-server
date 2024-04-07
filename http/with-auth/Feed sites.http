@@ -1,0 +1,3 @@
+GET {{replicatorUrl}}/feeds/dx2gDQc8HI5kA1zm4p32D8b4mL_UySPtTMCbIUO43E-FiCG7bqRWqOLQRIDDL6J4qLUMdJI8q0aHl0Yel9zVlQ
+Authorization: oauth2 authorization_code
+Accept: application/json

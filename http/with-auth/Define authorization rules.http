@@ -1,0 +1,25 @@
+POST {{authorizationEndpoint}}
+Content-Type: text/plain
+Authorization: Bearer {{secret}}
+
+authorization {
+  any Jinaga.User
+
+  (site: Blog.Site) {
+    creator: Jinaga.User [
+      creator = site->creator: Jinaga.User
+    ]
+  } => creator
+
+  (post: Blog.Post) {
+    creator: Jinaga.User [
+      creator = post->site: Blog.Site->creator: Jinaga.User
+    ]
+  } => creator
+
+  (title: Blog.Post.Title) {
+    creator: Jinaga.User [
+      creator = title->post: Blog.Post->site: Blog.Site->creator: Jinaga.User
+    ]
+  } => creator
+}

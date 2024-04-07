@@ -1,0 +1,32 @@
+POST {{replicatorUrl}}/read
+Content-Type: text/plain
+Authorization: oauth2 authorization_code
+
+let site: Blog.Site = {
+  creator: me,
+  domain: "michaelperry.net"
+}
+
+(site: Blog.Site) {
+    post: Blog.Post [
+        post->site: Blog.Site = site
+        !E {
+            deleted: Blog.Post.Deleted [
+                deleted->post: Blog.Post = post
+            ]
+        }
+    ]
+} => {
+    id = #post
+    createdAt = post.createdAt
+    titles = {
+        title: Blog.Post.Title [
+            title->post: Blog.Post = post
+            !E {
+                next: Blog.Post.Title [
+                    next->prior: Blog.Post.Title = title
+                ]
+            }
+        ]
+    } => title.value
+}
