@@ -1,10 +1,9 @@
-import { computeHash, FactEnvelope, FactRecord, PredecessorCollection, UserIdentity } from "jinaga";
-import { pki } from "node-forge";
+import { computeHash, FactEnvelope, FactRecord, generateKeyPair, KeyPair, PredecessorCollection, UserIdentity } from "jinaga";
 
 import { Keystore } from "../keystore";
 
 export class MemoryKeystore implements Keystore {
-    private keyPairs: { [key: string]: { publicKey: string, privateKey: string }} = {};
+    private keyPairs: { [key: string]: KeyPair} = {};
 
     getOrCreateUserFact(userIdentity: UserIdentity): Promise<FactRecord> {
         return Promise.resolve(this.getOrCreateIdentityFact('Jinaga.User', userIdentity));
@@ -55,7 +54,7 @@ export class MemoryKeystore implements Keystore {
         const key = `${userIdentity.provider}:${userIdentity.id}`;
         const keyPair = this.keyPairs[key];
         if (keyPair) {
-            return keyPair.publicKey;
+            return keyPair.publicPem;
         }
         else {
             return this.generateKeyPair(key);
@@ -66,7 +65,7 @@ export class MemoryKeystore implements Keystore {
         const key = `${userIdentity.provider}:${userIdentity.id}`;
         const keyPair = this.keyPairs[key];
         if (keyPair) {
-            return keyPair.publicKey;
+            return keyPair.publicPem;
         }
         else {
             throw new Error("Public key not found");
@@ -74,10 +73,8 @@ export class MemoryKeystore implements Keystore {
     }
 
     private generateKeyPair(key: string) {
-        const keypair = pki.rsa.generateKeyPair({ bits: 1024 });
-        const privateKey = pki.privateKeyToPem(keypair.privateKey);
-        const publicKey = pki.publicKeyToPem(keypair.publicKey);
-        this.keyPairs[key] = { publicKey, privateKey };
-        return publicKey;
+        const keyPair = generateKeyPair();
+        this.keyPairs[key] = keyPair;
+        return keyPair.privatePem;
     }
 }

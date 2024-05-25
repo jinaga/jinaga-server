@@ -1,8 +1,6 @@
-import { computeHash, FactEnvelope, FactRecord, PredecessorCollection, UserIdentity } from "jinaga";
+import { computeHash, FactEnvelope, FactRecord, generateKeyPair, KeyPair, PredecessorCollection, signFacts, UserIdentity } from "jinaga";
 import { Pool, PoolClient } from "pg";
 
-import { generateKeyPair, KeyPair } from "../cryptography/KeyPair";
-import { signFacts } from "../cryptography/signFacts";
 import { Keystore } from "../keystore";
 import { ConnectionFactory } from "./connection";
 
