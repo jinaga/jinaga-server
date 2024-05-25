@@ -120,6 +120,8 @@ To release a new version of Jinaga server, bump the version number, create a new
 from the generated tag, and let GitHub Actions do the rest.
 
 ```bash
+git c main
+git pull
 npm version patch
 git push --follow-tags
 gh release create v$(node -p "require('./package.json').version") --generate-notes --verify-tag

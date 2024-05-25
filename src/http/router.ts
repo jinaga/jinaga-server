@@ -28,7 +28,8 @@ import {
     computeTupleSubsetHash,
     invertSpecification,
     parseLoadMessage,
-    parseSaveMessage
+    parseSaveMessage,
+    verifyEnvelopes
 } from "jinaga";
 import { Stream } from "./stream";
 import { createLineReader } from "./line-reader";
@@ -403,6 +404,9 @@ export class HttpRouter {
     private async save(user: RequestUser | null, graphSource: GraphSource): Promise<void> {
         const userIdentity = serializeUserIdentity(user);
         await graphSource.read(async (envelopes) => {
+            if (!verifyEnvelopes(envelopes)) {
+                throw new Forbidden("The signatures on the facts are invalid.");
+            }
             await this.authorization.save(userIdentity, envelopes);
         });
     }
