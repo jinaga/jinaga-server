@@ -1,14 +1,8 @@
-import { canonicalizeFact, computeHash, FactEnvelope, FactRecord, PredecessorCollection, Trace, UserIdentity } from "jinaga";
-import { md, pki, util } from "node-forge";
+import { computeHash, FactEnvelope, FactRecord, generateKeyPair, KeyPair, PredecessorCollection, signFacts, UserIdentity } from "jinaga";
 import { Pool, PoolClient } from "pg";
 
 import { Keystore } from "../keystore";
 import { ConnectionFactory } from "./connection";
-
-interface KeyPair {
-    publicPem: string;
-    privatePem: string;
-};
 
 export class PostgresKeystore implements Keystore {
     private connectionFactory: ConnectionFactory;
@@ -39,10 +33,8 @@ export class PostgresKeystore implements Keystore {
             return facts.map(fact => ({ fact, signatures: [] }));
         }
         
-        const { publicPem, privatePem } = await this.getKeyPair(userIdentity);
-        const privateKey = <pki.rsa.PrivateKey>pki.privateKeyFromPem(privatePem);
-        const envelopes: FactEnvelope[] = facts.map(fact => signFact(fact, publicPem, privateKey));
-        return envelopes;
+        const keyPair = await this.getKeyPair(userIdentity);
+        return signFacts(keyPair, facts);
     }
 
     private async getOrCreateIdentityFact(type: string, identity: UserIdentity): Promise<FactRecord> {
@@ -121,37 +113,13 @@ export class PostgresKeystore implements Keystore {
     }
 
     private async generateKeyPair(connection: PoolClient, userIdentity: UserIdentity): Promise<KeyPair> {
-        const keypair = pki.rsa.generateKeyPair({ bits: 2048 });
-        const privatePem = pki.privateKeyToPem(keypair.privateKey);
-        const publicPem = pki.publicKeyToPem(keypair.publicKey);
+        const keyPair = generateKeyPair();
         await connection.query(`INSERT INTO ${this.schema}.user (provider, user_identifier, private_key, public_key) VALUES ($1, $2, $3, $4)`,
-            [userIdentity.provider, userIdentity.id, privatePem, publicPem]);
-        return { publicPem, privatePem };
+            [userIdentity.provider, userIdentity.id, keyPair.privatePem, keyPair.publicPem]);
+        return keyPair;
     }
 }
 
 function getUserIdentityKey(userIdentity: UserIdentity) {
     return `${userIdentity.provider}-${userIdentity.id}`;
-}
-
-function signFact(fact: FactRecord, publicPem: string, privateKey: pki.rsa.PrivateKey): FactEnvelope {
-    const canonicalString = canonicalizeFact(fact.fields, fact.predecessors);
-    const encodedString = util.encodeUtf8(canonicalString);
-    const digest = md.sha512.create().update(encodedString);
-    const hash = util.encode64(digest.digest().getBytes());
-    if (fact.hash !== hash) {
-        Trace.error(`Hash does not match. "${fact.hash}" !== "${hash}"\nFact: ${canonicalString}`);
-        return {
-            fact,
-            signatures: []
-        };
-    }
-    const signature = util.encode64(privateKey.sign(digest));
-    return {
-        fact,
-        signatures: [{
-            signature,
-            publicKey: publicPem
-        }]
-    };
 }
