@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "jinaga": "^6.1.6",
+    "jinaga": "^6.1.7",
     "pg": "^8.12.0"
   }
 }
