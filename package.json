@@ -1,6 +1,6 @@
 {
   "name": "jinaga-server",
-  "version": "3.1.2",
+  "version": "3.1.4",
   "description": "Data management for web and mobile applications.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "jinaga": "^6.1.2",
-    "pg": "^8.11.5"
+    "jinaga": "^6.1.7",
+    "pg": "^8.12.0"
   }
 }
