@@ -56,7 +56,7 @@ IF (SELECT to_regclass('public.fact_type')) IS NULL THEN
 
     CREATE TABLE fact_type (
         fact_type_id serial PRIMARY KEY,
-        name character varying(50) NOT NULL
+        name character varying(200) NOT NULL
     );
 
 
@@ -78,7 +78,7 @@ IF (SELECT to_regclass('public.role')) IS NULL THEN
         CONSTRAINT fk_defining_fact_type_id
             FOREIGN KEY (defining_fact_type_id)
             REFERENCES fact_type (fact_type_id),
-        name character varying(20) NOT NULL
+        name character varying(200) NOT NULL
     );
 
 
@@ -233,6 +233,34 @@ IF (SELECT to_regclass('public.user') IS NULL) THEN
 
     CREATE UNIQUE INDEX ux_user ON public."user" USING btree (user_identifier, provider);
     CREATE UNIQUE INDEX ux_user_public_key ON public."user" (public_key);
+
+END IF;
+
+--
+-- If the fact_type.name column is less than 200 characters, then increase it.
+--
+
+IF (SELECT character_maximum_length
+    FROM information_schema.columns
+    WHERE table_name = 'fact_type'
+    AND column_name = 'name') < 200 THEN
+
+    ALTER TABLE fact_type
+        ALTER COLUMN name TYPE character varying(200);
+
+END IF;
+
+--
+-- If the role.name column is less than 200 characters, then increase it.
+--
+
+IF (SELECT character_maximum_length
+    FROM information_schema.columns
+    WHERE table_name = 'role'
+    AND column_name = 'name') < 200 THEN
+
+    ALTER TABLE role
+        ALTER COLUMN name TYPE character varying(200);
 
 END IF;
 
