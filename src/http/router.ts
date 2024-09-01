@@ -335,25 +335,26 @@ export class HttpRouter {
         private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
     ) {
         const router = Router();
-        router.get('/login', getAuthenticate(user => this.login(user)));
-        router.post('/load', post(
+        const applyAllowOrigin = this.applyAllowOrigin.bind(this);
+        router.get('/login', applyAllowOrigin, getAuthenticate(user => this.login(user)));
+        router.post('/load', applyAllowOrigin, post(
             parseLoadMessage,
             (user, loadMessage) => this.load(user, loadMessage),
             outputGraph
         ));
-        router.post('/save', postCreate(
+        router.post('/save', applyAllowOrigin, postCreate(
             inputSaveMessage,
             (user, graphSource) => this.save(user, graphSource)
         ));
 
-        router.post('/read', postString((user, input: string) => this.read(user, input)));
-        router.post('/write', postStringCreate((user, input: string) => this.write(user, input)));
-        router.post('/feeds', post(
+        router.post('/read', applyAllowOrigin, postString((user, input: string) => this.read(user, input)));
+        router.post('/write', applyAllowOrigin, postStringCreate((user, input: string) => this.write(user, input)));
+        router.post('/feeds', applyAllowOrigin, post(
             parseString,
             (user, input: string, accepts) => this.feeds(user, input),
             outputFeeds
         ));
-        router.get('/feeds/:hash', getOrStream<FeedResponse>(
+        router.get('/feeds/:hash', applyAllowOrigin, getOrStream<FeedResponse>(
             (user, params, query) => this.feed(user, params, query),
             (user, params, query) => this.streamFeed(user, params, query)));
 
@@ -604,7 +605,7 @@ export class HttpRouter {
 
     private setOptions(router: Router, path: string): OptionsConfiguration {
         const addOptions = (allowedMethods: string[], allowedHeaders: string[], allowedTypes: string[]) => {
-            router.options(path, this.applyAllowOrigin((req, res) => {
+            router.options(path, this.applyAllowOrigin.bind(this), (req: Request, res: Response) => {
                 res.set('Allow', allowedMethods.join(', '));
                 res.set('Access-Control-Allow-Methods', allowedMethods.join(', '));
                 res.set('Access-Control-Allow-Headers', allowedHeaders.join(', '));
@@ -612,7 +613,7 @@ export class HttpRouter {
                     res.set('Accept-Post', allowedTypes.join(', '));
                 }
                 res.status(204).send();
-            }));
+            });
         }
 
         return {
@@ -642,35 +643,33 @@ export class HttpRouter {
         };
     }
 
-    private applyAllowOrigin(sendResponse: (req: Request, res: Response) => void) {
+    private applyAllowOrigin(req: Request, res: Response, next: NextFunction) {
         // Specify the allowed origins.
-        return (req: Request, res: Response, next: NextFunction) => {
-            let requestOrigin = req.get('Origin');
+        let requestOrigin = req.get('Origin');
 
-            if (typeof this.allowedOrigin === 'string') {
-                // If allowedOrigin is a string, use it as the value of the Access-Control-Allow-Origin header
-                res.set('Access-Control-Allow-Origin', this.allowedOrigin);
-                sendResponse(req, res);
-            } else if (Array.isArray(this.allowedOrigin)) {
-                // If allowedOrigin is an array, check if the request's origin is in the array
-                if (requestOrigin && this.allowedOrigin.includes(requestOrigin)) {
+        if (typeof this.allowedOrigin === 'string') {
+            // If allowedOrigin is a string, use it as the value of the Access-Control-Allow-Origin header
+            res.set('Access-Control-Allow-Origin', this.allowedOrigin);
+            next();
+        } else if (Array.isArray(this.allowedOrigin)) {
+            // If allowedOrigin is an array, check if the request's origin is in the array
+            if (requestOrigin && this.allowedOrigin.includes(requestOrigin)) {
+                res.set('Access-Control-Allow-Origin', requestOrigin);
+            }
+            next();
+        } else if (typeof this.allowedOrigin === 'function' && requestOrigin) {
+            // If allowedOrigin is a function, call it with the request's origin
+            this.allowedOrigin(requestOrigin, (err, allow) => {
+                if (err) {
+                    next(err);
+                } else if (allow) {
                     res.set('Access-Control-Allow-Origin', requestOrigin);
                 }
-                sendResponse(req, res);
-            } else if (typeof this.allowedOrigin === 'function' && requestOrigin) {
-                // If allowedOrigin is a function, call it with the request's origin
-                this.allowedOrigin(requestOrigin, (err, allow) => {
-                    if (err) {
-                        next(err);
-                    } else if (allow) {
-                        res.set('Access-Control-Allow-Origin', requestOrigin);
-                    }
-                    sendResponse(req, res);
-                });
-            } else {
-                sendResponse(req, res);
-            }
-        };
+                next();
+            });
+        } else {
+            next();
+        }
     }
 }
 
