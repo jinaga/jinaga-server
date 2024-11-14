@@ -14,10 +14,13 @@ import {
     ObservableSource,
     ObservableSourceImpl,
     PassThroughFork,
+    PurgeConditions,
+    Specification,
     Storage,
     SyncStatusNotifier,
     Trace,
-    UserIdentity
+    UserIdentity,
+    validatePurgeSpecification
 } from "jinaga";
 import { Pool } from "pg";
 
@@ -38,6 +41,7 @@ export type JinagaServerConfig = {
     model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     distribution?: (d: DistributionRules) => DistributionRules,
+    purgeConditions?: (p: PurgeConditions) => PurgeConditions,
     origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
 };
 
@@ -66,7 +70,8 @@ export class JinagaServer {
         const feedCache = new FeedCache();
         const authentication = createAuthentication(store, keystore, authorizationRules);
         const network = new NetworkNoOp();
-        const factManager = new FactManager(fork, source, store, network);
+        const purgeConditions = createPurgeConditions(config);
+        const factManager = new FactManager(fork, source, store, network, purgeConditions);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
         const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*');
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
@@ -80,7 +85,7 @@ export class JinagaServer {
             handler: router.handler,
             j,
             withSession: (req, callback) => {
-                return withSession(store, keystore, authorizationRules, req, callback);
+                return withSession(store, keystore, authorizationRules, purgeConditions, req, callback);
             },
             close
         }
@@ -176,7 +181,7 @@ export function tracePool(postgresPool: Pool) {
     }
 }
 
-async function withSession(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null, req: Request, callback: ((j: Jinaga) => Promise<void>)) {
+async function withSession(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null, purgeConditions: Specification[], req: Request, callback: ((j: Jinaga) => Promise<void>)) {
     const user = <RequestUser>req.user;
     const userIdentity: UserIdentity = {
         provider: user.provider,
@@ -187,7 +192,7 @@ async function withSession(store: Storage, keystore: Keystore | null, authorizat
     const fork = new PassThroughFork(store);
     const observableSource = new ObservableSource(store);
     const network = new NetworkNoOp();
-    const factManager = new FactManager(fork, observableSource, store, network);
+    const factManager = new FactManager(fork, observableSource, store, network, purgeConditions);
     const j = new Jinaga(authentication, factManager, syncStatusNotifier);
     await callback(j);
 }
@@ -204,4 +209,21 @@ function validateSchema(schema: string | undefined): string {
     }
 
     return schema;
+}
+
+function createPurgeConditions(
+    config: JinagaServerConfig
+): Specification[] {
+    if (config.purgeConditions) {
+        var specifications = config.purgeConditions(new PurgeConditions([])).specifications;
+        var validationFailures: string[] = specifications.map(specification =>
+            validatePurgeSpecification(specification)).flat();
+        if (validationFailures.length > 0) {
+            throw new Error(validationFailures.join("\n"));
+        }
+        return specifications;
+    }
+    else {
+        return [];
+    }
 }
