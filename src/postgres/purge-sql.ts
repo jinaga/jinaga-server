@@ -8,6 +8,10 @@ export function purgeSqlFromSpecification(specification: Specification, factType
 
     let queryDescription = QueryDescription.unsatisfiable;
     let knownFacts: FactByLabel = {};
+    knownFacts[specification.given[0].name] = {
+        type: specification.given[0].type,
+        factIndex: 0
+    };
     ({ queryDescription, knownFacts } = queryDescriptionBuilder.addEdges(queryDescription, [], [], knownFacts, [], specification.matches));
 
     const query = generatePurgeSqlQuery(queryDescription, schema);
