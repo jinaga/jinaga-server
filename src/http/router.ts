@@ -73,17 +73,7 @@ function getOrStream<U>(
                             });
                     }
                 })
-                .catch(error => {
-                    if (error instanceof Forbidden) {
-                        res.type("text");
-                        res.status(403).send(error.message);
-                    }
-                    else {
-                        Trace.error(error);
-                        res.status(500).send(error.message);
-                    }
-                    next();
-                });
+                .catch(error => handleError(error, res, next));
         }
         else {
             getMethod(user, req.params, req.query)
@@ -98,17 +88,7 @@ function getOrStream<U>(
                         next();
                     }
                 })
-                .catch(error => {
-                    if (error instanceof Forbidden) {
-                        res.type("text");
-                        res.status(403).send(error.message);
-                    }
-                    else {
-                        Trace.error(error);
-                        res.status(500).send(error.message);
-                    }
-                    next();
-                });
+                .catch(error => handleError(error, res, next));
         }
     };
 }
@@ -126,11 +106,7 @@ function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]
                     res.send(JSON.stringify(response));
                     next();
                 })
-                .catch(error => {
-                    Trace.error(error);
-                    res.sendStatus(500);
-                    next();
-                });
+                .catch(error => handleError(error, res, next));
         }
     };
 }
@@ -157,24 +133,7 @@ function post<T, U>(
                     next();
                 }
             })
-            .catch(error => {
-                if (error instanceof Forbidden) {
-                    Trace.warn(error.message);
-                    res.type("text");
-                    res.status(403).send(error.message);
-                }
-                else if (error instanceof Invalid) {
-                    Trace.warn(error.message);
-                    res.type("text");
-                    res.status(400).send(error.message);
-                }
-                else {
-                    Trace.error(error);
-                    res.type("text");
-                    res.status(500).send(error.message);
-                }
-                next();
-            });
+        .catch(error => handleError(error, res, next));
     };
 }
 
@@ -193,24 +152,7 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
                     res.send(JSON.stringify(response, null, 2));
                     next();
                 })
-                .catch(error => {
-                    if (error instanceof Forbidden) {
-                        Trace.warn(error.message);
-                        res.type("text");
-                        res.status(403).send(error.message);
-                    }
-                    else if (error instanceof Invalid) {
-                        Trace.warn(error.message);
-                        res.type("text");
-                        res.status(400).send(error.message);
-                    }
-                    else {
-                        Trace.error(error);
-                        res.type("text");
-                        res.status(500).send(error.message);
-                    }
-                    next();
-                });
+                .catch(error => handleError(error, res, next));
         }
     };
 }
@@ -227,24 +169,7 @@ function postCreate<T>(
                 res.sendStatus(201);
                 next();
             })
-            .catch(error => {
-                if (error instanceof Forbidden) {
-                    Trace.warn(error.message);
-                    res.type("text");
-                    res.status(403).send(error.message);
-                }
-                else if (error instanceof Invalid) {
-                    Trace.warn(error.message);
-                    res.type("text");
-                    res.status(400).send(error.message);
-                }
-                else {
-                    Trace.error(error);
-                    res.type("text");
-                    res.status(500).send(error.message);
-                }
-                next();
-            });
+            .catch(error => handleError(error, res, next));
     };
 }
 
@@ -262,24 +187,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
                     res.sendStatus(201);
                     next();
                 })
-                .catch(error => {
-                    if (error instanceof Forbidden) {
-                        Trace.warn(error.message);
-                        res.type("text");
-                        res.status(403).send(error.message);
-                    }
-                    else if (error instanceof Invalid) {
-                        Trace.warn(error.message);
-                        res.type("text");
-                        res.status(400).send(error.message);
-                    }
-                    else {
-                        Trace.error(error);
-                        res.type("text");
-                        res.status(500).send(error.message);
-                    }
-                    next();
-                });
+                .catch(error => handleError(error, res, next));
         }
     };
 }
@@ -725,6 +633,21 @@ function extractResults(obj: any): any {
     else {
         return obj;
     }
+}
+
+function handleError(error: any, res: Response, next: NextFunction) {
+    if (error instanceof Forbidden) {
+        res.type("text");
+        res.status(403).send(error.message);
+    } else if (error instanceof Invalid) {
+        res.type("text");
+        res.status(400).send(error.message);
+    } else {
+        Trace.error(error);
+        res.type("text");
+        res.status(500).send(error.message);
+    }
+    next();
 }
 
 interface OptionsConfiguration {
