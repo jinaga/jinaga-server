@@ -162,6 +162,11 @@ function post<T, U>(
                     res.type("text");
                     res.status(403).send(error.message);
                 }
+                else if (error instanceof Invalid) {
+                    Trace.warn(error.message);
+                    res.type("text");
+                    res.status(400).send(error.message);
+                }
                 else {
                     Trace.error(error);
                     res.type("text");
@@ -193,10 +198,15 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
                         res.type("text");
                         res.status(403).send(error.message);
                     }
+                    else if (error instanceof Invalid) {
+                        Trace.warn(error.message);
+                        res.type("text");
+                        res.status(400).send(error.message);
+                    }
                     else {
                         Trace.error(error);
                         res.type("text");
-                        res.status(400).send(error.message);
+                        res.status(500).send(error.message);
                     }
                     next();
                 });
@@ -221,6 +231,11 @@ function postCreate<T>(
                     Trace.warn(error.message);
                     res.type("text");
                     res.status(403).send(error.message);
+                }
+                else if (error instanceof Invalid) {
+                    Trace.warn(error.message);
+                    res.type("text");
+                    res.status(400).send(error.message);
                 }
                 else {
                     Trace.error(error);
@@ -252,10 +267,15 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
                         res.type("text");
                         res.status(403).send(error.message);
                     }
+                    else if (error instanceof Invalid) {
+                        Trace.warn(error.message);
+                        res.type("text");
+                        res.status(400).send(error.message);
+                    }
                     else {
                         Trace.error(error);
                         res.type("text");
-                        res.status(400).send(error.message);
+                        res.status(500).send(error.message);
                     }
                     next();
                 });
@@ -436,7 +456,7 @@ export class HttpRouter {
         const factRecords: FactRecord[] = [];
         for (const value of declaration) {
             if (!value.declared.fact) {
-                throw new Error("References are not allowed while saving.");
+                throw new Invalid("References are not allowed while saving.");
             }
             factRecords.push(value.declared.fact);
         }
@@ -459,13 +479,18 @@ export class HttpRouter {
 
         // Verify that the number of start facts equals the number of inputs
         if (start.length !== specification.given.length) {
-            throw new Error(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
+            throw new Invalid(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
         }
         // Verify that the input type matches the start fact type
         for (let i = 0; i < start.length; i++) {
             if (start[i].type !== specification.given[i].type) {
-                throw new Error(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
+                throw new Invalid(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
             }
+        }
+        // Verify that the specification is compliant with purge conditions
+        var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
+        if (failures.length > 0) {
+            throw new Invalid(failures.join("\n"));
         }
         
         const namedStart = specification.given.reduce((map, label, index) => ({
@@ -597,7 +622,7 @@ export class HttpRouter {
         return specification.given.map(input => {
             const declaredFact = declaration.find(d => d.name === input.name);
             if (!declaredFact) {
-                throw new Error(`No fact named ${input.name} was declared`);
+                throw new Invalid(`No fact named ${input.name} was declared`);
             }
             return declaredFact.declared.reference;
         });
@@ -675,7 +700,7 @@ export class HttpRouter {
 
 function parseString(input: any): string {
     if (typeof input !== 'string') {
-        throw new Error("Expected a string. Check the content type of the request.");
+        throw new Invalid("Expected a string. Check the content type of the request.");
     }
     return input;
 }
@@ -704,4 +729,14 @@ interface OptionsConfiguration {
 interface ResponseConfiguration {
     returningContent(): void;
     returningNoContent(): void;
+}
+
+class Invalid extends Error {
+    __proto__: Error;
+    constructor(message?: string) {
+        const trueProto = new.target.prototype;
+        super(message);
+
+        this.__proto__ = trueProto;
+    }
 }
