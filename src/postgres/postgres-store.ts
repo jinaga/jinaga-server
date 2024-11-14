@@ -433,6 +433,10 @@ export class PostgresStore implements Storage {
         return factTypes;
     }
 
+    async purge(purgeConditions: Specification[]): Promise<void> {
+        throw new Error("Method not implemented.");
+    }
+
     loadBookmark(feed: string): Promise<string> {
         throw new Error("Method not implemented.");
     }
