@@ -19,7 +19,7 @@ import {
 } from "jinaga";
 
 import { FactTypeMap, RoleMap } from "./maps";
-import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuider } from "./query-description";
+import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 function generateResultSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
     const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
@@ -481,7 +481,7 @@ interface NamedResultComposer {
 
 class ResultDescriptionBuilder {
     constructor(
-        private queryDescriptionBuilder: QueryDescriptionBuider
+        private queryDescriptionBuilder: QueryDescriptionBuilder
     ) { }
 
     buildDescription(start: FactReference[], specification: Specification): ResultDescription {
@@ -547,7 +547,7 @@ function idsEqual(a: number[], b: number[]) {
 }
 
 export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string): ResultComposer | null {
-    const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
+    const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
     const descriptionBuilder = new ResultDescriptionBuilder(queryDescriptionBuilder);
     const description = descriptionBuilder.buildDescription(start, specification);
 
