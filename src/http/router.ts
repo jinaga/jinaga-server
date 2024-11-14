@@ -14,6 +14,7 @@ import {
     GraphDeserializer,
     GraphSerializer,
     GraphSource,
+    Invalid,
     LoadMessage,
     LoadResponse,
     ProfileMessage,
@@ -734,14 +735,4 @@ interface OptionsConfiguration {
 interface ResponseConfiguration {
     returningContent(): void;
     returningNoContent(): void;
-}
-
-class Invalid extends Error {
-    __proto__: Error;
-    constructor(message?: string) {
-        const trueProto = new.target.prototype;
-        super(message);
-
-        this.__proto__ = trueProto;
-    }
 }
