@@ -441,6 +441,11 @@ export class HttpRouter {
         parser.expectEnd();
         const start = this.selectStart(specification, declaration);
 
+        var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
+        if (failures.length > 0) {
+            throw new Invalid(failures.join("\n"));
+        }
+
         const userIdentity = serializeUserIdentity(user);
         const results = await this.authorization.read(userIdentity, start, specification);
         return extractResults(results);
