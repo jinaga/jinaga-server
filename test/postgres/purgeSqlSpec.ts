@@ -1,4 +1,4 @@
-import { FactTypeMap } from "../../src/postgres/maps";
+import { ensureGetFactTypeId, FactTypeMap, getRoleId } from "../../src/postgres/maps";
 import { purgeSqlFromSpecification } from "../../src/postgres/purge-sql";
 import { model, Site, SiteDeleted } from "../models/blog";
 
@@ -8,18 +8,14 @@ describe("Purge SQL", () => {
             facts.ofType(SiteDeleted)
                 .join(deleted => deleted.site, site)
         ).specification;
-        const factTypes: FactTypeMap = new Map([
-            [Site.Type, 11],
-            [SiteDeleted.Type, 12]
-        ]);
-        const roleMap = new Map<number, Map<string, number>>([
-            [11, new Map<string, number>([
-                ['creator', 81]
-            ])],
-            [12, new Map<string, number>([
-                ['site', 82]
-            ])]
-        ]);
+        const factTypes = buildFactTypeMap(
+            Site.Type,
+            SiteDeleted.Type
+        );
+        const roleMap = buildRoleMap(factTypes,
+            [Site.Type, ['creator']],
+            [SiteDeleted.Type, ['site']]
+        );
         const schema = 'public';
         const { sql, parameters } = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
 
@@ -54,6 +50,34 @@ SELECT fact_id FROM facts
 `;
 
         expect(sql).toBe(expected);
-        expect(parameters).toEqual([11, 'xxxxx', 82]);
+        expect(parameters).toEqual([
+            ensureGetFactTypeId(factTypes, Site.Type),
+            'xxxxx',
+            getRoleId(roleMap, ensureGetFactTypeId(factTypes, SiteDeleted.Type), 'site')
+        ]);
     });
 });
+
+function buildFactTypeMap(...types: string[]): FactTypeMap {
+    const factTypeMap: FactTypeMap = new Map();
+    types.forEach((type, index) => {
+        factTypeMap.set(type, index + 1);
+    });
+    return factTypeMap;
+}
+
+function buildRoleMap(factTypes: FactTypeMap, ...args: [string, string[]][]): Map<number, Map<string, number>> {
+    const roleMap = new Map<number, Map<string, number>>();
+    args.forEach(([type, roles]) => {
+        const typeId = factTypes.get(type);
+        if (typeId === undefined) {
+            throw new Error(`Unknown fact type: ${type}`);
+        }
+        const roleIdMap = new Map<string, number>();
+        roles.forEach((role, roleIndex) => {
+            roleIdMap.set(role, typeId * 10 + roleIndex + 1);
+        });
+        roleMap.set(typeId, roleIdMap);
+    });
+    return roleMap;
+}

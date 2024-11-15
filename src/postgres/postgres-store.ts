@@ -439,9 +439,9 @@ export class PostgresStore implements Storage {
             const factTypes = await this.loadFactTypesFromSpecification(specification);
             const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
 
-            const sql = purgeSqlFromSpecification(specification, factTypes, roleMap, this.schema);
+            const { sql, parameters } = purgeSqlFromSpecification(specification, factTypes, roleMap, this.schema);
             await this.connectionFactory.with(async (connection) => {
-                await connection.query(sql);
+                await connection.query(sql, parameters);
             });
         }
     }
