@@ -27,7 +27,7 @@ describe("Purge SQL", () => {
     FROM public.fact f1
     JOIN public.edge e1
         ON e1.predecessor_fact_id = f1.fact_id
-        AND e1.role_id = $3
+        AND e1.role_id = $2
     JOIN public.fact f2
         ON f2.fact_id = e1.successor_fact_id
     WHERE f1.fact_type_id = $1
@@ -52,7 +52,6 @@ SELECT fact_id FROM facts
         expect(sql).toBe(expected);
         expect(parameters).toEqual([
             ensureGetFactTypeId(factTypes, Site.Type),
-            'xxxxx',
             getRoleId(roleMap, ensureGetFactTypeId(factTypes, SiteDeleted.Type), 'site')
         ]);
     });
@@ -83,12 +82,12 @@ SELECT fact_id FROM facts
     FROM public.fact f1
     JOIN public.edge e1
         ON e1.predecessor_fact_id = f1.fact_id
-        AND e1.role_id = $3
+        AND e1.role_id = $2
     JOIN public.fact f2
         ON f2.fact_id = e1.successor_fact_id
     JOIN public.edge e2
         ON e2.predecessor_fact_id = f2.fact_id
-        AND e2.role_id = $4
+        AND e2.role_id = $3
     JOIN public.fact f3
         ON f3.fact_id = e2.successor_fact_id
     WHERE f1.fact_type_id = $1
@@ -113,7 +112,6 @@ SELECT fact_id FROM facts
         expect(sql).toBe(expected);
         expect(parameters).toEqual([
             ensureGetFactTypeId(factTypes, Site.Type),
-            'xxxxx',
             getRoleId(roleMap, ensureGetFactTypeId(factTypes, SiteDeleted.Type), 'site'),
             getRoleId(roleMap, ensureGetFactTypeId(factTypes, SitePurged.Type), 'deleted')
         ]);
@@ -149,12 +147,12 @@ SELECT fact_id FROM facts
     FROM public.fact f1
     JOIN public.edge e1
         ON e1.predecessor_fact_id = f1.fact_id
-        AND e1.role_id = $3
+        AND e1.role_id = $2
     JOIN public.fact f2
         ON f2.fact_id = e1.successor_fact_id
     JOIN public.edge e2
         ON e2.predecessor_fact_id = f2.fact_id
-        AND e2.role_id = $4
+        AND e2.role_id = $3
     JOIN public.fact f3
         ON f3.fact_id = e2.successor_fact_id
     WHERE f1.fact_type_id = $1
@@ -180,7 +178,6 @@ SELECT fact_id FROM facts
         expect(sql).toBe(expected);
         expect(parameters).toEqual([
             ensureGetFactTypeId(factTypes, Site.Type),
-            'xxxxx',
             getRoleId(roleMap, ensureGetFactTypeId(factTypes, SiteDeleted.Type), 'site'),
             getRoleId(roleMap, ensureGetFactTypeId(factTypes, SitePurged.Type), 'deleted')
         ]);
