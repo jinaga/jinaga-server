@@ -39,7 +39,11 @@ describe("Purge SQL", () => {
                 SELECT a.fact_id
                 FROM public.ancestor a
                 JOIN candidates c ON c.purge_root = a.ancestor_fact_id
-                WHERE a.fact_id != c.trigger1
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM candidates c2
+                    WHERE a.fact_id = c.trigger1
+                )
             ), facts AS (
                 DELETE
                 FROM public.fact f
