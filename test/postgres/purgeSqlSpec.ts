@@ -1,3 +1,4 @@
+import { Specification } from "jinaga";
 import { ensureGetFactTypeId, FactTypeMap, getRoleId } from "../../src/postgres/maps";
 import { purgeSqlFromSpecification } from "../../src/postgres/purge-sql";
 import { model, Site, SiteDeleted, SitePurged } from "../models/blog";
@@ -17,7 +18,7 @@ describe("Purge SQL", () => {
             [SiteDeleted.Type, ['site']]
         );
         const schema = 'public';
-        const { sql, parameters } = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
+        const { sql, parameters } = whenGeneratePurgeSql(specification, factTypes, roleMap, schema);
 
         const expected =
 `WITH candidates AS (
@@ -72,7 +73,7 @@ SELECT fact_id FROM facts
             [SitePurged.Type, ['deleted']]
         );
         const schema = 'public';
-        const { sql, parameters } = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
+        const { sql, parameters } = whenGeneratePurgeSql(specification, factTypes, roleMap, schema);
 
         const expected =
 `WITH candidates AS (
@@ -136,7 +137,7 @@ SELECT fact_id FROM facts
             [SitePurged.Type, ['deleted']]
         );
         const schema = 'public';
-        const { sql, parameters } = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
+        const { sql, parameters } = whenGeneratePurgeSql(specification, factTypes, roleMap, schema);
 
         const expected =
 `WITH candidates AS (
@@ -183,6 +184,14 @@ SELECT fact_id FROM facts
         ]);
     });
 });
+
+function whenGeneratePurgeSql(specification: Specification, factTypes: FactTypeMap, roleMap: Map<number, Map<string, number>>, schema: string) {
+    const purgeCommand = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
+    if (purgeCommand === null) {
+        throw new Error("The specification was not satisfiable.");
+    }
+    return purgeCommand;
+}
 
 function buildFactTypeMap(...types: string[]): FactTypeMap {
     const factTypeMap: FactTypeMap = new Map();
