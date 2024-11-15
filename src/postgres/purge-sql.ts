@@ -20,7 +20,7 @@ export function purgeSqlFromSpecification(specification: Specification, factType
 function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: string):
     { sql: string, parameters: (string | number)[] } {
     const columns = queryDescription.outputs
-        .map(label => `f${label.factIndex}.fact_id as trigger${label.factIndex - 1}`)
+        .map((label, index) => `f${label.factIndex}.fact_id as trigger${index + 1}`)
         .join(",\n");
     const firstEdge = queryDescription.edges[0];
     const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);

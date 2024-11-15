@@ -19,6 +19,15 @@ export class SiteDeleted {
     ) { }
 }
 
+export class SitePurged {
+    static Type = 'Blog.Site.Purged' as const;
+    type = SitePurged.Type;
+
+    constructor(
+        public readonly deleted: SiteDeleted
+    ) { }
+}
+
 export class Post {
     static Type = 'Blog.Post' as const;
     type = Post.Type;
@@ -58,6 +67,9 @@ export const model = buildModel(b => b
     )
     .type(SiteDeleted, f => f
         .predecessor('site', Site)
+    )
+    .type(SitePurged, f => f
+        .predecessor('deleted', SiteDeleted)
     )
     .type(Title, f => f
         .predecessor('post', Post)
