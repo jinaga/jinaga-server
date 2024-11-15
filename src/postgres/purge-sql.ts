@@ -1,4 +1,4 @@
-import { Specification } from "jinaga";
+import { FactReference, Specification } from "jinaga";
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 import { SpecificationSqlQuery } from "./specification-result-sql";
@@ -8,11 +8,9 @@ export function purgeSqlFromSpecification(specification: Specification, factType
 
     let queryDescription = QueryDescription.unsatisfiable;
     let knownFacts: FactByLabel = {};
-    knownFacts[specification.given[0].name] = {
-        type: specification.given[0].type,
-        factIndex: 0
-    };
-    ({ queryDescription, knownFacts } = queryDescriptionBuilder.addEdges(queryDescription, [], [], knownFacts, [], specification.matches));
+    const given = specification.given;
+    const start: FactReference[] = specification.given.map(g => ({ type: g.type, hash: 'xxxxx' }));
+    ({ queryDescription, knownFacts } = queryDescriptionBuilder.addEdges(queryDescription, given, start, knownFacts, [], specification.matches));
 
     const query = generatePurgeSqlQuery(queryDescription, schema);
     return query.sql;
