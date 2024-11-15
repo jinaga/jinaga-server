@@ -31,7 +31,7 @@ describe("Purge SQL", () => {
     FROM public.fact f1
     JOIN public.edge e1
         ON e1.predecessor_fact_id = f1.fact_id
-        AND e1.role_id = $2
+        AND e1.role_id = $3
     JOIN public.fact f2
         ON f2.fact_id = e1.successor_fact_id
     WHERE f1.fact_type_id = $1

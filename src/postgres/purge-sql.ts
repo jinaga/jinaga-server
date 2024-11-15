@@ -20,7 +20,7 @@ export function purgeSqlFromSpecification(specification: Specification, factType
 function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: string):
     { sql: string, parameters: (string | number)[] } {
     const columns = queryDescription.outputs
-        .map(label => `f${label.factIndex}.fact_id as trigger${label.factIndex}`)
+        .map(label => `f${label.factIndex}.fact_id as trigger${label.factIndex - 1}`)
         .join(",\n");
     const firstEdge = queryDescription.edges[0];
     const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
@@ -29,19 +29,19 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
     const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema);
     const inputWhereClauses = queryDescription.inputs
-        .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+        .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter}`)
         .join(" AND ");
     const existentialWhereClauses = queryDescription.existentialConditions
         .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema)})`)
         .join("");
-    const orderByClause = queryDescription.outputs
-        .map(output => `f${output.factIndex}.fact_id ASC`)
-        .join(", ");
     const sql =
         `WITH candidates AS (\n` +
         `    SELECT\n` +
-        `        f1.fact_id as purge_root,\n` +
-        `        ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+        `        f${firstFactIndex}.fact_id as purge_root,\n` +
+        `        ${columns}\n` +
+        `    FROM ${schema}.fact f${firstFactIndex}\n${joins.join("")}` +
+        `    WHERE ${inputWhereClauses}\n` +
+        `    ${existentialWhereClauses}`;
 
     return {
         sql,
@@ -55,34 +55,34 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
             if (writtenFactIndexes.has(edge.successorFactIndex)) {
                 joins.push(
-                    ` JOIN ${schema}.edge e${edge.edgeIndex}` +
-                    ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
-                    ` AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
-                    ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                    `    JOIN ${schema}.edge e${edge.edgeIndex}\n` +
+                    `        ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id\n` +
+                    `        AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id\n` +
+                    `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}\n`
                 );
             }
             else {
                 joins.push(
-                    ` JOIN ${schema}.edge e${edge.edgeIndex}` +
-                    ` ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id` +
-                    ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                    `    JOIN ${schema}.edge e${edge.edgeIndex}\n` +
+                    `        ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id\n` +
+                    `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}\n`
                 );
                 joins.push(
-                    ` JOIN ${schema}.fact f${edge.successorFactIndex}` +
-                    ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
+                    `    JOIN ${schema}.fact f${edge.successorFactIndex}\n` +
+                    `        ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id\n`
                 );
                 writtenFactIndexes.add(edge.successorFactIndex);
             }
         }
         else if (writtenFactIndexes.has(edge.successorFactIndex)) {
             joins.push(
-                ` JOIN ${schema}.edge e${edge.edgeIndex}` +
-                ` ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id` +
-                ` AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}`
+                `    JOIN ${schema}.edge e${edge.edgeIndex}\n` +
+                `        ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id\n` +
+                `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter}\n`
             );
             joins.push(
-                ` JOIN ${schema}.fact f${edge.predecessorFactIndex}` +
-                ` ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id`
+                `    JOIN ${schema}.fact f${edge.predecessorFactIndex}\n` +
+                `        ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id\n`
             );
             writtenFactIndexes.add(edge.predecessorFactIndex);
         }
