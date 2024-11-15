@@ -9,15 +9,15 @@ describe("Purge SQL", () => {
                 .join(deleted => deleted.site, site)
         ).specification;
         const factTypes: FactTypeMap = new Map([
-            [Site.Type, 1],
-            [SiteDeleted.Type, 2]
+            [Site.Type, 11],
+            [SiteDeleted.Type, 12]
         ]);
         const roleMap = new Map<number, Map<string, number>>([
-            [1, new Map<string, number>([
-                ['creator', 1]
+            [11, new Map<string, number>([
+                ['creator', 81]
             ])],
-            [2, new Map<string, number>([
-                ['site', 1]
+            [12, new Map<string, number>([
+                ['site', 82]
             ])]
         ]);
         const schema = 'public';
@@ -50,8 +50,10 @@ describe("Purge SQL", () => {
     USING targets t WHERE t.fact_id = f.fact_id
     RETURNING f.fact_id
 )
-SELECT fact_id FROM facts`;
+SELECT fact_id FROM facts
+`;
 
         expect(sql).toBe(expected);
+        expect(parameters).toEqual([11, 'xxxxx', 82]);
     });
 });

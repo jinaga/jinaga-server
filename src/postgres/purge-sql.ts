@@ -31,9 +31,9 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter}`)
         .join(" AND ");
-    const existentialWhereClauses = queryDescription.existentialConditions
-        .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema)})`)
-        .join("");
+    if (queryDescription.existentialConditions.length > 0) {
+        throw new Error("Purge conditions should not have existential conditions");
+    }
     const sql =
         `WITH candidates AS (\n` +
         `    SELECT\n` +
@@ -41,8 +41,23 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
         `        ${columns}\n` +
         `    FROM ${schema}.fact f${firstFactIndex}\n${joins.join("")}` +
         `    WHERE ${inputWhereClauses}\n` +
-        `    ${existentialWhereClauses}`;
-
+        `), targets AS (\n` +
+        `    SELECT a.fact_id\n` +
+        `    FROM public.ancestor a\n` +
+        `    JOIN candidates c ON c.purge_root = a.ancestor_fact_id\n` +
+        `    WHERE NOT EXISTS (\n` +
+        `        SELECT 1\n` +
+        `        FROM candidates c2\n` +
+        `        WHERE a.fact_id = c.trigger1\n` +
+        `    )\n` +
+        `), facts AS (\n` +
+        `    DELETE\n` +
+        `    FROM public.fact f\n` +
+        `    USING targets t WHERE t.fact_id = f.fact_id\n` +
+        `    RETURNING f.fact_id\n` +
+        `)\n` +
+        `SELECT fact_id FROM facts\n`;
+    
     return {
         sql,
         parameters: queryDescription.parameters
