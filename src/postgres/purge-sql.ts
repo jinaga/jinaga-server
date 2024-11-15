@@ -19,9 +19,13 @@ export function purgeSqlFromSpecification(specification: Specification, factType
 
 function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: string):
     { sql: string, parameters: (string | number)[] } {
+    if (queryDescription.existentialConditions.length > 0) {
+        throw new Error("Purge conditions should not have existential conditions");
+    }
+
     const columns = queryDescription.outputs
         .map((label, index) => `f${label.factIndex}.fact_id as trigger${index + 1}`)
-        .join(",\n");
+        .join(",\n        ");
     const firstEdge = queryDescription.edges[0];
     const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
     const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
@@ -31,9 +35,10 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter}`)
         .join(" AND ");
-    if (queryDescription.existentialConditions.length > 0) {
-        throw new Error("Purge conditions should not have existential conditions");
-    }
+    const triggerWhereClauses = queryDescription.outputs
+        .map((label, index) => `a.fact_id = c2.trigger${index + 1}`)
+        .join("\n            OR ");
+
     const sql =
         `WITH candidates AS (\n` +
         `    SELECT\n` +
@@ -48,7 +53,7 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
         `    WHERE NOT EXISTS (\n` +
         `        SELECT 1\n` +
         `        FROM candidates c2\n` +
-        `        WHERE a.fact_id = c.trigger1\n` +
+        `        WHERE ${triggerWhereClauses}\n` +
         `    )\n` +
         `), facts AS (\n` +
         `    DELETE\n` +
