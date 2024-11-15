@@ -276,7 +276,7 @@ export type FactByLabel = {
     [label: string]: FactDescription;
 };
 
-export class QueryDescriptionBuider {
+export class QueryDescriptionBuilder {
     constructor(
         private factTypes: FactTypeMap,
         private roleMap: RoleMap

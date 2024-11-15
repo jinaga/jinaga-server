@@ -5,7 +5,7 @@ import {
     validateGiven
 } from "jinaga";
 
-import { EdgeDescription, ExistentialConditionDescription, QueryDescription, QueryDescriptionBuider } from "./query-description";
+import { EdgeDescription, ExistentialConditionDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 interface SpecificationLabel {
     type: string;
@@ -173,7 +173,7 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
     }, new Map<string, FactReference>());
 
     const feeds = buildFeeds(specification);
-    const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
+    const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
     const feedAndBookmark = feeds.map((feed, index) => ({
         feed,
         bookmark: bookmarks[index]
@@ -193,7 +193,7 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
 }
 
 export function sqlFromFeed(feed: Specification, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
-    const queryDescriptionBuilder = new QueryDescriptionBuider(factTypes, roleMap);
+    const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
     const queryDescription = buildQueryDescription(queryDescriptionBuilder, feed, start);
     if (!queryDescription.isSatisfiable()) {
         return null;
@@ -202,7 +202,7 @@ export function sqlFromFeed(feed: Specification, start: FactReference[], schema:
     return sql;
 }
 
-function buildQueryDescription(queryDescriptionBuilder: QueryDescriptionBuider, specification: Specification, start: FactReference[]): QueryDescription {
+function buildQueryDescription(queryDescriptionBuilder: QueryDescriptionBuilder, specification: Specification, start: FactReference[]): QueryDescription {
     const { queryDescription } = queryDescriptionBuilder.addEdges(
         QueryDescription.unsatisfiable,
         specification.given,

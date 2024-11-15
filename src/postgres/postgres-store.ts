@@ -44,6 +44,7 @@ import {
 } from "./maps";
 import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
+import { purgeSqlFromSpecification } from "./purge-sql";
 
 interface FactTypeResult {
     rows: {
@@ -431,6 +432,23 @@ export class PostgresStore implements Storage {
             return mergedFactTypes;
         }
         return factTypes;
+    }
+
+    async purge(purgeConditions: Specification[]): Promise<void> {
+        for (const specification of purgeConditions) {
+            const factTypes = await this.loadFactTypesFromSpecification(specification);
+            const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
+
+            const purgeCommand = purgeSqlFromSpecification(specification, factTypes, roleMap, this.schema);
+            if (!purgeCommand) {
+                continue;
+            }
+
+            const { sql, parameters } = purgeCommand;
+            await this.connectionFactory.with(async (connection) => {
+                await connection.query(sql, parameters);
+            });
+        }
     }
 
     loadBookmark(feed: string): Promise<string> {

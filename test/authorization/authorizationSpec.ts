@@ -164,7 +164,7 @@ function givenAuthorizationWithStorage(storage: MemoryStore) {
     const fork = new PassThroughFork(storage);
     const observableSource = new ObservableSource(storage);
     const network = new NetworkNoOp();
-    const factManager = new FactManager(fork, observableSource, storage, network);
+    const factManager = new FactManager(fork, observableSource, storage, network, []);
     const model = buildModel(b => b
         .type(Hashtag)
         .type(User)
