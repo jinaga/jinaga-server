@@ -1,9 +1,9 @@
 import { FactReference, Specification } from "jinaga";
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
-import { SpecificationSqlQuery } from "./specification-result-sql";
 
-export function purgeSqlFromSpecification(specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string): string {
+export function purgeSqlFromSpecification(specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string):
+    { sql: string, parameters: (string | number)[] } {
     const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
 
     let queryDescription = QueryDescription.unsatisfiable;
@@ -13,15 +13,15 @@ export function purgeSqlFromSpecification(specification: Specification, factType
     ({ queryDescription, knownFacts } = queryDescriptionBuilder.addEdges(queryDescription, given, start, knownFacts, [], specification.matches));
 
     const query = generatePurgeSqlQuery(queryDescription, schema);
-    return query.sql;
+    return query;
 }
 
 
-function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
-    const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
-    const columns = allLabels
-        .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
-        .join(", ");
+function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: string):
+    { sql: string, parameters: (string | number)[] } {
+    const columns = queryDescription.outputs
+        .map(label => `f${label.factIndex}.fact_id as trigger${label.factIndex}`)
+        .join(",\n");
     const firstEdge = queryDescription.edges[0];
     const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
     const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
@@ -37,16 +37,15 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
     const orderByClause = queryDescription.outputs
         .map(output => `f${output.factIndex}.fact_id ASC`)
         .join(", ");
-    const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+    const sql =
+        `WITH candidates AS (\n` +
+        `    SELECT\n` +
+        `        f1.fact_id as purge_root,\n` +
+        `        ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+
     return {
         sql,
-        parameters: queryDescription.parameters,
-        labels: allLabels.map(label => ({
-            name: label.label,
-            type: label.type,
-            index: label.factIndex
-        })),
-        bookmark: "[]"
+        parameters: queryDescription.parameters
     };
 }
 

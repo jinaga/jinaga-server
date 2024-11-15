@@ -21,7 +21,7 @@ describe("Purge SQL", () => {
             ])]
         ]);
         const schema = 'public';
-        const sql = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
+        const { sql, parameters } = purgeSqlFromSpecification(specification, factTypes, roleMap, schema);
 
         const expected =
             `WITH candidates AS (
