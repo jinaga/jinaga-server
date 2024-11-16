@@ -127,11 +127,13 @@ IF (SELECT to_regclass('public.edge') IS NULL) THEN
         successor_fact_id integer NOT NULL,
         CONSTRAINT fk_successor_fact_id
             FOREIGN KEY (successor_fact_id)
-            REFERENCES fact (fact_id),
+            REFERENCES fact (fact_id)
+            ON DELETE CASCADE,
         predecessor_fact_id integer NOT NULL,
         CONSTRAINT fk_predecessor_fact_id
             FOREIGN KEY (predecessor_fact_id)
             REFERENCES fact (fact_id)
+            ON DELETE CASCADE
     );
 
 
@@ -156,11 +158,13 @@ IF (SELECT to_regclass('public.ancestor') IS NULL) THEN
         fact_id integer NOT NULL,
         CONSTRAINT fk_fact_id
             FOREIGN KEY (fact_id)
-            REFERENCES fact (fact_id),
+            REFERENCES fact (fact_id)
+            ON DELETE CASCADE,
         ancestor_fact_id integer NOT NULL,
         CONSTRAINT fk_ancestor_fact_id
             FOREIGN KEY (ancestor_fact_id)
             REFERENCES fact (fact_id)
+            ON DELETE CASCADE
     );
 
 
@@ -198,7 +202,8 @@ IF (SELECT to_regclass('public.signature') IS NULL) THEN
         fact_id integer NOT NULL,
         CONSTRAINT fk_fact_id
             FOREIGN KEY (fact_id)
-            REFERENCES fact (fact_id),
+            REFERENCES fact (fact_id)
+            ON DELETE CASCADE,
         public_key_id integer NOT NULL,
         CONSTRAINT fk_public_key_id
             FOREIGN KEY (public_key_id)
@@ -261,6 +266,57 @@ IF (SELECT character_maximum_length
 
     ALTER TABLE role
         ALTER COLUMN name TYPE character varying(200);
+
+END IF;
+
+--
+-- If the foreign keys on the edge table are not set to cascade delete, then set them.
+--
+
+IF (SELECT confdeltype
+    FROM pg_constraint
+    WHERE conname = 'fk_predecessor_fact_id') != 'c' THEN
+
+    -- Configure cascade delete from fact to edge
+    ALTER TABLE public.edge
+        DROP CONSTRAINT fk_predecessor_fact_id;
+    ALTER TABLE public.edge
+        ADD CONSTRAINT fk_predecessor_fact_id
+        FOREIGN KEY (predecessor_fact_id)
+        REFERENCES public.fact (fact_id)
+        ON DELETE CASCADE;
+    ALTER TABLE public.edge
+        DROP CONSTRAINT fk_successor_fact_id;
+    ALTER TABLE public.edge
+        ADD CONSTRAINT fk_successor_fact_id
+        FOREIGN KEY (successor_fact_id)
+        REFERENCES public.fact (fact_id)
+        ON DELETE CASCADE;
+
+    -- Configure cascade delete from fact to signature
+    ALTER TABLE public.signature
+        DROP CONSTRAINT fk_fact_id;
+    ALTER TABLE public.signature
+        ADD CONSTRAINT fk_fact_id
+        FOREIGN KEY (fact_id)
+        REFERENCES public.fact (fact_id)
+        ON DELETE CASCADE;
+
+    -- Configure cascade delete from fact to ancestor
+    ALTER TABLE public.ancestor
+        DROP CONSTRAINT fk_fact_id;
+    ALTER TABLE public.ancestor
+        ADD CONSTRAINT fk_fact_id
+        FOREIGN KEY (fact_id)
+        REFERENCES public.fact (fact_id)
+        ON DELETE CASCADE;
+    ALTER TABLE public.ancestor
+        DROP CONSTRAINT fk_ancestor_fact_id;
+    ALTER TABLE public.ancestor
+        ADD CONSTRAINT fk_ancestor_fact_id
+        FOREIGN KEY (ancestor_fact_id)
+        REFERENCES public.fact (fact_id)
+        ON DELETE CASCADE;
 
 END IF;
 
