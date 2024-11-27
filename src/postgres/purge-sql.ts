@@ -81,6 +81,17 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
     const triggerWhereClauses = queryDescription.outputs
         .map((label, index) => `a.fact_id = c2.trigger${index + 1}`)
         .join("\n            OR ");
+    const triggerAncestorClauses = queryDescription.outputs
+        .map((label, index) =>
+            `    AND NOT EXISTS (\n` +
+            `        SELECT 1\n` +
+            `        FROM candidates c2\n` +
+            `        JOIN ${schema}.ancestor a2\n` +
+            `            ON a2.fact_id = c2.trigger${index + 1}\n` +
+            `        WHERE a.fact_id = a2.ancestor_fact_id\n` +
+            `    )\n`
+        )
+        .join("");
 
     const sql =
         `WITH candidates AS (\n` +
@@ -98,6 +109,7 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
         `        FROM candidates c2\n` +
         `        WHERE ${triggerWhereClauses}\n` +
         `    )\n` +
+        triggerAncestorClauses +
         `), facts AS (\n` +
         `    DELETE\n` +
         `    FROM ${schema}.fact f\n` +

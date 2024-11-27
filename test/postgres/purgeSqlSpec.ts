@@ -41,6 +41,13 @@ describe("Purge SQL", () => {
         FROM candidates c2
         WHERE a.fact_id = c2.trigger1
     )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM candidates c2
+        JOIN public.ancestor a2
+            ON a2.fact_id = c2.trigger1
+        WHERE a.fact_id = a2.ancestor_fact_id
+    )
 ), facts AS (
     DELETE
     FROM public.fact f
@@ -100,6 +107,13 @@ SELECT fact_id FROM facts
         SELECT 1
         FROM candidates c2
         WHERE a.fact_id = c2.trigger1
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM candidates c2
+        JOIN public.ancestor a2
+            ON a2.fact_id = c2.trigger1
+        WHERE a.fact_id = a2.ancestor_fact_id
     )
 ), facts AS (
     DELETE
@@ -166,6 +180,20 @@ SELECT fact_id FROM facts
         FROM candidates c2
         WHERE a.fact_id = c2.trigger1
             OR a.fact_id = c2.trigger2
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM candidates c2
+        JOIN public.ancestor a2
+            ON a2.fact_id = c2.trigger1
+        WHERE a.fact_id = a2.ancestor_fact_id
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM candidates c2
+        JOIN public.ancestor a2
+            ON a2.fact_id = c2.trigger2
+        WHERE a.fact_id = a2.ancestor_fact_id
     )
 ), facts AS (
     DELETE
