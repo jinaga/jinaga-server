@@ -2,6 +2,45 @@ import { FactReference, Specification } from "jinaga";
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
+export function purgeDescendantsSql(triggerCount: number, schema: string): string {
+    let whereClause = "    WHERE (t.fact_type_id = $3 AND t.hash = $4)\n";
+    for (let i = 1; i < triggerCount; i++) {
+        whereClause += `        OR (t.fact_type_id = $${i * 2 + 3} AND t.hash = $${i * 2 + 4})\n`;
+    }
+    const sql =
+        `WITH purge_root AS (\n` +
+        `    SELECT pr.fact_id\n` +
+        `    FROM ${schema}.fact pr\n` +
+        `    WHERE pr.fact_type_id = $1\n` +
+        `        AND pr.hash = $2\n` +
+        `), triggers AS (\n` +
+        `    SELECT t.fact_id\n` +
+        `    FROM ${schema}.fact t\n` +
+        whereClause +
+        `), triggers_and_ancestors AS (\n` +
+        `    SELECT t.fact_id\n` +
+        `    FROM triggers t\n` +
+        `    UNION\n` +
+        `    SELECT a.ancestor_fact_id\n` +
+        `    FROM ${schema}.ancestor a\n` +
+        `    JOIN triggers t\n` +
+        `        ON a.fact_id = t.fact_id\n` +
+        `), targets AS (\n` +
+        `    SELECT a.fact_id\n` +
+        `    FROM ${schema}.ancestor a\n` +
+        `    JOIN purge_root pr\n` +
+        `        ON a.ancestor_fact_id = pr.fact_id\n` +
+        `    WHERE a.fact_id NOT IN (SELECT * FROM triggers_and_ancestors)\n` +
+        `), facts AS (\n` +
+        `    DELETE\n` +
+        `    FROM ${schema}.fact f\n` +
+        `    USING targets t WHERE t.fact_id = f.fact_id\n` +
+        `    RETURNING f.fact_id\n` +
+        `)\n` +
+        `SELECT fact_id FROM facts\n`;
+    return sql;
+}
+
 export function purgeSqlFromSpecification(specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string):
     { sql: string, parameters: (string | number)[] } | null {
     const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
@@ -52,7 +91,7 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
         `    WHERE ${inputWhereClauses}\n` +
         `), targets AS (\n` +
         `    SELECT a.fact_id\n` +
-        `    FROM public.ancestor a\n` +
+        `    FROM ${schema}.ancestor a\n` +
         `    JOIN candidates c ON c.purge_root = a.ancestor_fact_id\n` +
         `    WHERE NOT EXISTS (\n` +
         `        SELECT 1\n` +
@@ -61,7 +100,7 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
         `    )\n` +
         `), facts AS (\n` +
         `    DELETE\n` +
-        `    FROM public.fact f\n` +
+        `    FROM ${schema}.fact f\n` +
         `    USING targets t WHERE t.fact_id = f.fact_id\n` +
         `    RETURNING f.fact_id\n` +
         `)\n` +
