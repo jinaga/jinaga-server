@@ -458,9 +458,9 @@ export class PostgresStore implements Storage {
         }
 
         const parameters = [
-            purgeRoot.hash,
             factTypes.get(purgeRoot.type),
-            ...triggers.map(t => [ t.hash, factTypes.get(t.type) ]).flat()
+            purgeRoot.hash,
+            ...triggers.map(t => [ factTypes.get(t.type), t.hash ]).flat()
         ];
 
         const purgeCommand: string = purgeDescendantsSql(triggers.length, this.schema);

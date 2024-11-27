@@ -9,5 +9,7 @@ RUN npm ci
 COPY jinaga-server/ jinaga-server/
 COPY jinaga.test.js .
 COPY specification.test.js .
+COPY purge.test.js .
+COPY orderModel.js .
 
 ENTRYPOINT [ "npm", "test" ]
