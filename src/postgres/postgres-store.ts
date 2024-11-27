@@ -44,7 +44,7 @@ import {
 } from "./maps";
 import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
-import { purgeSqlFromSpecification } from "./purge-sql";
+import { purgeDescendantsSql, purgeSqlFromSpecification } from "./purge-sql";
 
 interface FactTypeResult {
     rows: {
@@ -449,6 +449,25 @@ export class PostgresStore implements Storage {
                 await connection.query(sql, parameters);
             });
         }
+    }
+
+    async purgeDescendants(purgeRoot: FactReference, triggers: FactReference[]): Promise<void> {
+        const factTypes = await this.loadFactTypesFromReferences([ purgeRoot, ...triggers ]);
+        if (!factTypes.has(purgeRoot.type) || triggers.some(t => !factTypes.has(t.type))) {
+            return;
+        }
+
+        const parameters = [
+            factTypes.get(purgeRoot.type),
+            purgeRoot.hash,
+            ...triggers.map(t => [ factTypes.get(t.type), t.hash ]).flat()
+        ];
+
+        const purgeCommand: string = purgeDescendantsSql(triggers.length, this.schema);
+
+        await this.connectionFactory.with(async (connection) => {
+            await connection.query(purgeCommand, parameters);
+        });
     }
 
     loadBookmark(feed: string): Promise<string> {
