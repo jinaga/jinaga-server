@@ -15,7 +15,7 @@
   "author": "Michael L Perry",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.21.1",
+    "express": "^4.21.2",
     "pg": "8.13.1"
   },
   "devDependencies": {
