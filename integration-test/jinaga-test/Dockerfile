@@ -1,4 +1,4 @@
-FROM node:22.5.1-slim
+FROM node:22.12.0-alpine3.19
 
 WORKDIR /root
 
