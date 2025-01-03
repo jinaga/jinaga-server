@@ -434,7 +434,8 @@ export class PostgresStore implements Storage {
         return factTypes;
     }
 
-    async purge(purgeConditions: Specification[]): Promise<void> {
+    async purge(purgeConditions: Specification[]): Promise<number> {
+        let count = 0;
         for (const specification of purgeConditions) {
             const factTypes = await this.loadFactTypesFromSpecification(specification);
             const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
@@ -445,16 +446,18 @@ export class PostgresStore implements Storage {
             }
 
             const { sql, parameters } = purgeCommand;
-            await this.connectionFactory.with(async (connection) => {
-                await connection.query(sql, parameters);
+            var result = await this.connectionFactory.with(async (connection) => {
+                return await connection.query(sql, parameters);
             });
+            count += result.rowCount;
         }
+        return count;
     }
 
-    async purgeDescendants(purgeRoot: FactReference, triggers: FactReference[]): Promise<void> {
+    async purgeDescendants(purgeRoot: FactReference, triggers: FactReference[]): Promise<number> {
         const factTypes = await this.loadFactTypesFromReferences([ purgeRoot, ...triggers ]);
         if (!factTypes.has(purgeRoot.type) || triggers.some(t => !factTypes.has(t.type))) {
-            return;
+            return 0;
         }
 
         const parameters = [
@@ -465,9 +468,10 @@ export class PostgresStore implements Storage {
 
         const purgeCommand: string = purgeDescendantsSql(triggers.length, this.schema);
 
-        await this.connectionFactory.with(async (connection) => {
-            await connection.query(purgeCommand, parameters);
+        var result = await this.connectionFactory.with(async (connection) => {
+            return await connection.query(purgeCommand, parameters);
         });
+        return result.rowCount;
     }
 
     loadBookmark(feed: string): Promise<string> {
