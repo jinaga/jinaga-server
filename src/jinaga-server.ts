@@ -7,20 +7,27 @@ import {
     DistributionRules,
     FactManager,
     FeedCache,
+    FetchConnection,
+    Fork,
+    HttpNetwork,
     Jinaga,
     MemoryStore,
     Model,
+    Network,
     NetworkNoOp,
     ObservableSource,
     ObservableSourceImpl,
     PassThroughFork,
+    PersistentFork,
     PurgeConditions,
     Specification,
     Storage,
     SyncStatusNotifier,
     Trace,
+    TransientFork,
     UserIdentity,
-    validatePurgeSpecification
+    validatePurgeSpecification,
+    WebClient
 } from "jinaga";
 import { Pool } from "pg";
 
@@ -30,6 +37,7 @@ import { AuthorizationKeystore } from "./authorization/authorization-keystore";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
+import { PostgresQueue } from "./postgres/postgres-queue";
 import { PostgresStore } from "./postgres/postgres-store";
 
 
@@ -38,6 +46,8 @@ export type JinagaServerConfig = {
     pgStoreSchema?: string,
     pgKeystore?: string | Pool,
     pgKeystoreSchema?: string,
+    upstreamReplicators?: string[],
+    httpTimeoutSeconds?: number,
     model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     distribution?: (d: DistributionRules) => DistributionRules,
@@ -61,15 +71,18 @@ export class JinagaServer {
     static create(config: JinagaServerConfig): JinagaServerInstance {
         const syncStatusNotifier = new SyncStatusNotifier();
         const pools: { [uri: string]: Pool } = {};
-        const store = createStore(config, pools);
+        const pool = makePool(config, pools);
+        const schema = validateSchema(config.pgStoreSchema);
+        const store = createStore(pool, schema);
         const source = new ObservableSourceImpl(store);
-        const fork = new PassThroughFork(store);
+        const webClient = createWebClient(config, syncStatusNotifier);
+        const fork = createFork(webClient, store, pool, schema);
         const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const distributionRules = config.distribution ? config.distribution(new DistributionRules([])) : null;
         const feedCache = new FeedCache();
         const authentication = createAuthentication(store, keystore, authorizationRules);
-        const network = new NetworkNoOp();
+        const network = createNetwork(webClient);
         const purgeConditions = createPurgeConditions(config);
         const factManager = new FactManager(fork, source, store, network, purgeConditions);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
@@ -92,14 +105,68 @@ export class JinagaServer {
     }
 }
 
-function createStore(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Storage {
-    if (config.pgStore) {
-        const pool = getPool(config.pgStore, pools);
-        const store = new PostgresStore(pool, validateSchema(config.pgStoreSchema));
-        return store;
+function makePool(config: JinagaServerConfig, pools: { [uri: string]: Pool }): Pool | undefined {
+    const uri = config.pgStore;
+    if (uri) {
+        return getPool(uri, pools);
+    }
+    else {
+        return undefined;
+    }
+}
+
+function createStore(pool: Pool | undefined, schema: string): Storage {
+    if (pool) {
+        return new PostgresStore(pool, schema);
     }
     else {
         return new MemoryStore();
+    }
+}
+
+function createWebClient(
+    config: JinagaServerConfig,
+    syncStatusNotifier: SyncStatusNotifier
+): WebClient | null {
+    if (config.upstreamReplicators && config.upstreamReplicators.length > 0) {
+        // TODO: Handle multiple upstream replicators
+        // TODO: Handle authentication
+        const httpEndpoint = config.upstreamReplicators[0];
+        const getHeaders = () => Promise.resolve({});
+        const reauthenticate = () => Promise.resolve(false);
+        const httpConnection = new FetchConnection(httpEndpoint, getHeaders, reauthenticate);
+        const httpTimeoutSeconds = config.httpTimeoutSeconds || 30;
+        const webClient = new WebClient(httpConnection, syncStatusNotifier, {
+            timeoutSeconds: httpTimeoutSeconds
+        });
+        return webClient;
+    }
+    else {
+        return null;
+    }
+}
+
+function createFork(
+    webClient: WebClient | null,
+    store: Storage,
+    pool: Pool | undefined,
+    schema: string
+): Fork {
+    if (webClient) {
+        if (pool) {
+            const queue = new PostgresQueue(pool, schema);
+            const fork = new PersistentFork(store, queue, webClient);
+            fork.initialize();
+            return fork;
+        }
+        else {
+            const fork = new TransientFork(store, webClient);
+            return fork;
+        }
+    }
+    else {
+        const fork = new PassThroughFork(store);
+        return fork;
     }
 }
 
@@ -225,5 +292,17 @@ function createPurgeConditions(
     }
     else {
         return [];
+    }
+}
+
+function createNetwork(
+    webClient: WebClient | null
+): Network {
+    if (webClient) {
+        const network = new HttpNetwork(webClient);
+        return network;
+    }
+    else {
+        return new NetworkNoOp();
     }
 }
