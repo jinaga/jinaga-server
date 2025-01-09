@@ -126,3 +126,25 @@ npm version patch
 git push --follow-tags
 gh release create v$(node -p "require('./package.json').version") --generate-notes --verify-tag
 ```
+
+## Importing Facts into a Postgres Fact Store
+
+To import facts from a Factual or JSON export file into a Postgres fact store, you can use the command-line tool provided by Jinaga Server. The tool accepts connection parameters similar to `psql` and validates signatures before merging facts into the store.
+
+### Usage
+
+1. Ensure you have `npx` installed. It comes with Node.js, so if you have Node.js installed, you should have `npx` as well.
+2. Navigate to the root directory of the project where the `package.json` file is located.
+3. Use `npx` followed by the script name defined in the `scripts` section of the `package.json` file. For example, to run the importer tool, you can use the command:
+
+```bash
+npx run import --file <path-to-export-file> --connection <postgres-connection-string>
+```
+
+### Example
+
+```bash
+npx run import --file ./data/export.json --connection postgresql://appuser:apppw@localhost:5432/appdb
+```
+
+This command will import the facts from the `export.json` file into the specified Postgres fact store.
