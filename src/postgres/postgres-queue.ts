@@ -10,13 +10,18 @@ export class PostgresQueue implements Queue {
     }
 
     peek(): Promise<FactEnvelope[]> {
-        throw new Error("Method not implemented.");
+        // Not yet implemented
+        return Promise.resolve([]);
     }
+
     enqueue(envelopes: FactEnvelope[]): Promise<void> {
-        throw new Error("Method not implemented.");
+        // Not yet implemented
+        return Promise.resolve();
     }
+
     dequeue(envelopes: FactEnvelope[]): Promise<void> {
-        throw new Error("Method not implemented.");
+        // Not yet implemented
+        return Promise.resolve();
     }
 
 }
