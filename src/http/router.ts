@@ -357,7 +357,9 @@ export class HttpRouter {
 
         const userIdentity = serializeUserIdentity(user);
         const results = await this.authorization.read(userIdentity, start, specification);
-        return extractResults(results);
+        const extracted = extractResults(results);
+        Trace.counter("facts_read", extracted.count);
+        return extracted.result;
     }
 
     private async write(user: RequestUser | null, input: string): Promise<void> {
@@ -619,19 +621,25 @@ function parseString(input: any): string {
     return input;
 }
 
-function extractResults(obj: any): any {
+function extractResults(obj: any): { result: any, count: number } {
     if (Array.isArray(obj)) {
         const projectedResults: ProjectedResult[] = obj;
-        return projectedResults.map(r => extractResults(r.result));
+        const results = projectedResults.map(r => extractResults(r.result));
+        const count = results.reduce((acc, res) => acc + res.count + 1, 0);
+        return { result: results.map(r => r.result), count };
     }
     else if (typeof obj === "object") {
-        return Object.keys(obj).reduce((acc, key) => ({
-            ...acc,
-            [key]: extractResults(obj[key])
-        }), {});
+        const keys = Object.keys(obj);
+        const results = keys.reduce((acc, key) => {
+            const extracted = extractResults(obj[key]);
+            acc.result[key] = extracted.result;
+            acc.count += extracted.count;
+            return acc;
+        }, { result: {} as any, count: 0 });
+        return results;
     }
     else {
-        return obj;
+        return { result: obj, count: 0 };
     }
 }
 
