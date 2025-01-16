@@ -58,6 +58,7 @@ export type JinagaServerConfig = {
 export type JinagaServerInstance = {
     handler: Handler,
     j: Jinaga,
+    factManager: FactManager,
     withSession: (req: Request, callback: ((j: Jinaga) => Promise<void>)) => Promise<void>,
     close: () => Promise<void>
 };
@@ -97,6 +98,7 @@ export class JinagaServer {
         return {
             handler: router.handler,
             j,
+            factManager,
             withSession: (req, callback) => {
                 return withSession(store, keystore, authorizationRules, purgeConditions, req, callback);
             },
