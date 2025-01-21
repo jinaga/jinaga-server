@@ -474,12 +474,26 @@ export class PostgresStore implements Storage {
         return result.rowCount;
     }
 
-    loadBookmark(feed: string): Promise<string> {
-        throw new Error("Method not implemented.");
+    async loadBookmark(feed: string): Promise<string> {
+        const sql = `SELECT bookmark FROM ${this.schema}.bookmark WHERE feed = $1`;
+        const result = await this.connectionFactory.with(async (connection) => {
+            return await connection.query(sql, [feed]);
+        });
+        if (result.rows.length === 0) {
+            return "";
+        }
+        return result.rows[0].bookmark;
     }
 
-    saveBookmark(feed: string, bookmark: string): Promise<void> {
-        throw new Error("Method not implemented.");
+    async saveBookmark(feed: string, bookmark: string): Promise<void> {
+        const sql = `
+            INSERT INTO ${this.schema}.bookmark (feed, bookmark)
+            VALUES ($1, $2)
+            ON CONFLICT (feed) DO UPDATE SET bookmark = EXCLUDED.bookmark
+        `;
+        await this.connectionFactory.with(async (connection) => {
+            await connection.query(sql, [feed, bookmark]);
+        });
     }
 
     getMruDate(specificationHash: string): Promise<Date | null> {

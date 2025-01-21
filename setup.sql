@@ -242,6 +242,21 @@ IF (SELECT to_regclass('public.user') IS NULL) THEN
 END IF;
 
 --
+-- Bookmark
+--
+
+IF (SELECT to_regclass('public.bookmark') IS NULL) THEN
+
+    CREATE TABLE public.bookmark (
+        feed character varying(100) PRIMARY KEY,
+        bookmark text NOT NULL
+    );
+
+    ALTER TABLE public.bookmark OWNER TO postgres;
+
+END IF;
+
+--
 -- If the fact_type.name column is less than 200 characters, then increase it.
 --
 
