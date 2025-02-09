@@ -1,6 +1,6 @@
 {
   "name": "jinaga-server",
-  "version": "3.3.5",
+  "version": "3.3.6",
   "description": "Data management for web and mobile applications.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
