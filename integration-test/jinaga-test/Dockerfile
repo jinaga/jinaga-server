@@ -11,6 +11,7 @@ COPY jinaga.test.js .
 COPY specification.test.js .
 COPY purge.test.js .
 COPY postgres.test.js .
+COPY postgres-duplicates.test.js .
 COPY orderModel.js .
 
 ENTRYPOINT [ "npm", "test" ]
