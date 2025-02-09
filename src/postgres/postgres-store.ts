@@ -135,7 +135,8 @@ export class PostgresStore implements Storage {
     
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         if (envelopes.length > 0) {
-            const facts = envelopes.map(e => e.fact);
+            const facts = envelopes.map(e => e.fact).filter((value, index, self) =>
+                 self.findIndex(factReferenceEquals(value)) === index);
             if (facts.some(f => !f.hash || !f.type)) {
                 throw new Error('Attempted to save a fact with no hash or type.');
             }
@@ -157,8 +158,17 @@ export class PostgresStore implements Storage {
 
                 const roles = await storeRoles(newFacts, factTypes, copyRoleMap(this.roleMap), connection, this.schema);
                 const allFacts = await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roles, this.schema);
-                const newEnvelopes = envelopes.filter(envelope => newFacts.some(
-                    factReferenceEquals(envelope.fact)));
+                // For each new fact, find all of the signatures that were provided.
+                const newEnvelopes = newFacts.map(fact => {
+                    const predicate = factReferenceEquals(fact);
+                    const signatures = envelopes
+                        .filter(envelope => predicate(envelope.fact))
+                        .flatMap(envelope => envelope.signatures);
+                    return {
+                        fact,
+                        signatures
+                    };
+                });
                 if (newEnvelopes.length === 0) {
                     return {
                         newEnvelopes,
