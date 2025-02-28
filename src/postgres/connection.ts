@@ -10,8 +10,6 @@ export class ConnectionFactory {
 
     withTransaction<T>(callback: (connection: PoolClient) => Promise<T>) {
         return this.with(async connection => {
-            // If the insert throws a duplicate key error, then retry the select.
-            let attempts = 2;
             while (true) {
                 try {
                     await connection.query('BEGIN');
@@ -22,26 +20,18 @@ export class ConnectionFactory {
                 catch (e) {
                     Trace.warn("Postgres transaction error: " + describeError(e));
                     await connection.query('ROLLBACK');
-                    if (e instanceof DatabaseError && e.code === '23505') {
-                        Trace.warn("Postgres duplicate key: retrying");
-                        attempts--;
-                        if (attempts === 0) {
-                            throw e;
-                        }
-                    }
-                    else {
-                        Trace.error(e);
-                        throw e;
-                    }
+                    Trace.error(e);
+                    throw e;
                 }
             }
-        })
+        });
     }
 
     async with<T>(callback: (connection: PoolClient) => Promise<T>) : Promise<T> {
         let attempt = 0;
-        const pause = [0, 0, 1000, 5000, 15000, 30000];
-        while (attempt < pause.length) {
+        const maxAttempts = 4;
+        const baseDelay = 10;
+        while (attempt < maxAttempts) {
             try {
                 const client = await this.createClient();
                 try {
@@ -58,14 +48,13 @@ export class ConnectionFactory {
                 }
                 Trace.warn("Postgres transient error: " + describeError(e));
                 attempt++;
-                if (attempt === pause.length) {
+                if (attempt === maxAttempts) {
                     throw e;
                 }
             }
-            if (pause[attempt] > 0) {
-                Trace.warn("Postgres retrying in " + pause[attempt] + "ms");
-                await delay(pause[attempt]);
-            }
+            const delayTime = baseDelay * Math.pow(2, attempt);
+            Trace.warn("Postgres retrying in " + delayTime + "ms");
+            await delay(delayTime);
         }
         throw new Error("Number of attempts exceeded");
     }
@@ -76,7 +65,7 @@ export class ConnectionFactory {
 }
 
 function isTransientError(e: any) {
-    if (e.code === 'ECONNREFUSED') {
+    if (e.code === 'ECONNREFUSED' || e.code === '23505') { // 23505 is the code for unique_violation
         return true;
     }
     return false;
