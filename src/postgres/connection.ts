@@ -18,9 +18,7 @@ export class ConnectionFactory {
                     return result;
                 }
                 catch (e) {
-                    Trace.warn("Postgres transaction error: " + describeError(e));
                     await connection.query('ROLLBACK');
-                    Trace.error(e);
                     throw e;
                 }
             }
@@ -49,6 +47,7 @@ export class ConnectionFactory {
                 Trace.warn("Postgres transient error: " + describeError(e));
                 attempt++;
                 if (attempt === maxAttempts) {
+                    Trace.error("Postgres error after max attempts: " + describeError(e));
                     throw e;
                 }
             }
