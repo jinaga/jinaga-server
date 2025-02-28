@@ -10,17 +10,15 @@ export class ConnectionFactory {
 
     withTransaction<T>(callback: (connection: PoolClient) => Promise<T>) {
         return this.with(async connection => {
-            while (true) {
-                try {
-                    await connection.query('BEGIN');
-                    const result = await callback(connection);
-                    await connection.query('COMMIT');
-                    return result;
-                }
-                catch (e) {
-                    await connection.query('ROLLBACK');
-                    throw e;
-                }
+            try {
+                await connection.query('BEGIN');
+                const result = await callback(connection);
+                await connection.query('COMMIT');
+                return result;
+            }
+            catch (e) {
+                await connection.query('ROLLBACK');
+                throw e;
             }
         });
     }
