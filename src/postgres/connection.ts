@@ -51,8 +51,8 @@ export class ConnectionFactory {
                     throw e;
                 }
             }
-            const delayTime = baseDelay * Math.pow(2, attempt);
-            Trace.warn("Postgres retrying in " + delayTime + "ms");
+            const delayTime = baseDelay * Math.pow(2, attempt-1);
+            Trace.warn("Attempt number " + attempt + ". Postgres retrying in " + delayTime + "ms");
             await delay(delayTime);
         }
         throw new Error("Number of attempts exceeded");
