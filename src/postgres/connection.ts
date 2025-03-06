@@ -1,14 +1,26 @@
 import { Trace } from 'jinaga';
 import { DatabaseError, Pool, PoolClient } from 'pg';
 import { delay } from "../util/promise";
+import { Mutex } from 'async-mutex';
 
 export type Row = { [key: string]: any };
 
 export class ConnectionFactory {
-    constructor (private postgresPool: Pool) {
+    private mutex: Mutex;
+
+    constructor (private postgresPool: Pool, private lockTransactions: boolean = false) {
+        this.mutex = new Mutex();
     }
 
     withTransaction<T>(callback: (connection: PoolClient) => Promise<T>) {
+        if (this.lockTransactions) {
+            return this.mutex.runExclusive(() => this.withTransactionInternal(callback));
+        } else {
+            return this.withTransactionInternal(callback);
+        }
+    }
+
+    private async withTransactionInternal<T>(callback: (connection: PoolClient) => Promise<T>) {
         return this.with(async connection => {
             try {
                 await connection.query('BEGIN');
