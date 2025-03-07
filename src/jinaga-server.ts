@@ -53,6 +53,7 @@ export type JinagaServerConfig = {
     distribution?: (d: DistributionRules) => DistributionRules,
     purgeConditions?: (p: PurgeConditions) => PurgeConditions,
     origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
+    lockTransactions?: boolean
 };
 
 export type JinagaServerInstance = {
@@ -74,7 +75,7 @@ export class JinagaServer {
         const pools: { [uri: string]: Pool } = {};
         const pool = makePool(config, pools);
         const schema = validateSchema(config.pgStoreSchema);
-        const store = createStore(pool, schema);
+        const store = createStore(pool, schema, config.lockTransactions);
         const source = new ObservableSourceImpl(store);
         const webClient = createWebClient(config, syncStatusNotifier);
         const fork = createFork(webClient, store, pool, schema);
@@ -117,9 +118,9 @@ function makePool(config: JinagaServerConfig, pools: { [uri: string]: Pool }): P
     }
 }
 
-function createStore(pool: Pool | undefined, schema: string): Storage {
+function createStore(pool: Pool | undefined, schema: string, lockTransactions?: boolean): Storage {
     if (pool) {
-        return new PostgresStore(pool, schema);
+        return new PostgresStore(pool, schema, lockTransactions || false);
     }
     else {
         return new MemoryStore();
