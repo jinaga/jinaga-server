@@ -6,7 +6,7 @@ export class PostgresQueue implements Queue {
     private connectionFactory: ConnectionFactory;
 
     constructor(pool: Pool, private schema: string) {
-        this.connectionFactory = new ConnectionFactory(pool);
+        this.connectionFactory = new ConnectionFactory(pool, false);
     }
 
     peek(): Promise<FactEnvelope[]> {

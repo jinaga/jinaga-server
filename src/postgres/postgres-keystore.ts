@@ -9,7 +9,7 @@ export class PostgresKeystore implements Keystore {
     private cache: Map<string, KeyPair> = new Map();
 
     constructor (pool: Pool, private schema: string) {
-        this.connectionFactory = new ConnectionFactory(pool);
+        this.connectionFactory = new ConnectionFactory(pool, false);
     }
 
     getOrCreateUserFact(userIdentity: UserIdentity): Promise<FactRecord> {

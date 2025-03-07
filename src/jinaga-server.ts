@@ -120,7 +120,7 @@ function makePool(config: JinagaServerConfig, pools: { [uri: string]: Pool }): P
 
 function createStore(pool: Pool | undefined, schema: string, lockTransactions?: boolean): Storage {
     if (pool) {
-        return new PostgresStore(pool, schema, lockTransactions);
+        return new PostgresStore(pool, schema, lockTransactions || false);
     }
     else {
         return new MemoryStore();

@@ -1,5 +1,5 @@
 import { Trace } from 'jinaga';
-import { DatabaseError, Pool, PoolClient } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { delay } from "../util/promise";
 import { Mutex } from 'async-mutex';
 
@@ -8,7 +8,7 @@ export type Row = { [key: string]: any };
 export class ConnectionFactory {
     private mutex: Mutex;
 
-    constructor (private postgresPool: Pool, private lockTransactions: boolean = false) {
+    constructor (private postgresPool: Pool, private lockTransactions: boolean) {
         this.mutex = new Mutex();
     }
 
