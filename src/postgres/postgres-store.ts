@@ -459,7 +459,7 @@ export class PostgresStore implements Storage {
             var result = await this.connectionFactory.with(async (connection) => {
                 return await connection.query(sql, parameters);
             });
-            count += result.rowCount;
+            count += result.rowCount || 0;
         }
         return count;
     }
@@ -481,7 +481,7 @@ export class PostgresStore implements Storage {
         var result = await this.connectionFactory.with(async (connection) => {
             return await connection.query(purgeCommand, parameters);
         });
-        return result.rowCount;
+        return result.rowCount || 0;
     }
 
     async loadBookmark(feed: string): Promise<string> {

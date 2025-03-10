@@ -35,11 +35,9 @@ import {
 import { Stream } from "./stream";
 import { createLineReader } from "./line-reader";
 
-interface ParsedQs { [key: string]: undefined | string | string[] | ParsedQs | ParsedQs[] }
-
 function getOrStream<U>(
-    getMethod: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<U | null>),
-    streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: ParsedQs) => Promise<Stream<U> | null>)
+    getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
+    streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<Stream<U> | null>)
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>req.user;
@@ -426,7 +424,7 @@ export class HttpRouter {
         }
     }
 
-    private async feed(user: RequestUser | null, params: { [key: string]: string }, query: ParsedQs): Promise<FeedResponse | null> {
+    private async feed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<FeedResponse | null> {
         const feedHash = params["hash"];
         if (!feedHash) {
             return null;
@@ -453,7 +451,7 @@ export class HttpRouter {
         return response;
     }
 
-    private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: ParsedQs): Promise<Stream<FeedResponse> | null> {
+    private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<Stream<FeedResponse> | null> {
         const feedHash = params["hash"];
         if (!feedHash) {
             return null;
