@@ -1,6 +1,9 @@
 import { Handler, NextFunction, Request, Response, Router } from "express";
 import {
     Authorization,
+    buildFeeds,
+    computeObjectHash,
+    computeTupleSubsetHash,
     Declaration,
     FactEnvelope,
     FactManager,
@@ -15,8 +18,11 @@ import {
     GraphSerializer,
     GraphSource,
     Invalid,
+    invertSpecification,
     LoadMessage,
     LoadResponse,
+    parseLoadMessage,
+    parseSaveMessage,
     ProfileMessage,
     ProjectedResult,
     ReferencesByName,
@@ -24,23 +30,17 @@ import {
     SpecificationParser,
     Trace,
     UserIdentity,
-    buildFeeds,
-    computeObjectHash,
-    computeTupleSubsetHash,
-    invertSpecification,
-    parseLoadMessage,
-    parseSaveMessage,
     verifyEnvelopes
 } from "jinaga";
-import { Stream } from "./stream";
 import { createLineReader } from "./line-reader";
+import { Stream } from "./stream";
 
 function getOrStream<U>(
     getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
     streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<Stream<U> | null>)
 ): Handler {
     return (req, res, next) => {
-        const user = <RequestUser>req.user;
+        const user = <RequestUser>(req as any).user;
         const accept = req.headers["accept"];
         if (accept && accept.indexOf("application/x-jinaga-feed-stream") >= 0) {
             streamMethod(user, req.params, req.query)
@@ -93,7 +93,7 @@ function getOrStream<U>(
 
 function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]: string }) => Promise<U>)): Handler {
     return (req, res, next) => {
-        const user = <RequestUser>req.user;
+        const user = <RequestUser>(req as any).user;
         if (!user) {
             res.sendStatus(401);
         }
@@ -115,7 +115,7 @@ function post<T, U>(
     output: (result: U, res: Response, accepts: (type: string) => string | false) => void
 ): Handler {
     return (req, res, next) => {
-        const user = <RequestUser>req.user;
+        const user = <RequestUser>(req as any).user;
         const message = parse(req.body);
         if (!message) {
             throw new Error('Ensure that you have called app.use(express.json()).');
@@ -137,7 +137,7 @@ function post<T, U>(
 
 function postString<U>(method: (user: RequestUser, message: string) => Promise<U>): Handler {
     return (req, res, next) => {
-        const user = <RequestUser>req.user;
+        const user = <RequestUser>(req as any).user;
         const input = parseString(req.body);
         if (!input || typeof (input) !== 'string') {
             res.type("text");
@@ -160,7 +160,7 @@ function postCreate<T>(
     method: (user: RequestUser, message: T) => Promise<void>
 ): Handler {
     return (req, res, next) => {
-        const user = <RequestUser>req.user;
+        const user = <RequestUser>(req as any).user;
         const message = parse(req);
         method(user, message)
             .then(_ => {
@@ -173,7 +173,7 @@ function postCreate<T>(
 
 function postStringCreate(method: (user: RequestUser, message: string) => Promise<void>): Handler {
     return (req, res, next) => {
-        const user = <RequestUser>req.user;
+        const user = <RequestUser>(req as any).user;
         const input = parseString(req.body);
         if (!input || typeof (input) !== 'string') {
             res.type("text");
@@ -312,143 +312,157 @@ export class HttpRouter {
         this.handler = router;
     }
 
-    private async login(user: RequestUser) {
-        const userFact = await this.authorization.getOrCreateUserFact({
-            provider: user.provider,
-            id: user.id
-        });
-        return {
-            userFact: userFact,
-            profile: user.profile
-        };
-    }
-
-    private async load(user: RequestUser, loadMessage: LoadMessage): Promise<FactEnvelope[]> {
-        const userIdentity = serializeUserIdentity(user);
-        const result = await this.authorization.load(userIdentity, loadMessage.references);
-        return result;
-    }
-
-    private async save(user: RequestUser | null, graphSource: GraphSource): Promise<void> {
-        const userIdentity = serializeUserIdentity(user);
-        await graphSource.read(async (envelopes) => {
-            if (!verifyEnvelopes(envelopes)) {
-                throw new Forbidden("The signatures on the facts are invalid.");
-            }
-            await this.authorization.save(userIdentity, envelopes);
+    private login(user: RequestUser) {
+        return Trace.dependency("login", user.provider, async () => {
+            const userFact = await this.authorization.getOrCreateUserFact({
+                provider: user.provider,
+                id: user.id
+            });
+            return {
+                userFact: userFact,
+                profile: user.profile
+            };
         });
     }
 
-    private async read(user: RequestUser | null, input: string): Promise<any[]> {
-        const knownFacts = await this.getKnownFacts(user);
-        const parser = new SpecificationParser(input);
-        parser.skipWhitespace();
-        const declaration = parser.parseDeclaration(knownFacts);
-        const specification = parser.parseSpecification();
-        parser.expectEnd();
-        const start = this.selectStart(specification, declaration);
-
-        var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
-        if (failures.length > 0) {
-            throw new Invalid(failures.join("\n"));
-        }
-
-        const userIdentity = serializeUserIdentity(user);
-        const results = await this.authorization.read(userIdentity, start, specification);
-        const extracted = extractResults(results);
-        Trace.counter("facts_read", extracted.count);
-        return extracted.result;
+    private load(user: RequestUser, loadMessage: LoadMessage): Promise<FactEnvelope[]> {
+        return Trace.dependency("load", "", async () => {
+            const userIdentity = serializeUserIdentity(user);
+            const result = await this.authorization.load(userIdentity, loadMessage.references);
+            return result;
+        });
     }
 
-    private async write(user: RequestUser | null, input: string): Promise<void> {
-        const knownFacts = await this.getKnownFacts(user);
-        const parser = new SpecificationParser(input);
-        parser.skipWhitespace();
-        var declaration = parser.parseDeclaration(knownFacts);
-        parser.expectEnd();
+    private save(user: RequestUser | null, graphSource: GraphSource): Promise<void> {
+        return Trace.dependency("save", "", async () => {
+            const userIdentity = serializeUserIdentity(user);
+            await graphSource.read(async (envelopes) => {
+                if (!verifyEnvelopes(envelopes)) {
+                    throw new Forbidden("The signatures on the facts are invalid.");
+                }
+                await this.authorization.save(userIdentity, envelopes);
+            });
+        });
+    }
 
-        const factRecords: FactRecord[] = [];
-        for (const value of declaration) {
-            if (!value.declared.fact) {
-                throw new Invalid("References are not allowed while saving.");
+    private read(user: RequestUser | null, input: string): Promise<any[]> {
+        return Trace.dependency("read", "", async () => {
+            const knownFacts = await this.getKnownFacts(user);
+            const parser = new SpecificationParser(input);
+            parser.skipWhitespace();
+            const declaration = parser.parseDeclaration(knownFacts);
+            const specification = parser.parseSpecification();
+            parser.expectEnd();
+            const start = this.selectStart(specification, declaration);
+
+            var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
+            if (failures.length > 0) {
+                throw new Invalid(failures.join("\n"));
             }
-            factRecords.push(value.declared.fact);
-        }
 
-        const userIdentity = serializeUserIdentity(user);
-        await this.authorization.save(userIdentity, factRecords
-            .map(fact => ({
-                fact: fact,
-                signatures: []
-            })));
+            const userIdentity = serializeUserIdentity(user);
+            const results = await this.authorization.read(userIdentity, start, specification);
+            const extracted = extractResults(results);
+            Trace.counter("facts_read", extracted.count);
+            return extracted.result;
+        });
     }
 
-    private async feeds(user: RequestUser | null, input: string): Promise<FeedsResponse> {
-        const knownFacts = await this.getKnownFacts(user);
-        const parser = new SpecificationParser(input);
-        parser.skipWhitespace();
-        const declaration = parser.parseDeclaration(knownFacts);
-        const specification = parser.parseSpecification();
-        const start = this.selectStart(specification, declaration);
+    private write(user: RequestUser | null, input: string): Promise<void> {
+        return Trace.dependency("write", "", async () => {
+            const knownFacts = await this.getKnownFacts(user);
+            const parser = new SpecificationParser(input);
+            parser.skipWhitespace();
+            var declaration = parser.parseDeclaration(knownFacts);
+            parser.expectEnd();
 
-        // Verify that the number of start facts equals the number of inputs
-        if (start.length !== specification.given.length) {
-            throw new Invalid(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
-        }
-        // Verify that the input type matches the start fact type
-        for (let i = 0; i < start.length; i++) {
-            if (start[i].type !== specification.given[i].type) {
-                throw new Invalid(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
+            const factRecords: FactRecord[] = [];
+            for (const value of declaration) {
+                if (!value.declared.fact) {
+                    throw new Invalid("References are not allowed while saving.");
+                }
+                factRecords.push(value.declared.fact);
             }
-        }
-        // Verify that the specification is compliant with purge conditions
-        var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
-        if (failures.length > 0) {
-            throw new Invalid(failures.join("\n"));
-        }
-        
-        const namedStart = specification.given.reduce((map, label, index) => ({
-            ...map,
-            [label.name]: start[index]
-        }), {} as ReferencesByName);
 
-        // Verify that I can distribute all feeds to the user.
-        const feeds = buildFeeds(specification);
-        const userIdentity = serializeUserIdentity(user);
-        await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
-
-        const feedHashes = this.feedCache.addFeeds(feeds, namedStart);
-
-        return {
-            feeds: feedHashes
-        }
+            const userIdentity = serializeUserIdentity(user);
+            await this.authorization.save(userIdentity, factRecords
+                .map(fact => ({
+                    fact: fact,
+                    signatures: []
+                })));
+        });
     }
 
-    private async feed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<FeedResponse | null> {
-        const feedHash = params["hash"];
-        if (!feedHash) {
-            return null;
-        }
+    private feeds(user: RequestUser | null, input: string): Promise<FeedsResponse> {
+        return Trace.dependency("feeds", "", async () => {
+            const knownFacts = await this.getKnownFacts(user);
+            const parser = new SpecificationParser(input);
+            parser.skipWhitespace();
+            const declaration = parser.parseDeclaration(knownFacts);
+            const specification = parser.parseSpecification();
+            const start = this.selectStart(specification, declaration);
 
-        const feedDefinition = await this.feedCache.getFeed(feedHash);
-        if (!feedDefinition) {
-            return null;
-        }
+            // Verify that the number of start facts equals the number of inputs
+            if (start.length !== specification.given.length) {
+                throw new Invalid(`The number of start facts (${start.length}) does not equal the number of inputs (${specification.given.length})`);
+            }
+            // Verify that the input type matches the start fact type
+            for (let i = 0; i < start.length; i++) {
+                if (start[i].type !== specification.given[i].type) {
+                    throw new Invalid(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
+                }
+            }
+            // Verify that the specification is compliant with purge conditions
+            var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
+            if (failures.length > 0) {
+                throw new Invalid(failures.join("\n"));
+            }
+            
+            const namedStart = specification.given.reduce((map, label, index) => ({
+                ...map,
+                [label.name]: start[index]
+            }), {} as ReferencesByName);
 
-        const bookmark = query["b"] as string ?? "";
+            // Verify that I can distribute all feeds to the user.
+            const feeds = buildFeeds(specification);
+            const userIdentity = serializeUserIdentity(user);
+            await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
 
-        const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
-        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
-        // Return distinct fact references from all the tuples.
-        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
-            self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
-        );
-        const response: FeedResponse = {
-            references,
-            bookmark: results.bookmark
-        };
-        return response;
+            const feedHashes = this.feedCache.addFeeds(feeds, namedStart);
+
+            return {
+                feeds: feedHashes
+            }
+        });
+    }
+
+    private feed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<FeedResponse | null> {
+        return Trace.dependency("feed", params["hash"], async () => {
+            const feedHash = params["hash"];
+            if (!feedHash) {
+                return null;
+            }
+
+            const feedDefinition = await this.feedCache.getFeed(feedHash);
+            if (!feedDefinition) {
+                return null;
+            }
+
+            const bookmark = query["b"] as string ?? "";
+
+            const userIdentity = serializeUserIdentity(user);
+            const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
+            const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+            // Return distinct fact references from all the tuples.
+            const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
+                self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+            );
+            const response: FeedResponse = {
+                references,
+                bookmark: results.bookmark
+            };
+            return response;
+        });
     }
 
     private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<Stream<FeedResponse> | null> {
@@ -469,7 +483,6 @@ export class HttpRouter {
         const givenHash = computeObjectHash(feedDefinition.namedStart);
 
         const stream = new Stream<FeedResponse>();
-        Trace.info("Initial response");
         bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
         const inverses = invertSpecification(feedDefinition.feed);
         const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
@@ -484,7 +497,6 @@ export class HttpRouter {
             }
         ));
         stream.done(() => {
-            Trace.info("Done");
             for (const listener of listeners) {
                 this.factManager.removeSpecificationListener(listener);
             }
