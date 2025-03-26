@@ -218,9 +218,6 @@ function createPool(postgresUri: string): Pool {
         idleTimeoutMillis: process.env.POSTGRES_IDLE_TIMEOUT_MILLIS ?
             parseInt(process.env.POSTGRES_IDLE_TIMEOUT_MILLIS) :
             30000,
-        log(...messages) {
-            Trace.info(messages.join(' '));
-        },
     });
 
     tracePool(postgresPool);
