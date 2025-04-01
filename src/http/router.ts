@@ -71,7 +71,7 @@ function getOrStream<U>(
                             });
                     }
                 })
-                .catch(error => handleError(error, res, next));
+                .catch(error => handleError(error, req, res, next));
         }
         else {
             getMethod(user, req.params, req.query)
@@ -86,7 +86,7 @@ function getOrStream<U>(
                         next();
                     }
                 })
-                .catch(error => handleError(error, res, next));
+                .catch(error => handleError(error, req, res, next));
         }
     };
 }
@@ -104,7 +104,7 @@ function getAuthenticate<U>(method: ((req: RequestUser, params?: { [key: string]
                     res.send(JSON.stringify(response));
                     next();
                 })
-                .catch(error => handleError(error, res, next));
+                .catch(error => handleError(error, req, res, next));
         }
     };
 }
@@ -131,7 +131,7 @@ function post<T, U>(
                     next();
                 }
             })
-        .catch(error => handleError(error, res, next));
+        .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -150,7 +150,7 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
                     res.send(JSON.stringify(response, null, 2));
                     next();
                 })
-                .catch(error => handleError(error, res, next));
+                .catch(error => handleError(error, req, res, next));
         }
     };
 }
@@ -167,7 +167,7 @@ function postCreate<T>(
                 res.sendStatus(201);
                 next();
             })
-            .catch(error => handleError(error, res, next));
+            .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -185,7 +185,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
                     res.sendStatus(201);
                     next();
                 })
-                .catch(error => handleError(error, res, next));
+                .catch(error => handleError(error, req, res, next));
         }
     };
 }
@@ -653,15 +653,18 @@ function extractResults(obj: any): { result: any, count: number } {
     }
 }
 
-function handleError(error: any, res: Response, next: NextFunction) {
+function handleError(error: any, req: Request, res: Response, next: NextFunction) {
+    const requestPath = req.path;
     if (error instanceof Forbidden) {
+        Trace.warn(`Forbidden: ${error.message} (Path: ${requestPath})`);
         res.type("text");
         res.status(403).send(error.message);
     } else if (error instanceof Invalid) {
+        Trace.warn(`Invalid: ${error.message} (Path: ${requestPath})`);
         res.type("text");
         res.status(400).send(error.message);
     } else {
-        Trace.error(error);
+        Trace.error(`Error: ${error.message} (Path: ${requestPath})`);
         res.type("text");
         res.status(500).send(error.message);
     }
