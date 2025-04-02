@@ -249,7 +249,7 @@ export function tracePool(postgresPool: Pool) {
 }
 
 async function withSession(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null, purgeConditions: Specification[], req: Request, callback: ((j: Jinaga) => Promise<void>)) {
-    const user = <RequestUser>req.user;
+    const user = <RequestUser>(req as any).user;
     const userIdentity: UserIdentity = {
         provider: user.provider,
         id: user.id
