@@ -52,8 +52,7 @@ export type JinagaServerConfig = {
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     distribution?: (d: DistributionRules) => DistributionRules,
     purgeConditions?: (p: PurgeConditions) => PurgeConditions,
-    origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
-    lockTransactions?: boolean
+    origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
 };
 
 export type JinagaServerInstance = {
@@ -75,7 +74,7 @@ export class JinagaServer {
         const pools: { [uri: string]: Pool } = {};
         const pool = makePool(config, pools);
         const schema = validateSchema(config.pgStoreSchema);
-        const store = createStore(pool, schema, config.lockTransactions);
+        const store = createStore(pool, schema);
         const source = new ObservableSourceImpl(store);
         const webClient = createWebClient(config, syncStatusNotifier);
         const fork = createFork(webClient, store, pool, schema);
@@ -118,9 +117,9 @@ function makePool(config: JinagaServerConfig, pools: { [uri: string]: Pool }): P
     }
 }
 
-function createStore(pool: Pool | undefined, schema: string, lockTransactions?: boolean): Storage {
+function createStore(pool: Pool | undefined, schema: string): Storage {
     if (pool) {
-        return new PostgresStore(pool, schema, lockTransactions || false);
+        return new PostgresStore(pool, schema);
     }
     else {
         return new MemoryStore();
@@ -249,7 +248,7 @@ export function tracePool(postgresPool: Pool) {
 }
 
 async function withSession(store: Storage, keystore: Keystore | null, authorizationRules: AuthorizationRules | null, purgeConditions: Specification[], req: Request, callback: ((j: Jinaga) => Promise<void>)) {
-    const user = <RequestUser>req.user;
+    const user = <RequestUser>(req as any).user;
     const userIdentity: UserIdentity = {
         provider: user.provider,
         id: user.id
