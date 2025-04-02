@@ -125,8 +125,8 @@ export class PostgresStore implements Storage {
     private factTypeMap: FactTypeMap = emptyFactTypeMap();
     private roleMap: RoleMap = emptyRoleMap();
 
-    constructor (pool: Pool, private schema: string, lockTransactions: boolean) {
-        this.connectionFactory = new ConnectionFactory(pool, lockTransactions);
+    constructor (pool: Pool, private schema: string) {
+        this.connectionFactory = new ConnectionFactory(pool);
     }
 
     close() {
