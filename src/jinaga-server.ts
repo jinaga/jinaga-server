@@ -48,6 +48,7 @@ export type JinagaServerConfig = {
     pgKeystoreSchema?: string,
     upstreamReplicators?: string[],
     httpTimeoutSeconds?: number,
+    queueProcessingDelayMs?: number,
     model?: Model,
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     distribution?: (d: DistributionRules) => DistributionRules,
@@ -77,7 +78,7 @@ export class JinagaServer {
         const store = createStore(pool, schema);
         const source = new ObservableSourceImpl(store);
         const webClient = createWebClient(config, syncStatusNotifier);
-        const fork = createFork(webClient, store, pool, schema);
+        const fork = createFork(config, webClient, store, pool, schema);
         const keystore = createKeystore(config, pools);
         const authorizationRules = config.authorization ? config.authorization(new AuthorizationRules(config.model)) : null;
         const distributionRules = config.distribution ? config.distribution(new DistributionRules([])) : null;
@@ -149,6 +150,7 @@ function createWebClient(
 }
 
 function createFork(
+    config: JinagaServerConfig,
     webClient: WebClient | null,
     store: Storage,
     pool: Pool | undefined,
@@ -157,7 +159,7 @@ function createFork(
     if (webClient) {
         if (pool) {
             const queue = new PostgresQueue(pool, schema);
-            const fork = new PersistentFork(store, queue, webClient);
+            const fork = new PersistentFork(store, queue, webClient, config.queueProcessingDelayMs || 100);
             fork.initialize();
             return fork;
         }
