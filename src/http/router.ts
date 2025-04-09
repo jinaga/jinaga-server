@@ -555,11 +555,12 @@ export class HttpRouter {
     }
 
     private setOptions(router: Router, path: string): OptionsConfiguration {
-        const addOptions = (allowedMethods: string[], allowedHeaders: string[], allowedTypes: string[]) => {
+        const addOptions = (allowedMethods: string[], allowedHeaders: string[], exposedHeaders: string[], allowedTypes: string[]) => {
             router.options(path, this.applyAllowOrigin.bind(this), (req: Request, res: Response) => {
                 res.set('Allow', allowedMethods.join(', '));
                 res.set('Access-Control-Allow-Methods', allowedMethods.join(', '));
                 res.set('Access-Control-Allow-Headers', allowedHeaders.join(', '));
+                res.set('Access-Control-Expose-Headers', exposedHeaders.join(', '));
                 if (allowedTypes.length > 0) {
                     res.set('Accept-Post', allowedTypes.join(', '));
                 }
@@ -569,7 +570,7 @@ export class HttpRouter {
 
         return {
             intendedForGet: () => {
-                addOptions(['GET', 'OPTIONS'], ['Accept', 'Authorization'], []);
+                addOptions(['GET', 'OPTIONS'], ['Accept', 'Authorization'], [], []);
                 return {
                     returningContent: () => { },
                     returningNoContent: () => { }
@@ -581,12 +582,14 @@ export class HttpRouter {
                         addOptions(
                             ['POST', 'OPTIONS'],
                             ['Content-Type', 'Accept', 'Authorization'],
+                            ['Accept-Post'],
                             contentTypes);
                     },
                     returningNoContent: () => {
                         addOptions(
                             ['POST', 'OPTIONS'],
                             ['Content-Type', 'Authorization'],
+                            ['Accept-Post'],
                             contentTypes);
                     }
                 };
