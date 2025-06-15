@@ -483,7 +483,11 @@ export class HttpRouter {
         const givenHash = computeObjectHash(feedDefinition.namedStart);
 
         const stream = new Stream<FeedResponse>();
-        bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream);
+        
+        // Continuous initial query until exhausted
+        bookmark = await this.streamAllInitialResults(userIdentity, feedDefinition, start, bookmark, stream);
+        
+        // Set up real-time listeners after initial data is complete
         const inverses = invertSpecification(feedDefinition.feed);
         const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
             inverse.inverseSpecification,
@@ -502,6 +506,65 @@ export class HttpRouter {
             }
         });
         return stream;
+    }
+
+    private async streamAllInitialResults(
+        userIdentity: UserIdentity | null,
+        feedDefinition: FeedObject,
+        start: FactReference[],
+        initialBookmark: string,
+        stream: Stream<FeedResponse>
+    ): Promise<string> {
+        let bookmark = initialBookmark;
+        let hasMoreResults = true;
+        let pageCount = 0;
+        const maxPages = 1000; // Safety limit to prevent infinite loops
+        
+        while (hasMoreResults && pageCount < maxPages) {
+            const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+            
+            // Check if we got results
+            if (results.tuples.length === 0) {
+                hasMoreResults = false;
+                break;
+            }
+            
+            // Process and send results
+            const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
+                self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+            );
+            
+            if (references.length > 0) {
+                const response: FeedResponse = {
+                    references,
+                    bookmark: results.bookmark
+                };
+                stream.feed(response);
+            }
+            
+            // Update bookmark for next iteration
+            const newBookmark = results.bookmark;
+            if (newBookmark === bookmark) {
+                // No progress made, avoid infinite loop
+                hasMoreResults = false;
+            } else {
+                bookmark = newBookmark;
+            }
+            
+            // Check if we got fewer results than the page size (indicates end)
+            if (results.tuples.length < 100) {
+                hasMoreResults = false;
+            }
+            
+            pageCount++;
+            
+            // Add small delay to prevent overwhelming the database
+            if (hasMoreResults && pageCount % 10 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+        }
+        
+        return bookmark;
     }
 
     private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
