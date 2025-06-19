@@ -40,53 +40,131 @@ function getOrStream<U>(
     streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<Stream<U> | null>)
 ): Handler {
     return (req, res, next) => {
+        const connectionId = Math.random().toString(36).substring(2, 10);
         const user = <RequestUser>(req as any).user;
         const accept = req.headers["accept"];
+        
+        console.log(`[HttpConnection:${connectionId}] New request - User: ${user?.id || 'anonymous'}, Accept: ${accept}, URL: ${req.url}`);
+        
         if (accept && accept.indexOf("application/x-jinaga-feed-stream") >= 0) {
+            console.log(`[HttpConnection:${connectionId}] STREAMING request detected`);
+            
             streamMethod(user, req.params, req.query)
                 .then(response => {
                     if (!response) {
+                        console.log(`[HttpConnection:${connectionId}] Stream method returned null - sending 404`);
                         res.sendStatus(404);
                         next();
                     }
                     else {
+                        console.log(`[HttpConnection:${connectionId}] Setting up streaming response`);
+                        
                         res.type("application/x-jinaga-feed-stream");
                         res.set("Connection", "keep-alive");
                         res.set("Cache-Control", "no-cache");
                         res.set("Access-Control-Allow-Origin", "*");
                         res.flushHeaders();
+                        
+                        console.log(`[HttpConnection:${connectionId}] Headers flushed - setting up event handlers`);
+                        
+                        let clientDisconnected = false;
+                        let timeoutTriggered = false;
+                        let streamClosed = false;
+                        
+                        // Client disconnect handler
                         req.on("close", () => {
-                            response.close();
+                            console.log(`[HttpConnection:${connectionId}] CLIENT DISCONNECTED`);
+                            clientDisconnected = true;
+                            if (!streamClosed) {
+                                console.log(`[HttpConnection:${connectionId}] Closing stream due to client disconnect`);
+                                response.close();
+                                streamClosed = true;
+                            }
                         });
+                        
+                        // Timeout handler
                         const timeout = setTimeout(() => {
-                            response.close();
+                            console.log(`[HttpConnection:${connectionId}] TIMEOUT TRIGGERED (5 minutes)`);
+                            timeoutTriggered = true;
+                            if (!streamClosed) {
+                                console.log(`[HttpConnection:${connectionId}] Closing stream due to timeout`);
+                                response.close();
+                                streamClosed = true;
+                            }
                         }, 5 * 60 * 1000);
+                        
+                        let messageCount = 0;
+                        
                         response
                             .next(data => {
-                                res.write(JSON.stringify(data) + "\n\n");
+                                messageCount++;
+                                const writeStart = Date.now();
+                                
+                                if (clientDisconnected) {
+                                    console.warn(`[HttpConnection:${connectionId}] Attempted to write to disconnected client - Message #${messageCount}`);
+                                    return;
+                                }
+                                
+                                try {
+                                    const jsonData = JSON.stringify(data) + "\n\n";
+                                    res.write(jsonData);
+                                    const writeDuration = Date.now() - writeStart;
+                                    
+                                    console.log(`[HttpConnection:${connectionId}] Message #${messageCount} sent - Size: ${jsonData.length} bytes, Duration: ${writeDuration}ms`);
+                                    
+                                    if (writeDuration > 50) {
+                                        console.warn(`[HttpConnection:${connectionId}] SLOW write operation - Duration: ${writeDuration}ms`);
+                                    }
+                                } catch (error) {
+                                    console.error(`[HttpConnection:${connectionId}] ERROR writing message #${messageCount}: ${error}`);
+                                }
                             })
                             .done(() => {
+                                console.log(`[HttpConnection:${connectionId}] STREAM DONE - Messages sent: ${messageCount}, Client disconnected: ${clientDisconnected}, Timeout triggered: ${timeoutTriggered}`);
+                                
                                 clearTimeout(timeout);
-                                res.socket?.end();
+                                streamClosed = true;
+                                
+                                try {
+                                    if (!clientDisconnected) {
+                                        console.log(`[HttpConnection:${connectionId}] Ending socket connection`);
+                                        res.socket?.end();
+                                    } else {
+                                        console.log(`[HttpConnection:${connectionId}] Client already disconnected - skipping socket end`);
+                                    }
+                                } catch (error) {
+                                    console.error(`[HttpConnection:${connectionId}] ERROR ending socket: ${error}`);
+                                }
                             });
+                        
+                        console.log(`[HttpConnection:${connectionId}] Stream handlers configured`);
                     }
                 })
-                .catch(error => handleError(error, req, res, next));
+                .catch(error => {
+                    console.error(`[HttpConnection:${connectionId}] ERROR in stream method: ${error}`);
+                    handleError(error, req, res, next);
+                });
         }
         else {
+            console.log(`[HttpConnection:${connectionId}] Regular GET request`);
             getMethod(user, req.params, req.query)
                 .then(response => {
                     if (!response) {
+                        console.log(`[HttpConnection:${connectionId}] Get method returned null - sending 404`);
                         res.sendStatus(404);
                         next();
                     }
                     else {
+                        console.log(`[HttpConnection:${connectionId}] Sending JSON response`);
                         res.type("json");
                         res.send(JSON.stringify(response));
                         next();
                     }
                 })
-                .catch(error => handleError(error, req, res, next));
+                .catch(error => {
+                    console.error(`[HttpConnection:${connectionId}] ERROR in get method: ${error}`);
+                    handleError(error, req, res, next);
+                });
         }
     };
 }
@@ -466,46 +544,113 @@ export class HttpRouter {
     }
 
     private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<Stream<FeedResponse> | null> {
+        const connectionId = Math.random().toString(36).substring(2, 10);
+        const startTime = Date.now();
+        
+        console.log(`[StreamFeed:${connectionId}] NEW CONNECTION - User: ${user?.id || 'anonymous'}, Hash: ${params["hash"]}`);
+        
         const feedHash = params["hash"];
         if (!feedHash) {
+            console.log(`[StreamFeed:${connectionId}] No feed hash provided`);
             return null;
         }
 
         const feedDefinition = await this.feedCache.getFeed(feedHash);
         if (!feedDefinition) {
+            console.log(`[StreamFeed:${connectionId}] Feed definition not found for hash: ${feedHash}`);
             return null;
         }
 
         let bookmark = query["b"] as string ?? "";
+        console.log(`[StreamFeed:${connectionId}] Initial bookmark: ${bookmark || 'empty'}`);
 
         const userIdentity = serializeUserIdentity(user);
         const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
         const givenHash = computeObjectHash(feedDefinition.namedStart);
 
+        console.log(`[StreamFeed:${connectionId}] Feed setup - Given hash: ${givenHash.substring(0, 8)}..., Start facts: ${start.length}`);
+
         const stream = new Stream<FeedResponse>();
         
-        // Continuous initial query until exhausted
-        bookmark = await this.streamAllInitialResults(userIdentity, feedDefinition, start, bookmark, stream);
-        
-        // Set up real-time listeners after initial data is complete
-        const inverses = invertSpecification(feedDefinition.feed);
-        const listeners = inverses.map(inverse => this.factManager.addSpecificationListener(
-            inverse.inverseSpecification,
-            async (results) => {
-                // Filter out results that do not match the given.
-                const matchingResults = results.filter(pr =>
-                    givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
-                if (matchingResults.length != 0) {
-                    bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
+        try {
+            // Continuous initial query until exhausted
+            console.log(`[StreamFeed:${connectionId}] Starting initial data streaming...`);
+            const initialStart = Date.now();
+            bookmark = await this.streamAllInitialResults(userIdentity, feedDefinition, start, bookmark, stream);
+            const initialDuration = Date.now() - initialStart;
+            console.log(`[StreamFeed:${connectionId}] Initial data streaming complete - Duration: ${initialDuration}ms, Final bookmark: ${bookmark || 'empty'}`);
+            
+            // Set up real-time listeners after initial data is complete
+            console.log(`[StreamFeed:${connectionId}] Setting up real-time listeners...`);
+            const inverses = invertSpecification(feedDefinition.feed);
+            console.log(`[StreamFeed:${connectionId}] Created ${inverses.length} inverse specifications`);
+            
+            const listeners = inverses.map((inverse, index) => {
+                console.log(`[StreamFeed:${connectionId}] Adding listener ${index + 1}/${inverses.length}`);
+                
+                return this.factManager.addSpecificationListener(
+                    inverse.inverseSpecification,
+                    async (results) => {
+                        const eventStart = Date.now();
+                        console.log(`[StreamFeed:${connectionId}] EVENT RECEIVED - Listener ${index + 1}, Results: ${results.length}`);
+                        
+                        try {
+                            // Filter out results that do not match the given.
+                            const matchingResults = results.filter(pr =>
+                                givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
+                            
+                            console.log(`[StreamFeed:${connectionId}] Filtered results - Matching: ${matchingResults.length}/${results.length}`);
+                            
+                            if (matchingResults.length != 0) {
+                                console.log(`[StreamFeed:${connectionId}] Processing matching results...`);
+                                const responseStart = Date.now();
+                                bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
+                                const responseDuration = Date.now() - responseStart;
+                                console.log(`[StreamFeed:${connectionId}] Feed response sent - Duration: ${responseDuration}ms, New bookmark: ${bookmark || 'empty'}`);
+                            } else {
+                                console.log(`[StreamFeed:${connectionId}] No matching results - skipping response`);
+                            }
+                        } catch (error) {
+                            console.error(`[StreamFeed:${connectionId}] ERROR processing event: ${error}`);
+                        }
+                        
+                        const eventDuration = Date.now() - eventStart;
+                        if (eventDuration > 100) {
+                            console.warn(`[StreamFeed:${connectionId}] SLOW event processing - Duration: ${eventDuration}ms`);
+                        }
+                    }
+                );
+            });
+            
+            console.log(`[StreamFeed:${connectionId}] All listeners registered - Count: ${listeners.length}`);
+            
+            stream.done(() => {
+                const cleanupStart = Date.now();
+                console.log(`[StreamFeed:${connectionId}] CLEANUP STARTED - Removing ${listeners.length} listeners`);
+                
+                for (let i = 0; i < listeners.length; i++) {
+                    try {
+                        this.factManager.removeSpecificationListener(listeners[i]);
+                        console.log(`[StreamFeed:${connectionId}] Removed listener ${i + 1}/${listeners.length}`);
+                    } catch (error) {
+                        console.error(`[StreamFeed:${connectionId}] ERROR removing listener ${i + 1}: ${error}`);
+                    }
                 }
-            }
-        ));
-        stream.done(() => {
-            for (const listener of listeners) {
-                this.factManager.removeSpecificationListener(listener);
-            }
-        });
-        return stream;
+                
+                const cleanupDuration = Date.now() - cleanupStart;
+                const totalDuration = Date.now() - startTime;
+                console.log(`[StreamFeed:${connectionId}] CLEANUP COMPLETE - Cleanup duration: ${cleanupDuration}ms, Total connection duration: ${totalDuration}ms`);
+            });
+            
+            const setupDuration = Date.now() - startTime;
+            console.log(`[StreamFeed:${connectionId}] Stream setup complete - Duration: ${setupDuration}ms`);
+            
+            return stream;
+            
+        } catch (error) {
+            console.error(`[StreamFeed:${connectionId}] ERROR during setup: ${error}`);
+            throw error;
+        }
     }
 
     private async streamAllInitialResults(
@@ -515,37 +660,59 @@ export class HttpRouter {
         initialBookmark: string,
         stream: Stream<FeedResponse>
     ): Promise<string> {
+        const streamId = Math.random().toString(36).substring(2, 8);
+        console.log(`[InitialResults:${streamId}] Starting initial data fetch - Bookmark: ${initialBookmark || 'empty'}`);
+        
         let bookmark = initialBookmark;
         let hasMoreResults = true;
         let pageCount = 0;
+        let totalReferences = 0;
         const maxPages = 1000; // Safety limit to prevent infinite loops
+        const startTime = Date.now();
         
         while (hasMoreResults && pageCount < maxPages) {
+            const pageStart = Date.now();
+            console.log(`[InitialResults:${streamId}] Fetching page ${pageCount + 1} - Bookmark: ${bookmark || 'empty'}`);
+            
             const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+            const fetchDuration = Date.now() - pageStart;
+            
+            console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} fetched - Tuples: ${results.tuples.length}, Duration: ${fetchDuration}ms`);
             
             // Check if we got results
             if (results.tuples.length === 0) {
+                console.log(`[InitialResults:${streamId}] No more results - ending pagination`);
                 hasMoreResults = false;
                 break;
             }
             
             // Process and send results
+            const processStart = Date.now();
             const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
                 self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
             );
+            const processDuration = Date.now() - processStart;
+            
+            console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} processed - References: ${references.length}, Process duration: ${processDuration}ms`);
             
             if (references.length > 0) {
                 const response: FeedResponse = {
                     references,
                     bookmark: results.bookmark
                 };
+                
+                const feedStart = Date.now();
                 stream.feed(response);
+                const feedDuration = Date.now() - feedStart;
+                
+                totalReferences += references.length;
+                console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} sent to stream - Feed duration: ${feedDuration}ms`);
             }
             
             // Update bookmark for next iteration
             const newBookmark = results.bookmark;
             if (newBookmark === bookmark) {
-                // No progress made, avoid infinite loop
+                console.log(`[InitialResults:${streamId}] Bookmark unchanged - ending pagination`);
                 hasMoreResults = false;
             } else {
                 bookmark = newBookmark;
@@ -553,6 +720,7 @@ export class HttpRouter {
             
             // Check if we got fewer results than the page size (indicates end)
             if (results.tuples.length < 100) {
+                console.log(`[InitialResults:${streamId}] Partial page received (${results.tuples.length} < 100) - ending pagination`);
                 hasMoreResults = false;
             }
             
@@ -560,25 +728,60 @@ export class HttpRouter {
             
             // Add small delay to prevent overwhelming the database
             if (hasMoreResults && pageCount % 10 === 0) {
+                console.log(`[InitialResults:${streamId}] Adding delay after ${pageCount} pages`);
                 await new Promise(resolve => setTimeout(resolve, 10));
             }
+        }
+        
+        const totalDuration = Date.now() - startTime;
+        console.log(`[InitialResults:${streamId}] Initial data streaming complete - Pages: ${pageCount}, Total references: ${totalReferences}, Duration: ${totalDuration}ms, Final bookmark: ${bookmark || 'empty'}`);
+        
+        if (pageCount >= maxPages) {
+            console.warn(`[InitialResults:${streamId}] Hit maximum page limit (${maxPages}) - possible infinite loop`);
         }
         
         return bookmark;
     }
 
     private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
+        const responseId = Math.random().toString(36).substring(2, 6);
+        const startTime = Date.now();
+        
+        console.log(`[FeedResponse:${responseId}] Starting feed response - Bookmark: ${bookmark || 'empty'}, Skip if empty: ${skipIfEmpty}`);
+        
+        const feedStart = Date.now();
         const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+        const feedDuration = Date.now() - feedStart;
+        
+        console.log(`[FeedResponse:${responseId}] Authorization feed complete - Tuples: ${results.tuples.length}, Duration: ${feedDuration}ms`);
+        
         // Return distinct fact references from all the tuples.
-        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) => self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+        const processStart = Date.now();
+        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
+            self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
         );
+        const processDuration = Date.now() - processStart;
+        
+        console.log(`[FeedResponse:${responseId}] References processed - Count: ${references.length}, Duration: ${processDuration}ms`);
+        
         if (!skipIfEmpty || references.length > 0) {
             const response: FeedResponse = {
                 references,
                 bookmark: results.bookmark
             };
+            
+            const streamStart = Date.now();
             stream.feed(response);
+            const streamDuration = Date.now() - streamStart;
+            
+            console.log(`[FeedResponse:${responseId}] Response sent to stream - Duration: ${streamDuration}ms`);
+        } else {
+            console.log(`[FeedResponse:${responseId}] Skipping empty response`);
         }
+        
+        const totalDuration = Date.now() - startTime;
+        console.log(`[FeedResponse:${responseId}] Feed response complete - New bookmark: ${results.bookmark || 'empty'}, Total duration: ${totalDuration}ms`);
+        
         return results.bookmark;
     }
 
