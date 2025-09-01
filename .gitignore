@@ -7,3 +7,4 @@ npm-debug.log
 integration-test/jinaga-test/jinaga-server
 http/with-auth/.env.replicator
 jinaga-server-*.tgz
+logs/
