@@ -46,6 +46,10 @@ import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification,
 import { sqlFromFeed } from "./specification-sql";
 import { purgeDescendantsSql, purgeSqlFromSpecification } from "./purge-sql";
 
+interface PostgresFactRecord extends FactRecord {
+    timestamp: Date;  // Maps to date_learned column
+}
+
 interface FactTypeResult {
     rows: {
         fact_type_id: number;
@@ -91,6 +95,7 @@ interface AncestorResult {
         data: string;
         public_key: string;
         signature: string;
+        date_learned: Date;
     }[];
 }
 
@@ -353,15 +358,15 @@ export class PostgresStore implements Storage {
         const factParameters = flatten(references, (f) =>
             [f.hash, factTypes.get(f.type)]);
         const sql =
-            'SELECT f.fact_type_id, f.name, f.hash, f.data, s.public_key, s.signature ' +
-            'FROM (SELECT f.fact_id, f.fact_type_id, t.name, f.hash, f.data ' +
+            'SELECT f.fact_type_id, f.name, f.hash, f.data, f.date_learned, s.public_key, s.signature ' +
+            'FROM (SELECT f.fact_id, f.fact_type_id, t.name, f.hash, f.data, f.date_learned ' +
                 `FROM ${this.schema}.fact f ` +
                 `JOIN ${this.schema}.fact_type t ` +
                 '  ON f.fact_type_id = t.fact_type_id ' +
                 'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
                 '  ON v.fact_type_id = f.fact_type_id AND v.hash = f.hash ' +
                 'UNION ' +
-                'SELECT f2.fact_id, f2.fact_type_id, t.name, f2.hash, f2.data ' +
+                'SELECT f2.fact_id, f2.fact_type_id, t.name, f2.hash, f2.data, f2.date_learned ' +
                 `FROM ${this.schema}.fact f1 ` +
                 'JOIN (VALUES ' + factValues.join(', ') + ') AS v (hash, fact_type_id) ' +
                 '  ON v.fact_type_id = f1.fact_type_id AND v.hash = f1.hash ' +
@@ -387,11 +392,12 @@ export class PostgresStore implements Storage {
         this.factTypeMap = mergeFactTypes(this.factTypeMap, resultFactTypes);
         const records = result.rows.map((r) => {
             const { fields, predecessors }: { fields: {}, predecessors: PredecessorCollection } = r.data as any;
-            const fact: FactRecord = {
+            const fact: PostgresFactRecord = {
                 type: r.name,
                 hash: r.hash,
                 fields,
-                predecessors
+                predecessors,
+                timestamp: r.date_learned
             };
             const signature: FactSignature = {
                 publicKey: r.public_key,
