@@ -32,6 +32,8 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
     const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema);
+    // Add all input fact indexes to writtenFactIndexes since they're available in the FROM clause
+    queryDescription.inputs.forEach(input => writtenFactIndexes.add(input.factIndex));
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join(" AND ");
@@ -505,7 +507,17 @@ class ResultDescriptionBuilder {
         // Then process conditions from given if we have a satisfiable query
         if (resultDescription.queryDescription.isSatisfiable()) {
             queryDescription = resultDescription.queryDescription;
-            knownFacts = {};
+            knownFacts = resultDescription.queryDescription.outputs.reduce((acc, output) => ({
+                ...acc,
+                [output.label]: { factIndex: output.factIndex, type: output.type }
+            }), {} as FactByLabel);
+            
+            // Also include inputs in knownFacts
+            for (const input of resultDescription.queryDescription.inputs) {
+                if (!knownFacts[input.label]) {
+                    knownFacts[input.label] = { factIndex: input.factIndex, type: input.type };
+                }
+            }
             
             // Process conditions from each given
             for (const givenItem of specification.given) {
