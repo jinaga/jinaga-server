@@ -47,9 +47,25 @@ export function purgeSqlFromSpecification(specification: Specification, factType
 
     let queryDescription = QueryDescription.unsatisfiable;
     let knownFacts: FactByLabel = {};
-    const given = specification.given;
-    const start: FactReference[] = specification.given.map(g => ({ type: g.type, hash: 'xxxxx' }));
+    const given = specification.given.map(g => g.label);
+    const start: FactReference[] = specification.given.map(g => ({ type: g.label.type, hash: 'xxxxx' }));
+    
+    // Process main matches
     ({ queryDescription, knownFacts } = queryDescriptionBuilder.addEdges(queryDescription, given, start, knownFacts, [], specification.matches));
+    
+    // Process conditions from given
+    for (const givenItem of specification.given) {
+        if (givenItem.conditions && givenItem.conditions.length > 0) {
+            for (const condition of givenItem.conditions) {
+                const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, []);
+                const { queryDescription: queryDescriptionConditional } = queryDescriptionBuilder.addEdges(queryDescriptionWithExistential, given, start, knownFacts, conditionalPath, condition.matches);
+                
+                if (queryDescriptionConditional.isSatisfiable()) {
+                    queryDescription = queryDescriptionConditional;
+                }
+            }
+        }
+    }
 
     if (!queryDescription.isSatisfiable()) {
         return null;

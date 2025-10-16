@@ -55,9 +55,9 @@ export class AuthorizationKeystore implements Authorization {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const namedStart = specification.given.reduce((map, label, index) => ({
+            const namedStart = specification.given.reduce((map, g, index) => ({
                 ...map,
-                [label.name]: start[index]
+                [g.label.name]: start[index]
             }), {} as ReferencesByName);
             // Break the specification into feeds and check distribution.
             const feeds = buildFeeds(specification);
@@ -74,9 +74,9 @@ export class AuthorizationKeystore implements Authorization {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const namedStart = specification.given.reduce((map, label, index) => ({
+            const namedStart = specification.given.reduce((map, g, index) => ({
                 ...map,
-                [label.name]: start[index]
+                [g.label.name]: start[index]
             }), {} as ReferencesByName);
             const canDistribute = await this.distributionEngine.canDistributeToAll([specification], namedStart, userReference);
             if (canDistribute.type === "failure") {

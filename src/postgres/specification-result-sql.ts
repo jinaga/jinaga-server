@@ -411,6 +411,10 @@ export class ResultComposer {
         else if (this.resultProjection.type === "fact") {
             return this.factValue(this.resultProjection, row, factRecords);
         }
+        else if (this.resultProjection.type === "time") {
+            // TODO: Implement TimeProjection support
+            throw new Error(`TimeProjection is not yet implemented`);
+        }
         else {
             const _exhaustiveCheck: never = this.resultProjection;
             throw new Error(`Unknown projection type ${(this.resultProjection as any).type}`);
@@ -438,6 +442,10 @@ export class ResultComposer {
         else if (projection.type === "specification") {
             // This should have already been taken care of
             return null;
+        }
+        else if (projection.type === "time") {
+            // TODO: Implement TimeProjection support
+            throw new Error(`TimeProjection is not yet implemented`);
         }
         else {
             const _exhaustiveCheck: never = projection;
@@ -487,7 +495,40 @@ class ResultDescriptionBuilder {
     buildDescription(start: FactReference[], specification: Specification): ResultDescription {
         validateGiven(start, specification);
 
-        return this.createResultDescription(QueryDescription.unsatisfiable, specification.given, start, specification.matches, specification.projection, {}, []);
+        const labels = specification.given.map(g => g.label);
+        let queryDescription = QueryDescription.unsatisfiable;
+        let knownFacts: FactByLabel = {};
+        
+        // First process main matches to build the result description
+        const resultDescription = this.createResultDescription(queryDescription, labels, start, specification.matches, specification.projection, knownFacts, []);
+        
+        // Then process conditions from given if we have a satisfiable query
+        if (resultDescription.queryDescription.isSatisfiable()) {
+            queryDescription = resultDescription.queryDescription;
+            knownFacts = {};
+            
+            // Process conditions from each given
+            for (const givenItem of specification.given) {
+                if (givenItem.conditions && givenItem.conditions.length > 0) {
+                    for (const condition of givenItem.conditions) {
+                        const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, []);
+                        const { queryDescription: queryDescriptionConditional } = this.queryDescriptionBuilder.addEdges(queryDescriptionWithExistential, labels, start, knownFacts, conditionalPath, condition.matches);
+                        
+                        if (queryDescriptionConditional.isSatisfiable()) {
+                            queryDescription = queryDescriptionConditional;
+                        }
+                    }
+                }
+            }
+            
+            // Return updated result description with conditions applied
+            return {
+                ...resultDescription,
+                queryDescription
+            };
+        }
+        
+        return resultDescription;
     }
 
     private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
@@ -495,7 +536,10 @@ class ResultDescriptionBuilder {
             ...acc,
             [label.name]: start[index]
         }), {} as ReferencesByName);
+        
+        // Process main matches
         ({ queryDescription, knownFacts } = this.queryDescriptionBuilder.addEdges(queryDescription, given, start, knownFacts, path, matches));
+        
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
             return {

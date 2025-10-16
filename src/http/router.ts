@@ -486,8 +486,8 @@ export class HttpRouter {
             }
             // Verify that the input type matches the start fact type
             for (let i = 0; i < start.length; i++) {
-                if (start[i].type !== specification.given[i].type) {
-                    throw new Invalid(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].type})`);
+                if (start[i].type !== specification.given[i].label.type) {
+                    throw new Invalid(`The type of start fact ${i} (${start[i].type}) does not match the type of input ${i} (${specification.given[i].label.type})`);
                 }
             }
             // Verify that the specification is compliant with purge conditions
@@ -496,9 +496,9 @@ export class HttpRouter {
                 throw new Invalid(failures.join("\n"));
             }
             
-            const namedStart = specification.given.reduce((map, label, index) => ({
+            const namedStart = specification.given.reduce((map, g, index) => ({
                 ...map,
-                [label.name]: start[index]
+                [g.label.name]: start[index]
             }), {} as ReferencesByName);
 
             // Verify that I can distribute all feeds to the user.
@@ -529,7 +529,7 @@ export class HttpRouter {
             const bookmark = query["b"] as string ?? "";
 
             const userIdentity = serializeUserIdentity(user);
-            const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
+            const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
             const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
             // Return distinct fact references from all the tuples.
             const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
@@ -565,7 +565,7 @@ export class HttpRouter {
         console.log(`[StreamFeed:${connectionId}] Initial bookmark: ${bookmark || 'empty'}`);
 
         const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.feed.given.map(label => feedDefinition.namedStart[label.name]);
+        const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
         const givenHash = computeObjectHash(feedDefinition.namedStart);
 
         console.log(`[StreamFeed:${connectionId}] Feed setup - Given hash: ${givenHash.substring(0, 8)}..., Start facts: ${start.length}`);
@@ -812,9 +812,9 @@ export class HttpRouter {
     private selectStart(specification: Specification, declaration: Declaration): FactReference[] {
         // Select starting facts that match the inputs
         return specification.given.map(input => {
-            const declaredFact = declaration.find(d => d.name === input.name);
+            const declaredFact = declaration.find(d => d.name === input.label.name);
             if (!declaredFact) {
-                throw new Invalid(`No fact named ${input.name} was declared`);
+                throw new Invalid(`No fact named ${input.label.name} was declared`);
             }
             return declaredFact.declared.reference;
         });

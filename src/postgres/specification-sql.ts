@@ -165,7 +165,7 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
     validateGiven(start, specification);
 
     const labeledStart = start.map((s, index) => ({
-        name: specification.given[index].name,
+        name: specification.given[index].label.name,
         reference: s
     })).reduce((map, s) => {
         map.set(s.name, s.reference);
@@ -179,7 +179,7 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
         bookmark: bookmarks[index]
     }));
     const queryDescriptionsAndBookmarks = feedAndBookmark.map(fb => {
-        const feedStart = fb.feed.given.map(s => labeledStart.get(s.name)!);
+        const feedStart = fb.feed.given.map(s => labeledStart.get(s.label.name)!);
         return {
             queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed, feedStart),
             bookmark: fb.bookmark
@@ -203,10 +203,31 @@ export function sqlFromFeed(feed: Specification, start: FactReference[], schema:
 }
 
 function buildQueryDescription(queryDescriptionBuilder: QueryDescriptionBuilder, specification: Specification, start: FactReference[]): QueryDescription {
-    const { queryDescription } = queryDescriptionBuilder.addEdges(
+    const labels = specification.given.map(g => g.label);
+    let knownFacts = {};
+    
+    // Process main matches
+    let { queryDescription } = queryDescriptionBuilder.addEdges(
         QueryDescription.unsatisfiable,
-        specification.given,
-        start, {}, [],
+        labels,
+        start,
+        knownFacts,
+        [],
         specification.matches);
+    
+    // Process conditions from given
+    for (const givenItem of specification.given) {
+        if (givenItem.conditions && givenItem.conditions.length > 0) {
+            for (const condition of givenItem.conditions) {
+                const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, []);
+                const { queryDescription: queryDescriptionConditional } = queryDescriptionBuilder.addEdges(queryDescriptionWithExistential, labels, start, knownFacts, conditionalPath, condition.matches);
+                
+                if (queryDescriptionConditional.isSatisfiable()) {
+                    queryDescription = queryDescriptionConditional;
+                }
+            }
+        }
+    }
+    
     return queryDescription;
 }
