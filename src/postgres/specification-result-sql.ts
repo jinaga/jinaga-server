@@ -6,7 +6,6 @@ import {
     FieldProjection,
     HashProjection,
     hydrateFromTree,
-    Label,
     Match,
     PredecessorCollection,
     ProjectedResult,
@@ -14,6 +13,7 @@ import {
     ReferencesByName,
     SingularProjection,
     Specification,
+    SpecificationGiven,
     SpecificationProjection,
     validateGiven
 } from "jinaga";
@@ -500,7 +500,7 @@ class ResultDescriptionBuilder {
         let knownFacts: FactByLabel = {};
         
         // First process main matches to build the result description
-        const resultDescription = this.createResultDescription(queryDescription, labels, start, specification.matches, specification.projection, knownFacts, []);
+        const resultDescription = this.createResultDescription(queryDescription, specification.given, start, specification.matches, specification.projection, knownFacts, []);
         
         // Then process conditions from given if we have a satisfiable query
         if (resultDescription.queryDescription.isSatisfiable()) {
@@ -531,14 +531,15 @@ class ResultDescriptionBuilder {
         return resultDescription;
     }
 
-    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
-        const givenTuple = given.reduce((acc, label, index) => ({
+    private createResultDescription(queryDescription: QueryDescription, given: SpecificationGiven[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
+        const givenTuple = given.reduce((acc, givenItem, index) => ({
             ...acc,
-            [label.name]: start[index]
+            [givenItem.label.name]: start[index]
         }), {} as ReferencesByName);
         
         // Process main matches
-        ({ queryDescription, knownFacts } = this.queryDescriptionBuilder.addEdges(queryDescription, given, start, knownFacts, path, matches));
+        const labels = given.map(g => g.label);
+        ({ queryDescription, knownFacts } = this.queryDescriptionBuilder.addEdges(queryDescription, labels, start, knownFacts, path, matches));
         
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
