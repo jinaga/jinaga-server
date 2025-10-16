@@ -1,4 +1,4 @@
-const { buildModel } = require("jinaga");
+const { SpecificationParser, SpecificationOf } = require("jinaga");
 const { JinagaServer } = require("./jinaga-server");
 
 const host = "db";
@@ -30,15 +30,13 @@ class Employee {
 }
 Employee.Type = "IntegrationTest.Conditions.Employee";
 
-const model = buildModel(b => b
-  .type(Department)
-  .type(DepartmentActive, f => f
-    .predecessor("department", Department)
-  )
-  .type(Employee, f => f
-    .predecessor("department", Department)
-  )
-);
+function parseSpecification(input) {
+  const parser = new SpecificationParser(input);
+  parser.skipWhitespace();
+  const spec = parser.parseSpecification();
+  // Wrap the parsed specification in a SpecificationOf object
+  return new SpecificationOf(spec);
+}
 
 describe("Specifications with conditions", () => {
   let j;
@@ -64,13 +62,24 @@ describe("Specifications with conditions", () => {
     await j.fact(new Employee(department, "EMP-001"));
     await j.fact(new Employee(department, "EMP-002"));
 
-    // Simple query: get all employees for this department
-    const results = await j.query(model.given(Department).match((department, facts) =>
-      facts.ofType(Employee)
-        .join(employee => employee.department, department)
-    ), department);
+    // Query with positive existential condition: only return employees for departments that HAVE an active marker
+    const specification = parseSpecification(`
+      (department: IntegrationTest.Conditions.Department [
+        E {
+          active: IntegrationTest.Conditions.DepartmentActive [
+            active->department: IntegrationTest.Conditions.Department = department
+          ]
+        }
+      ]) {
+        employee: IntegrationTest.Conditions.Employee [
+          employee->department: IntegrationTest.Conditions.Department = department
+        ]
+      } => employee
+    `);
 
-    // Should return both employees
+    const results = await j.query(specification, department);
+
+    // Should return both employees since department has active marker
     expect(results.length).toBe(2);
     expect(results).toEqual(
       expect.arrayContaining([
@@ -78,17 +87,9 @@ describe("Specifications with conditions", () => {
         expect.objectContaining({ employeeId: "EMP-002" })
       ])
     );
-    
-    // Verify the department has an active marker
-    const activeMarkers = await j.query(model.given(Department).match((department, facts) =>
-      facts.ofType(DepartmentActive)
-        .join(active => active.department, department)
-    ), department);
-    
-    expect(activeMarkers.length).toBe(1);
   });
 
-  it("should return employees for inactive department too (no condition applied)", async () => {
+  it("should NOT return employees for inactive department (with positive existential condition)", async () => {
     // Create an inactive department (no DepartmentActive marker fact)
     const department = await j.fact(new Department("HR-002"));
     
@@ -96,25 +97,28 @@ describe("Specifications with conditions", () => {
     await j.fact(new Employee(department, "EMP-003"));
     await j.fact(new Employee(department, "EMP-004"));
 
-    // Same query: get all employees for this department
-    const results = await j.query(model.given(Department).match((department, facts) =>
-      facts.ofType(Employee)
-        .join(employee => employee.department, department)
-    ), department);
+    // Query with positive existential condition: only return employees for departments that HAVE an active marker
+    const specification = parseSpecification(`
+      (department: IntegrationTest.Conditions.Department [
+        E {
+          active: IntegrationTest.Conditions.DepartmentActive [
+            active->department: IntegrationTest.Conditions.Department = department
+          ]
+        }
+      ]) {
+        employee: IntegrationTest.Conditions.Employee [
+          employee->department: IntegrationTest.Conditions.Department = department
+        ]
+      } => employee
+    `);
 
-    // Should still return employees (no condition filtering them out)
-    expect(results.length).toBe(2);
-    
-    // Verify the department has NO active marker
-    const activeMarkers = await j.query(model.given(Department).match((department, facts) =>
-      facts.ofType(DepartmentActive)
-        .join(active => active.department, department)
-    ), department);
-    
-    expect(activeMarkers).toEqual([]);
+    const results = await j.query(specification, department);
+
+    // Should return NO employees since department has no active marker
+    expect(results).toEqual([]);
   });
 
-  it("should demonstrate existential condition - departments WITH active markers", async () => {
+  it("should return employees for inactive department using negative existential condition", async () => {
     // Create two departments: one active, one inactive
     const activeDept = await j.fact(new Department("HR-ACTIVE"));
     await j.fact(new DepartmentActive(activeDept));
@@ -124,18 +128,28 @@ describe("Specifications with conditions", () => {
     // No DepartmentActive fact for this one
     await j.fact(new Employee(inactiveDept, "EMP-INACTIVE-1"));
 
-    // Query active department - should find the active marker
-    const activeMarkers = await j.query(model.given(Department).match((department, facts) =>
-      facts.ofType(DepartmentActive)
-        .join(active => active.department, department)
-    ), activeDept);
-    expect(activeMarkers.length).toBe(1);
+    // Query with negative existential condition: only return employees for departments that DON'T HAVE an active marker
+    const specification = parseSpecification(`
+      (department: IntegrationTest.Conditions.Department [
+        !E {
+          active: IntegrationTest.Conditions.DepartmentActive [
+            active->department: IntegrationTest.Conditions.Department = department
+          ]
+        }
+      ]) {
+        employee: IntegrationTest.Conditions.Employee [
+          employee->department: IntegrationTest.Conditions.Department = department
+        ]
+      } => employee
+    `);
 
-    // Query inactive department - should find NO active marker
-    const inactiveMarkers = await j.query(model.given(Department).match((department, facts) =>
-      facts.ofType(DepartmentActive)
-        .join(active => active.department, department)
-    ), inactiveDept);
-    expect(inactiveMarkers).toEqual([]);
+    // Query active department - should return NO employees (has active marker, condition excludes it)
+    const activeResults = await j.query(specification, activeDept);
+    expect(activeResults).toEqual([]);
+
+    // Query inactive department - should return employees (no active marker, condition includes it)
+    const inactiveResults = await j.query(specification, inactiveDept);
+    expect(inactiveResults.length).toBe(1);
+    expect(inactiveResults[0]).toEqual(expect.objectContaining({ employeeId: "EMP-INACTIVE-1" }));
   });
 });
