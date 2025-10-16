@@ -1,5 +1,5 @@
-const { SpecificationParser, SpecificationOf } = require("jinaga");
 const { JinagaServer } = require("./jinaga-server");
+const { parseSpecification } = require("./test-helpers");
 
 const host = "db";
 // const host = "localhost";
@@ -29,14 +29,6 @@ class Employee {
   }
 }
 Employee.Type = "IntegrationTest.Conditions.Employee";
-
-function parseSpecification(input) {
-  const parser = new SpecificationParser(input);
-  parser.skipWhitespace();
-  const spec = parser.parseSpecification();
-  // Wrap the parsed specification in a SpecificationOf object
-  return new SpecificationOf(spec);
-}
 
 describe("Specifications with conditions", () => {
   let j;

@@ -14,5 +14,7 @@ COPY purge.test.js .
 COPY postgres.test.js .
 COPY postgres-duplicates.test.js .
 COPY orderModel.js .
+COPY test-helpers.js .
+COPY time-projection.test.js .
 
 ENTRYPOINT [ "npm", "test" ]
