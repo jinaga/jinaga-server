@@ -32,8 +32,8 @@ export function validateSpecificationForCsv(specification: Specification): CsvMe
     const projections = Array.isArray(specification.projection) 
         ? specification.projection 
         : Object.entries(specification.projection).map(([name, proj]) => ({
-            name,
-            ...proj
+            ...proj,
+            name
         }));
 
     if (projections.length === 0) {
