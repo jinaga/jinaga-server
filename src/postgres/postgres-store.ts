@@ -529,7 +529,8 @@ async function executeQueryTree(sqlQueryTree: SqlQueryTree, connection: PoolClie
             const fact: ResultSetFact = {
                 hash: dataRow[`hash${label.index}`],
                 factId: dataRow[`id${label.index}`],
-                data: dataRow[`data${label.index}`]
+                data: dataRow[`data${label.index}`],
+                timestamp: dataRow[`timestamp${label.index}`],
             };
             return {
                 ...acc,

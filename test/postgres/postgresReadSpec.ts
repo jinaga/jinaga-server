@@ -75,8 +75,8 @@ describe("Postgres read", () => {
         const sql = composer.getSqlQueries().sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -106,8 +106,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3, f3.date_learned as timestamp3 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -157,8 +157,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3, f3.date_learned as timestamp3 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -213,8 +213,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -293,9 +293,9 @@ describe("Postgres read", () => {
         const queries = composer.getSqlQueries();
         expect(queries.sqlQuery.sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3, ` +
-                `f9.hash as hash9, f9.fact_id as id9, f9.data as data9 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3, f3.date_learned as timestamp3, ` +
+                `f9.hash as hash9, f9.fact_id as id9, f9.data as data9, f9.date_learned as timestamp9 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -363,8 +363,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -397,8 +397,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -431,8 +431,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -466,8 +466,8 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +
@@ -503,9 +503,9 @@ describe("Postgres read", () => {
         const sql = tree.sqlQuery.sql;
         expect(sql).toEqual(
             `SELECT ` +
-                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
-                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, ` +
-                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3 ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, f1.date_learned as timestamp1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, f2.date_learned as timestamp2, ` +
+                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3, f3.date_learned as timestamp3 ` +
             `FROM public.fact f1 ` +
             `JOIN public.edge e1 ` +
                 `ON e1.predecessor_fact_id = f1.fact_id ` +

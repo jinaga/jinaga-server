@@ -24,7 +24,7 @@ import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDes
 function generateResultSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
     const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
     const columns = allLabels
-        .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
+        .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}, f${label.factIndex}.date_learned as timestamp${label.factIndex}`)
         .join(", ");
     const firstEdge = queryDescription.edges[0];
     const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
@@ -199,6 +199,7 @@ export interface ResultSetFact {
     hash: string;
     factId: number;
     data: ResultSetData;
+    timestamp: Date;
 }
 
 export interface ResultSetRow {
@@ -475,22 +476,7 @@ export class ResultComposer {
 
     private timeValue(projection: any, row: ResultSetRow, factRecords: FactRecord[]): any {
         const label = this.getLabel(projection.label);
-        const factReference: FactReference = {
-            type: label.type,
-            hash: row[label.index].hash
-        };
-        
-        // Find the fact record that matches this reference
-        const factRecord = factRecords.find(f =>
-            f.type === factReference.type && f.hash === factReference.hash
-        );
-
-        if (!factRecord) {
-            throw new Error(`Fact record not found for reference: ${factReference.type} ${factReference.hash}`);
-        }
-
-        // Cast to access the timestamp property that's available in PostgresFactRecord
-        return (factRecord as any).timestamp;
+        return row[label.index].timestamp;
     }
 
     private getLabel(name: string) {
