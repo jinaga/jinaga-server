@@ -188,7 +188,7 @@ export function extractValueByLabel(result: any, label: string): any {
     }
     
     // Return null instead of undefined
-    return value !== undefined ? value : null;
+    return value ?? null;
 }
 
 /**
