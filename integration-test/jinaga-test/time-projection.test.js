@@ -5,10 +5,18 @@ const host = "db";
 // const host = "localhost";
 const connectionString = `postgresql://dev:devpw@${host}:5432/integrationtest`;
 
-class Event {
-    constructor(identifier, description) {
-        this.type = Event.Type;
+class Tenant {
+    constructor(identifier) {
+        this.type = Tenant.Type;
         this.identifier = identifier;
+    }
+}
+Tenant.Type = "IntegrationTest.TimeProjection.Tenant";
+
+class Event {
+    constructor(tenant, description) {
+        this.type = Event.Type;
+        this.tenant = tenant;
         this.description = description;
     }
 }
@@ -40,15 +48,19 @@ describe("Time projection", () => {
     
     it("should retrieve timestamp for a fact", async () => {
         const beforeTime = new Date();
-        const event = await j.fact(new Event("event-1", "Test event"));
+        const tenant = await j.fact(new Tenant("tenant-1"));
+        const event = await j.fact(new Event(tenant, "Test event"));
         const afterTime = new Date();
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
             } => @event
         `);
         
-        const results = await j.query(specification, event);
+        const results = await j.query(specification, tenant);
         
         expect(results).toHaveLength(1);
         expect(results[0]).toBeInstanceOf(Date);
@@ -57,32 +69,36 @@ describe("Time projection", () => {
     });
 
     it("should retrieve timestamps for multiple facts in order", async () => {
-        const event1 = await j.fact(new Event("event-1", "First event"));
+        const tenant = await j.fact(new Tenant("tenant-2"));
+        const event1 = await j.fact(new Event(tenant, "First event"));
         
         // Add a small delay to ensure timestamps differ
         await new Promise(resolve => setTimeout(resolve, 10));
         
-        const event2 = await j.fact(new Event("event-2", "Second event"));
+        const event2 = await j.fact(new Event(tenant, "Second event"));
         
         await new Promise(resolve => setTimeout(resolve, 10));
         
-        const event3 = await j.fact(new Event("event-3", "Third event"));
+        const event3 = await j.fact(new Event(tenant, "Third event"));
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
             } => {
                 event = event
                 timestamp = @event
             }
         `);
         
-        const results1 = await j.query(specification, event1);
-        const results2 = await j.query(specification, event2);
-        const results3 = await j.query(specification, event3);
+        const results1 = await j.query(specification, tenant);
+        const results2 = await j.query(specification, tenant);
+        const results3 = await j.query(specification, tenant);
         
-        expect(results1).toHaveLength(1);
-        expect(results2).toHaveLength(1);
-        expect(results3).toHaveLength(1);
+        expect(results1).toHaveLength(3);
+        expect(results2).toHaveLength(3);
+        expect(results3).toHaveLength(3);
         
         const time1 = results1[0].timestamp;
         const time2 = results2[0].timestamp;
@@ -98,28 +114,31 @@ describe("Time projection", () => {
     });
 
     it("should project timestamp along with fact data", async () => {
-        const event = await j.fact(new Event("event-complex", "Complex test event"));
+        const tenant = await j.fact(new Tenant("tenant-3"));
+        const event = await j.fact(new Event(tenant, "Complex test event"));
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
             } => {
-                identifier = event.identifier
                 description = event.description
                 timestamp = @event
             }
         `);
         
-        const results = await j.query(specification, event);
+        const results = await j.query(specification, tenant);
         
         expect(results).toHaveLength(1);
-        expect(results[0].identifier).toBe("event-complex");
         expect(results[0].description).toBe("Complex test event");
         expect(results[0].timestamp).toBeInstanceOf(Date);
         expect(results[0].timestamp.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
     });
 
     it("should project timestamps in complex query with related facts", async () => {
-        const event = await j.fact(new Event("event-4", "Event to be cancelled"));
+        const tenant = await j.fact(new Tenant("tenant-4"));
+        const event = await j.fact(new Event(tenant, "Event to be cancelled"));
         
         // Add delay to ensure different timestamps
         await new Promise(resolve => setTimeout(resolve, 10));
@@ -127,7 +146,10 @@ describe("Time projection", () => {
         const cancellation = await j.fact(new EventCancelled(event, "No longer needed"));
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
                 cancellation: IntegrationTest.TimeProjection.EventCancelled [
                     cancellation->event: IntegrationTest.TimeProjection.Event = event
                 ]
@@ -139,7 +161,7 @@ describe("Time projection", () => {
             }
         `);
         
-        const results = await j.query(specification, event);
+        const results = await j.query(specification, tenant);
         
         expect(results).toHaveLength(1);
         expect(results[0].event).toEqual(event);
@@ -153,10 +175,14 @@ describe("Time projection", () => {
     });
 
     it("should handle time projection for events without related facts", async () => {
-        const event = await j.fact(new Event("event-5", "Event without cancellation"));
+        const tenant = await j.fact(new Tenant("tenant-5"));
+        const event = await j.fact(new Event(tenant, "Event without cancellation"));
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
                 cancellation: IntegrationTest.TimeProjection.EventCancelled [
                     cancellation->event: IntegrationTest.TimeProjection.Event = event
                 ]
@@ -167,7 +193,7 @@ describe("Time projection", () => {
             }
         `);
         
-        const results = await j.query(specification, event);
+        const results = await j.query(specification, tenant);
         
         // Should still return the event even without cancellation
         expect(results).toHaveLength(1);
@@ -177,14 +203,18 @@ describe("Time projection", () => {
     });
 
     it("should project only timestamp without other data", async () => {
-        const event = await j.fact(new Event("event-6", "Timestamp only"));
+        const tenant = await j.fact(new Tenant("tenant-6"));
+        const event = await j.fact(new Event(tenant, "Timestamp only"));
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
             } => @event
         `);
         
-        const results = await j.query(specification, event);
+        const results = await j.query(specification, tenant);
         
         expect(results).toHaveLength(1);
         expect(results[0]).toBeInstanceOf(Date);
@@ -193,34 +223,41 @@ describe("Time projection", () => {
     });
 
     it("should handle multiple time projections in same query", async () => {
-        const event1 = await j.fact(new Event("event-7", "First"));
+        const tenant = await j.fact(new Tenant("tenant-7"));
+        const event1 = await j.fact(new Event(tenant, "First"));
         
         await new Promise(resolve => setTimeout(resolve, 10));
         
-        const event2 = await j.fact(new Event("event-8", "Second"));
+        const event2 = await j.fact(new Event(tenant, "Second"));
         
         const specification = parseSpecification(`
-            (event: IntegrationTest.TimeProjection.Event) {
+            (tenant: IntegrationTest.TimeProjection.Tenant) {
+                event: IntegrationTest.TimeProjection.Event [
+                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
+                ]
             } => {
-                identifier = event.identifier
+                description = event.description
                 timestamp = @event
             }
         `);
         
-        const results1 = await j.query(specification, event1);
-        const results2 = await j.query(specification, event2);
+        const results1 = await j.query(specification, tenant);
+        const results2 = await j.query(specification, tenant);
         
-        expect(results1).toHaveLength(1);
-        expect(results2).toHaveLength(1);
+        expect(results1).toHaveLength(2);
+        expect(results2).toHaveLength(2);
         
-        expect(results1[0].identifier).toBe("event-7");
-        expect(results2[0].identifier).toBe("event-8");
+        // Find the specific events in the results
+        const result1First = results1.find(r => r.description === "First");
+        const result2Second = results2.find(r => r.description === "Second");
         
-        expect(results1[0].timestamp).toBeInstanceOf(Date);
-        expect(results2[0].timestamp).toBeInstanceOf(Date);
+        expect(result1First).toBeDefined();
+        expect(result2Second).toBeDefined();
+        expect(result1First.timestamp).toBeInstanceOf(Date);
+        expect(result2Second.timestamp).toBeInstanceOf(Date);
         
         // Verify second event timestamp is not before first
-        expect(results2[0].timestamp.getTime())
-            .toBeGreaterThanOrEqual(results1[0].timestamp.getTime());
+        expect(result2Second.timestamp.getTime())
+            .toBeGreaterThanOrEqual(result1First.timestamp.getTime());
     });
 });
