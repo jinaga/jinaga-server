@@ -34,6 +34,8 @@ import {
 } from "jinaga";
 import { createLineReader } from "./line-reader";
 import { Stream } from "./stream";
+import { outputReadResultsStreaming } from "./output-formatters";
+import { ResultStream, AsyncIterableResultStream } from "./result-stream";
 
 function getOrStream<U>(
     getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
@@ -268,6 +270,33 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
     };
 }
 
+function postReadWithStreaming(
+    method: (user: RequestUser, message: string) => Promise<any[] | ResultStream<any>>
+): Handler {
+    return (req, res, next) => {
+        const user = <RequestUser>(req as any).user;
+        const input = parseString(req.body);
+        if (!input || typeof (input) !== 'string') {
+            res.type("text");
+            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
+        }
+        else {
+            method(user, input)
+                .then(response => {
+                    if (!response) {
+                        res.sendStatus(404);
+                        next();
+                    }
+                    else {
+                        outputReadResults(response, res, (type) => req.accepts(type));
+                        next();
+                    }
+                })
+                .catch(error => handleError(error, req, res, next));
+        }
+    };
+}
+
 function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     if (!user) {
         return null;
@@ -324,6 +353,17 @@ function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: strin
     res.send(JSON.stringify(result));
 }
 
+function outputReadResults(result: any[] | ResultStream<any>, res: Response, accepts: (type: string) => string | false) {
+    // Use streaming output formatter
+    outputReadResultsStreaming(result, res, accepts)
+        .catch(error => {
+            console.error('Error in outputReadResults:', error);
+            if (!res.headersSent) {
+                res.status(500).send('Internal server error');
+            }
+        });
+}
+
 export interface RequestUser {
     provider: string;
     id: string;
@@ -352,7 +392,7 @@ export class HttpRouter {
             (user, graphSource) => this.save(user, graphSource)
         ));
 
-        router.post('/read', applyAllowOrigin, postString((user, input: string) => this.read(user, input)));
+        router.post('/read', applyAllowOrigin, postReadWithStreaming((user, input: string) => this.readWithStreaming(user, input)));
         router.post('/write', applyAllowOrigin, postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', applyAllowOrigin, post(
             parseString,
@@ -375,7 +415,7 @@ export class HttpRouter {
             .intendedForPost('application/json', 'application/x-jinaga-graph-v1')
             .returningNoContent();
         this.setOptions(router, '/read')
-            .intendedForPost('text/plain')
+            .intendedForPost('text/plain', 'application/json', 'application/x-ndjson', 'text/csv')
             .returningContent();
         this.setOptions(router, '/write')
             .intendedForPost('text/plain')
@@ -439,6 +479,52 @@ export class HttpRouter {
             }
 
             const userIdentity = serializeUserIdentity(user);
+            const results = await this.authorization.read(userIdentity, start, specification);
+            const extracted = extractResults(results);
+            Trace.counter("facts_read", extracted.count);
+            return extracted.result;
+        });
+    }
+
+    /**
+     * Read with streaming support.
+     * Uses readStream if available on the authorization object, otherwise falls back to read().
+     */
+    private async readWithStreaming(user: RequestUser | null, input: string): Promise<any[] | ResultStream<any>> {
+        return Trace.dependency("readWithStreaming", "", async () => {
+            const knownFacts = await this.getKnownFacts(user);
+            const parser = new SpecificationParser(input);
+            parser.skipWhitespace();
+            const declaration = parser.parseDeclaration(knownFacts);
+            const specification = parser.parseSpecification();
+            parser.expectEnd();
+            const start = this.selectStart(specification, declaration);
+
+            var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
+            if (failures.length > 0) {
+                throw new Invalid(failures.join("\n"));
+            }
+
+            const userIdentity = serializeUserIdentity(user);
+            
+            // Check if authorization supports streaming
+            if (typeof (this.authorization as any).readStream === 'function') {
+                // Use streaming if available
+                const streamResults = await (this.authorization as any).readStream(userIdentity, start, specification);
+                Trace.counter("facts_read_streaming", 1);
+                
+                // Wrap in AsyncIterableResultStream if it's an async iterable
+                if (streamResults && typeof streamResults[Symbol.asyncIterator] === 'function') {
+                    return new AsyncIterableResultStream(streamResults);
+                }
+                
+                // If it returned something else, try to use it as a ResultStream
+                if (streamResults && typeof streamResults.next === 'function') {
+                    return streamResults;
+                }
+            }
+            
+            // Fallback to array-based read
             const results = await this.authorization.read(userIdentity, start, specification);
             const extracted = extractResults(results);
             Trace.counter("facts_read", extracted.count);
