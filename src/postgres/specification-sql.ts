@@ -40,9 +40,13 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
         .filter(c => c.exists === false))
         .map(notExistsWhereClause => ` AND NOT EXISTS (${generateNotExistsWhereClause(schema, notExistsWhereClause, writtenFactIndexes)})`)
         .join("");
+    const existsWhereClauses = (queryDescription.existentialConditions
+        .filter(c => c.exists === true))
+        .map(existsWhereClause => ` AND EXISTS (${generateNotExistsWhereClause(schema, existsWhereClause, writtenFactIndexes)})`)
+        .join("");
     const bookmarkParameter = queryDescription.parameters.length + 1;
     const limitParameter = bookmarkParameter + 1;
-    const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+    const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses}${existsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
     const bookmarkValue: number[] = parseBookmark(bookmark);
     return {
         sql,
@@ -165,7 +169,7 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
     validateGiven(start, specification);
 
     const labeledStart = start.map((s, index) => ({
-        name: specification.given[index].name,
+        name: specification.given[index].label.name,
         reference: s
     })).reduce((map, s) => {
         map.set(s.name, s.reference);
@@ -179,9 +183,9 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
         bookmark: bookmarks[index]
     }));
     const queryDescriptionsAndBookmarks = feedAndBookmark.map(fb => {
-        const feedStart = fb.feed.given.map(s => labeledStart.get(s.name)!);
+        const feedStart = fb.feed.given.map(s => labeledStart.get(s.label.name)!);
         return {
-            queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed, feedStart),
+            queryDescription: buildQueryDescription(queryDescriptionBuilder, fb.feed, feedStart, specification.given),
             bookmark: fb.bookmark
         };
     });
@@ -202,11 +206,35 @@ export function sqlFromFeed(feed: Specification, start: FactReference[], schema:
     return sql;
 }
 
-function buildQueryDescription(queryDescriptionBuilder: QueryDescriptionBuilder, specification: Specification, start: FactReference[]): QueryDescription {
-    const { queryDescription } = queryDescriptionBuilder.addEdges(
+function buildQueryDescription(queryDescriptionBuilder: QueryDescriptionBuilder, specification: Specification, start: FactReference[], originalGiven?: any[]): QueryDescription {
+    const labels = specification.given.map(g => g.label);
+    let knownFacts = {};
+    
+    // Process main matches
+    let { queryDescription, knownFacts: updatedKnownFacts } = queryDescriptionBuilder.addEdges(
         QueryDescription.unsatisfiable,
-        specification.given,
-        start, {}, [],
+        labels,
+        start,
+        knownFacts,
+        [],
         specification.matches);
+    knownFacts = updatedKnownFacts;
+    
+    // Process conditions from given (use originalGiven if provided, otherwise use specification.given)
+    const givenToProcess = originalGiven || specification.given;
+    for (const givenItem of givenToProcess) {
+        if (givenItem.conditions && givenItem.conditions.length > 0) {
+            for (const condition of givenItem.conditions) {
+                const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, []);
+                const { queryDescription: queryDescriptionConditional, knownFacts: updatedKnownFacts } = queryDescriptionBuilder.addEdges(queryDescriptionWithExistential, labels, start, knownFacts, conditionalPath, condition.matches);
+                
+                if (queryDescriptionConditional.isSatisfiable()) {
+                    queryDescription = queryDescriptionConditional;
+                    knownFacts = updatedKnownFacts;
+                }
+            }
+        }
+    }
+    
     return queryDescription;
 }

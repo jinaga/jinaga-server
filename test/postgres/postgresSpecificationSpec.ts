@@ -36,13 +36,13 @@ function sqlFor(descriptiveString: string, bookmarks: string[] = []) {
         },
         emptyRoleMap());
     const start = specification.given.map(input => {
-        if (input.type === 'Root') {
+        if (input.label.type === 'Root') {
             return root;
         }
-        if (input.type === 'Jinaga.User') {
+        if (input.label.type === 'Jinaga.User') {
             return user;
         }
-        throw new Error(`Unknown input type ${input.type}`);
+        throw new Error(`Unknown input type ${input.label.type}`);
     });
     const sqlQueries = sqlFromSpecification(start, "public", bookmarks, 100, specification, factTypes, roleMap);
     return { sqlQueries, factTypes, roleMap };

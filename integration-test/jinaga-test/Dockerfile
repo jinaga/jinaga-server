@@ -9,9 +9,12 @@ RUN npm ci
 COPY jinaga-server/ jinaga-server/
 COPY jinaga.test.js .
 COPY specification.test.js .
+COPY specification-conditions.test.js .
 COPY purge.test.js .
 COPY postgres.test.js .
 COPY postgres-duplicates.test.js .
 COPY orderModel.js .
+COPY test-helpers.js .
+COPY time-projection.test.js .
 
 ENTRYPOINT [ "npm", "test" ]

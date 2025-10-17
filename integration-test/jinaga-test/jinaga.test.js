@@ -21,7 +21,7 @@ class Successor {
 
     constructor(identifier, predecessor) {
         this.identifier = identifier;
-        this.predecessor = predecessor;
+        this.pred = predecessor;
     }
 }
 
@@ -30,7 +30,7 @@ class UnknownType {
     type = UnknownType.Type;
 
     constructor(predecessor) {
-        this.predecessor = predecessor;
+        this.pred = predecessor;
     }
 }
 
@@ -95,10 +95,10 @@ class MembershipRestored {
 const model = buildModel(b => b
     .type(Root)
     .type(Successor, m => m
-        .predecessor("predecessor", Root)
+        .predecessor("pred", Root)
     )
     .type(UnknownType, m => m
-        .predecessor("predecessor", Root)
+        .predecessor("pred", Root)
     )
     .type(User)
     .type(UserName, m => m
@@ -147,12 +147,12 @@ function randomTenant(creator) {
 
 const successorsOfRoot = model.given(Root).match((root, facts) =>
     facts.ofType(Successor)
-        .join(s => s.predecessor, root)
+        .join(s => s.pred, root)
 );
 
 const unknownOfRoot = model.given(Root).match((root, facts) =>
     facts.ofType(UnknownType)
-        .join(s => s.predecessor, root)
+        .join(s => s.pred, root)
 );
 
 const configurationFromDevice = model.given(Device).match((device, facts) =>
@@ -248,7 +248,7 @@ describe("Jinaga as a device", () => {
         const successor = await j.fact(new Successor("test-successor", root));
 
         expect(successor.identifier).toEqual("test-successor");
-        expect(successor.predecessor).toEqual(root);
+        expect(successor.pred).toEqual(root);
     });
 
     it("should query a successor fact", async () => {
@@ -274,7 +274,7 @@ describe("Jinaga as a device", () => {
         const successor = await j.fact(new Successor("test-successor", root));
 
         expect(successor.identifier).toEqual("test-successor");
-        expect(successor.predecessor).toEqual(root);
+        expect(successor.pred).toEqual(root);
     });
 
 
@@ -282,7 +282,7 @@ describe("Jinaga as a device", () => {
         const successor = await j.fact(new Successor("test-successor", randomRoot()));
 
         expect(successor.identifier).toEqual("test-successor");
-        expect(successor.predecessor.type).toEqual("IntegrationTest.Root");
+        expect(successor.pred.type).toEqual("IntegrationTest.Root");
     });
 
     it("should get the device identity", async () => {

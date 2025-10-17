@@ -6,7 +6,6 @@ import {
     FieldProjection,
     HashProjection,
     hydrateFromTree,
-    Label,
     Match,
     PredecessorCollection,
     ProjectedResult,
@@ -14,17 +13,19 @@ import {
     ReferencesByName,
     SingularProjection,
     Specification,
+    SpecificationGiven,
     SpecificationProjection,
     validateGiven
 } from "jinaga";
 
+import { TimeProjection } from "jinaga/src/specification/specification";
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 function generateResultSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
     const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
     const columns = allLabels
-        .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}`)
+        .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}, f${label.factIndex}.date_learned as timestamp${label.factIndex}`)
         .join(", ");
     const firstEdge = queryDescription.edges[0];
     const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
@@ -32,6 +33,8 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
     const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema);
+    // Add all input fact indexes to writtenFactIndexes since they're available in the FROM clause
+    queryDescription.inputs.forEach(input => writtenFactIndexes.add(input.factIndex));
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join(" AND ");
@@ -197,6 +200,7 @@ export interface ResultSetFact {
     hash: string;
     factId: number;
     data: ResultSetData;
+    timestamp: Date;
 }
 
 export interface ResultSetRow {
@@ -411,6 +415,9 @@ export class ResultComposer {
         else if (this.resultProjection.type === "fact") {
             return this.factValue(this.resultProjection, row, factRecords);
         }
+        else if (this.resultProjection.type === "time") {
+            return this.timeValue(this.resultProjection, row);
+        }
         else {
             const _exhaustiveCheck: never = this.resultProjection;
             throw new Error(`Unknown projection type ${(this.resultProjection as any).type}`);
@@ -439,6 +446,9 @@ export class ResultComposer {
             // This should have already been taken care of
             return null;
         }
+        else if (projection.type === "time") {
+            return this.timeValue(projection, row);
+        }
         else {
             const _exhaustiveCheck: never = projection;
             throw new Error(`Unknown projection type ${(projection as any).type}`);
@@ -465,6 +475,11 @@ export class ResultComposer {
         return fact;
     }
 
+    private timeValue(projection: TimeProjection, row: ResultSetRow): any {
+        const label = this.getLabel(projection.label);
+        return row[label.index].timestamp;
+    }
+
     private getLabel(name: string) {
         const label = this.sqlQuery.labels.find(label => label.name === name);
         if (!label) {
@@ -487,15 +502,62 @@ class ResultDescriptionBuilder {
     buildDescription(start: FactReference[], specification: Specification): ResultDescription {
         validateGiven(start, specification);
 
-        return this.createResultDescription(QueryDescription.unsatisfiable, specification.given, start, specification.matches, specification.projection, {}, []);
+        const labels = specification.given.map(g => g.label);
+        let queryDescription = QueryDescription.unsatisfiable;
+        let knownFacts: FactByLabel = {};
+        
+        // First process main matches to build the result description
+        const resultDescription = this.createResultDescription(queryDescription, specification.given, start, specification.matches, specification.projection, knownFacts, []);
+        
+        // Then process conditions from given if we have a satisfiable query
+        if (resultDescription.queryDescription.isSatisfiable()) {
+            queryDescription = resultDescription.queryDescription;
+            knownFacts = resultDescription.queryDescription.outputs.reduce((acc, output) => ({
+                ...acc,
+                [output.label]: { factIndex: output.factIndex, type: output.type }
+            }), {} as FactByLabel);
+            
+            // Also include inputs in knownFacts
+            for (const input of resultDescription.queryDescription.inputs) {
+                if (!knownFacts[input.label]) {
+                    knownFacts[input.label] = { factIndex: input.factIndex, type: input.type };
+                }
+            }
+            
+            // Process conditions from each given
+            for (const givenItem of specification.given) {
+                if (givenItem.conditions && givenItem.conditions.length > 0) {
+                    for (const condition of givenItem.conditions) {
+                        const { query: queryDescriptionWithExistential, path: conditionalPath } = queryDescription.withExistentialCondition(condition.exists, []);
+                        const { queryDescription: queryDescriptionConditional } = this.queryDescriptionBuilder.addEdges(queryDescriptionWithExistential, labels, start, knownFacts, conditionalPath, condition.matches);
+                        
+                        if (queryDescriptionConditional.isSatisfiable()) {
+                            queryDescription = queryDescriptionConditional;
+                        }
+                    }
+                }
+            }
+            
+            // Return updated result description with conditions applied
+            return {
+                ...resultDescription,
+                queryDescription
+            };
+        }
+        
+        return resultDescription;
     }
 
-    private createResultDescription(queryDescription: QueryDescription, given: Label[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
-        const givenTuple = given.reduce((acc, label, index) => ({
+    private createResultDescription(queryDescription: QueryDescription, given: SpecificationGiven[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {
+        const givenTuple = given.reduce((acc, givenItem, index) => ({
             ...acc,
-            [label.name]: start[index]
+            [givenItem.label.name]: start[index]
         }), {} as ReferencesByName);
-        ({ queryDescription, knownFacts } = this.queryDescriptionBuilder.addEdges(queryDescription, given, start, knownFacts, path, matches));
+        
+        // Process main matches
+        const labels = given.map(g => g.label);
+        ({ queryDescription, knownFacts } = this.queryDescriptionBuilder.addEdges(queryDescription, labels, start, knownFacts, path, matches));
+        
         if (!queryDescription.isSatisfiable()) {
             // Abort the branch if the query is not satisfiable
             return {
@@ -513,7 +575,7 @@ class ResultDescriptionBuilder {
             const specificationProjections = projection.components
                 .filter(projection => projection.type === "specification") as ({ name: string } & SpecificationProjection)[];
             const singularProjections = projection.components
-                .filter(projection => projection.type === "field" || projection.type === "hash" || projection.type === "fact") as ({ name: string } & SingularProjection)[];
+                .filter(projection => projection.type === "field" || projection.type === "hash" || projection.type === "fact" || projection.type === "time") as ({ name: string } & SingularProjection)[];
             for (const child of specificationProjections) {
                 const childResultDescription = this.createResultDescription(queryDescription, given, start, child.matches, child.projection, knownFacts, []);
                 childResultDescriptions.push({
