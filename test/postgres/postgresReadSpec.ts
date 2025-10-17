@@ -349,4 +349,182 @@ describe("Postgres read", () => {
                 `) ` +
             `ORDER BY f3.fact_id ASC, f9.fact_id ASC`);
     });
+
+    it("should read time projection for a successor", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                department: Department [
+                    department->company: Company = company
+                ]
+            } => @department
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `ORDER BY f2.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company')
+        ]);
+    });
+
+    it("should read time projection with field projection", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                department: Department [
+                    department->company: Company = company
+                ]
+            } => {
+                name = department.name
+                createdAt = @department
+            }
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `ORDER BY f2.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company')
+        ]);
+    });
+
+    it("should read time projection with fact projection", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                department: Department [
+                    department->company: Company = company
+                ]
+            } => {
+                department = department
+                createdAt = @department
+            }
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `ORDER BY f2.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company')
+        ]);
+    });
+
+    it("should read time projection with multiple timestamps", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                department: Department [
+                    department->company: Company = company
+                ]
+            } => {
+                companyCreatedAt = @company
+                department = department
+                departmentCreatedAt = @department
+            }
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `ORDER BY f2.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company')
+        ]);
+    });
+
+    it("should read time projection with nested successor", () => {
+        const { composer, factTypes, roleMap } = sqlFor(`
+            (company: Company) {
+                department: Department [
+                    department->company: Company = company
+                ]
+                project: Project [
+                    project->department: Department = department
+                ]
+            } => {
+                projectName = project.name
+                projectCreatedAt = @project
+            }
+        `);
+
+        const tree = composer.getSqlQueries();
+        const sql = tree.sqlQuery.sql;
+        expect(sql).toEqual(
+            `SELECT ` +
+                `f1.hash as hash1, f1.fact_id as id1, f1.data as data1, ` +
+                `f2.hash as hash2, f2.fact_id as id2, f2.data as data2, ` +
+                `f3.hash as hash3, f3.fact_id as id3, f3.data as data3 ` +
+            `FROM public.fact f1 ` +
+            `JOIN public.edge e1 ` +
+                `ON e1.predecessor_fact_id = f1.fact_id ` +
+                `AND e1.role_id = $3 ` +
+            `JOIN public.fact f2 ` +
+                `ON f2.fact_id = e1.successor_fact_id ` +
+            `JOIN public.edge e2 ` +
+                `ON e2.predecessor_fact_id = f2.fact_id ` +
+                `AND e2.role_id = $4 ` +
+            `JOIN public.fact f3 ` +
+                `ON f3.fact_id = e2.successor_fact_id ` +
+            `WHERE f1.fact_type_id = $1 AND f1.hash = $2 ` +
+            `ORDER BY f2.fact_id ASC, f3.fact_id ASC`
+        );
+        expect(tree.sqlQuery.parameters).toEqual([
+            getFactTypeId(factTypes, 'Company'),
+            companyHash,
+            roleParameter(roleMap, factTypes, 'Department', 'company'),
+            roleParameter(roleMap, factTypes, 'Project', 'department')
+        ]);
+    });
 });
