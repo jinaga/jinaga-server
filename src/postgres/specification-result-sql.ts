@@ -414,8 +414,7 @@ export class ResultComposer {
             return this.factValue(this.resultProjection, row, factRecords);
         }
         else if (this.resultProjection.type === "time") {
-            // TODO: Implement TimeProjection support
-            throw new Error(`TimeProjection is not yet implemented`);
+            return this.timeValue(this.resultProjection, row, factRecords);
         }
         else {
             const _exhaustiveCheck: never = this.resultProjection;
@@ -446,8 +445,7 @@ export class ResultComposer {
             return null;
         }
         else if (projection.type === "time") {
-            // TODO: Implement TimeProjection support
-            throw new Error(`TimeProjection is not yet implemented`);
+            return this.timeValue(projection, row, factRecords);
         }
         else {
             const _exhaustiveCheck: never = projection;
@@ -473,6 +471,26 @@ export class ResultComposer {
         };
         const [fact] = hydrateFromTree([factReference], factRecords);
         return fact;
+    }
+
+    private timeValue(projection: any, row: ResultSetRow, factRecords: FactRecord[]): any {
+        const label = this.getLabel(projection.label);
+        const factReference: FactReference = {
+            type: label.type,
+            hash: row[label.index].hash
+        };
+        
+        // Find the fact record that matches this reference
+        const factRecord = factRecords.find(f =>
+            f.type === factReference.type && f.hash === factReference.hash
+        );
+
+        if (!factRecord) {
+            throw new Error(`Fact record not found for reference: ${factReference.type} ${factReference.hash}`);
+        }
+
+        // Cast to access the timestamp property that's available in PostgresFactRecord
+        return (factRecord as any).timestamp;
     }
 
     private getLabel(name: string) {
