@@ -36,6 +36,8 @@ import { createLineReader } from "./line-reader";
 import { Stream } from "./stream";
 import { outputReadResultsStreaming } from "./output-formatters";
 import { ResultStream, AsyncIterableResultStream } from "./result-stream";
+import { validateSpecificationForCsv } from "./csv-validator";
+import { CsvMetadata } from "./csv-metadata";
 
 function getOrStream<U>(
     getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
@@ -271,7 +273,7 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
 }
 
 function postReadWithStreaming(
-    method: (user: RequestUser, message: string) => Promise<any[] | ResultStream<any>>
+    method: (user: RequestUser, message: string, acceptType: string) => Promise<any[] | ResultStream<any> | { result: any[] | ResultStream<any>, csvMetadata?: CsvMetadata }>
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
@@ -281,14 +283,28 @@ function postReadWithStreaming(
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
         else {
-            method(user, input)
+            // Determine accepted content type
+            const acceptType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']) || 'text/plain';
+            
+            method(user, input, acceptType as string)
                 .then(response => {
                     if (!response) {
                         res.sendStatus(404);
                         next();
                     }
                     else {
-                        outputReadResults(response, res, (type) => req.accepts(type));
+                        // Handle both direct results and wrapped results with metadata
+                        let result: any[] | ResultStream<any>;
+                        let csvMetadata: CsvMetadata | undefined;
+                        
+                        if (response && typeof response === 'object' && 'result' in response) {
+                            result = response.result;
+                            csvMetadata = response.csvMetadata;
+                        } else {
+                            result = response as any[] | ResultStream<any>;
+                        }
+                        
+                        outputReadResults(result, res, (type) => req.accepts(type), csvMetadata);
                         next();
                     }
                 })
@@ -353,9 +369,14 @@ function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: strin
     res.send(JSON.stringify(result));
 }
 
-function outputReadResults(result: any[] | ResultStream<any>, res: Response, accepts: (type: string) => string | false) {
+function outputReadResults(
+    result: any[] | ResultStream<any>, 
+    res: Response, 
+    accepts: (type: string) => string | false,
+    csvMetadata?: CsvMetadata
+) {
     // Use streaming output formatter
-    outputReadResultsStreaming(result, res, accepts)
+    outputReadResultsStreaming(result, res, accepts, csvMetadata)
         .catch(error => {
             console.error('Error in outputReadResults:', error);
             if (!res.headersSent) {
@@ -392,7 +413,7 @@ export class HttpRouter {
             (user, graphSource) => this.save(user, graphSource)
         ));
 
-        router.post('/read', applyAllowOrigin, postReadWithStreaming((user, input: string) => this.readWithStreaming(user, input)));
+        router.post('/read', applyAllowOrigin, postReadWithStreaming((user, input: string, acceptType: string) => this.readWithStreaming(user, input, acceptType)));
         router.post('/write', applyAllowOrigin, postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', applyAllowOrigin, post(
             parseString,
@@ -489,8 +510,14 @@ export class HttpRouter {
     /**
      * Read with streaming support.
      * Uses readStream if available on the authorization object, otherwise falls back to read().
+     * 
+     * When CSV format is requested, validates that the specification contains only flat projections.
      */
-    private async readWithStreaming(user: RequestUser | null, input: string): Promise<any[] | ResultStream<any>> {
+    private async readWithStreaming(
+        user: RequestUser | null, 
+        input: string,
+        acceptType: string
+    ): Promise<any[] | ResultStream<any> | { result: any[] | ResultStream<any>, csvMetadata?: CsvMetadata }> {
         return Trace.dependency("readWithStreaming", "", async () => {
             const knownFacts = await this.getKnownFacts(user);
             const parser = new SpecificationParser(input);
@@ -505,6 +532,21 @@ export class HttpRouter {
                 throw new Invalid(failures.join("\n"));
             }
 
+            // Validate specification for CSV if CSV format is requested
+            let csvMetadata: CsvMetadata | undefined;
+            if (acceptType === 'text/csv') {
+                csvMetadata = validateSpecificationForCsv(specification);
+                
+                if (!csvMetadata.isValid) {
+                    throw new Invalid(
+                        `Specification is not compatible with CSV format:\n\n` +
+                        csvMetadata.errors.join('\n\n') +
+                        `\n\nHint: CSV requires flat projections with single-valued fields. ` +
+                        `Avoid arrays (existential quantifiers) and nested objects.`
+                    );
+                }
+            }
+
             const userIdentity = serializeUserIdentity(user);
             
             // Check if authorization supports streaming
@@ -515,12 +557,13 @@ export class HttpRouter {
                 
                 // Wrap in AsyncIterableResultStream if it's an async iterable
                 if (streamResults && typeof streamResults[Symbol.asyncIterator] === 'function') {
-                    return new AsyncIterableResultStream(streamResults);
+                    const resultStream = new AsyncIterableResultStream(streamResults);
+                    return csvMetadata ? { result: resultStream, csvMetadata } : resultStream;
                 }
                 
                 // If it returned something else, try to use it as a ResultStream
                 if (streamResults && typeof streamResults.next === 'function') {
-                    return streamResults;
+                    return csvMetadata ? { result: streamResults, csvMetadata } : streamResults;
                 }
             }
             
@@ -528,7 +571,8 @@ export class HttpRouter {
             const results = await this.authorization.read(userIdentity, start, specification);
             const extracted = extractResults(results);
             Trace.counter("facts_read", extracted.count);
-            return extracted.result;
+            
+            return csvMetadata ? { result: extracted.result, csvMetadata } : extracted.result;
         });
     }
 
