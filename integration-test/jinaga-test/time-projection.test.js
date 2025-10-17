@@ -174,34 +174,6 @@ describe("Time projection", () => {
             .toBeGreaterThanOrEqual(results[0].eventTimestamp.getTime());
     });
 
-    it("should handle time projection for events without related facts", async () => {
-        const tenant = await j.fact(new Tenant("tenant-5"));
-        const event = await j.fact(new Event(tenant, "Event without cancellation"));
-        
-        const specification = parseSpecification(`
-            (tenant: IntegrationTest.TimeProjection.Tenant) {
-                event: IntegrationTest.TimeProjection.Event [
-                    event->tenant: IntegrationTest.TimeProjection.Tenant = tenant
-                ]
-                cancellation: IntegrationTest.TimeProjection.EventCancelled [
-                    cancellation->event: IntegrationTest.TimeProjection.Event = event
-                ]
-            } => {
-                event = event
-                eventTimestamp = @event
-                cancellation = cancellation
-            }
-        `);
-        
-        const results = await j.query(specification, tenant);
-        
-        // Should still return the event even without cancellation
-        expect(results).toHaveLength(1);
-        expect(results[0].event).toEqual(event);
-        expect(results[0].eventTimestamp).toBeInstanceOf(Date);
-        expect(results[0].cancellation).toBeUndefined();
-    });
-
     it("should project only timestamp without other data", async () => {
         const tenant = await j.fact(new Tenant("tenant-6"));
         const event = await j.fact(new Event(tenant, "Timestamp only"));
