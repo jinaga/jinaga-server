@@ -574,7 +574,7 @@ class ResultDescriptionBuilder {
             const specificationProjections = projection.components
                 .filter(projection => projection.type === "specification") as ({ name: string } & SpecificationProjection)[];
             const singularProjections = projection.components
-                .filter(projection => projection.type === "field" || projection.type === "hash" || projection.type === "fact") as ({ name: string } & SingularProjection)[];
+                .filter(projection => projection.type === "field" || projection.type === "hash" || projection.type === "fact" || projection.type === "time") as ({ name: string } & SingularProjection)[];
             for (const child of specificationProjections) {
                 const childResultDescription = this.createResultDescription(queryDescription, given, start, child.matches, child.projection, knownFacts, []);
                 childResultDescriptions.push({
