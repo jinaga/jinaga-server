@@ -1,0 +1,27 @@
+POST {{replicatorUrl}}/read
+Content-Type: text/plain
+Accept: text/csv
+
+let creator: Jinaga.User = {
+  publicKey: "--- FAKE PUBLIC KEY ---"
+}
+
+let site: Blog.Site = {
+  creator,
+  domain: "michaelperry.net"
+}
+
+(site: Blog.Site) {
+    post: Blog.Post [
+        post->site: Blog.Site = site
+        !E {
+            deleted: Blog.Post.Deleted [
+                deleted->post: Blog.Post = post
+            ]
+        }
+    ]
+} => {
+    id = #post
+    createdAt = post.createdAt
+    title = post.title
+}

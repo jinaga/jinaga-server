@@ -32,8 +32,60 @@ import {
     UserIdentity,
     verifyEnvelopes
 } from "jinaga";
+import { stringify } from "csv-stringify/sync";
 import { createLineReader } from "./line-reader";
 import { Stream } from "./stream";
+
+function convertToCsv(data: any[]): string {
+    if (!Array.isArray(data) || data.length === 0) {
+        return "";
+    }
+
+    // Check if the data contains nested objects (which would make it unsuitable for CSV)
+    const firstItem = data[0];
+    if (typeof firstItem !== 'object' || firstItem === null) {
+        throw new Error("CSV output requires array of objects with simple values only");
+    }
+
+    // Check for nested objects or arrays in the first item
+    for (const [key, value] of Object.entries(firstItem)) {
+        if (typeof value === 'object' && value !== null) {
+            throw new Error(`CSV output cannot handle nested objects. Field '${key}' contains an object. Only simple values (strings, numbers, booleans) are supported.`);
+        }
+        if (Array.isArray(value)) {
+            throw new Error(`CSV output cannot handle arrays. Field '${key}' contains an array. Only simple values (strings, numbers, booleans) are supported.`);
+        }
+    }
+
+    // Extract headers from the first object
+    const headers = Object.keys(firstItem);
+    
+    // Convert data to CSV format
+    const csvData = data.map(item => 
+        headers.map(header => {
+            const value = item[header];
+            // Handle null/undefined values
+            if (value === null || value === undefined) {
+                return '';
+            }
+            // Convert to string and escape if necessary
+            const stringValue = String(value);
+            // Escape quotes and wrap in quotes if contains comma, newline, or quote
+            if (stringValue.includes(',') || stringValue.includes('\n') || stringValue.includes('"')) {
+                return `"${stringValue.replace(/"/g, '""')}"`;
+            }
+            return stringValue;
+        })
+    );
+
+    // Add headers as first row
+    csvData.unshift(headers);
+
+    return stringify(csvData, {
+        header: false,
+        delimiter: ','
+    });
+}
 
 function getOrStream<U>(
     getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
@@ -155,10 +207,27 @@ function getOrStream<U>(
                         next();
                     }
                     else {
-                        console.log(`[HttpConnection:${connectionId}] Sending JSON response`);
-                        res.type("json");
-                        res.send(JSON.stringify(response));
-                        next();
+                        // Check if client wants CSV
+                        if (accept && accept.indexOf("text/csv") >= 0) {
+                            console.log(`[HttpConnection:${connectionId}] CSV request detected`);
+                            try {
+                                if (!Array.isArray(response)) {
+                                    throw new Error("CSV output requires an array of results");
+                                }
+                                const csvData = convertToCsv(response);
+                                res.type("text/csv");
+                                res.send(csvData);
+                                next();
+                            } catch (error) {
+                                console.error(`[HttpConnection:${connectionId}] ERROR converting to CSV: ${error}`);
+                                handleError(error, req, res, next);
+                            }
+                        } else {
+                            console.log(`[HttpConnection:${connectionId}] Sending JSON response`);
+                            res.type("json");
+                            res.send(JSON.stringify(response));
+                            next();
+                        }
                     }
                 })
                 .catch(error => {
@@ -224,9 +293,26 @@ function postString<U>(method: (user: RequestUser, message: string) => Promise<U
         else {
             method(user, input)
                 .then(response => {
-                    res.type("text");
-                    res.send(JSON.stringify(response, null, 2));
-                    next();
+                    const accept = req.headers["accept"];
+                    
+                    // Check if client wants CSV
+                    if (accept && accept.indexOf("text/csv") >= 0) {
+                        try {
+                            if (!Array.isArray(response)) {
+                                throw new Error("CSV output requires an array of results");
+                            }
+                            const csvData = convertToCsv(response);
+                            res.type("text/csv");
+                            res.send(csvData);
+                            next();
+                        } catch (error) {
+                            handleError(error, req, res, next);
+                        }
+                    } else {
+                        res.type("text");
+                        res.send(JSON.stringify(response, null, 2));
+                        next();
+                    }
                 })
                 .catch(error => handleError(error, req, res, next));
         }

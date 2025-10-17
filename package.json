@@ -47,6 +47,7 @@
     "typescript": "^4.7.2"
   },
   "dependencies": {
+    "csv-stringify": "^6.4.4",
     "express": "^4.21.2",
     "jinaga": "^6.7.9",
     "pg": "^8.13.1"
