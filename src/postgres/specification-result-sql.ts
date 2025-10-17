@@ -18,6 +18,7 @@ import {
     validateGiven
 } from "jinaga";
 
+import { TimeProjection } from "jinaga/src/specification/specification";
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
@@ -415,7 +416,7 @@ export class ResultComposer {
             return this.factValue(this.resultProjection, row, factRecords);
         }
         else if (this.resultProjection.type === "time") {
-            return this.timeValue(this.resultProjection, row, factRecords);
+            return this.timeValue(this.resultProjection, row);
         }
         else {
             const _exhaustiveCheck: never = this.resultProjection;
@@ -446,7 +447,7 @@ export class ResultComposer {
             return null;
         }
         else if (projection.type === "time") {
-            return this.timeValue(projection, row, factRecords);
+            return this.timeValue(projection, row);
         }
         else {
             const _exhaustiveCheck: never = projection;
@@ -474,7 +475,7 @@ export class ResultComposer {
         return fact;
     }
 
-    private timeValue(projection: any, row: ResultSetRow, factRecords: FactRecord[]): any {
+    private timeValue(projection: TimeProjection, row: ResultSetRow): any {
         const label = this.getLabel(projection.label);
         return row[label.index].timestamp;
     }
