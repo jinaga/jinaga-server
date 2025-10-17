@@ -71,7 +71,7 @@ describe("Time projection", () => {
         const specification = parseSpecification(`
             (event: IntegrationTest.TimeProjection.Event) {
             } => {
-                event = event,
+                event = event
                 timestamp = @event
             }
         `);
@@ -103,8 +103,8 @@ describe("Time projection", () => {
         const specification = parseSpecification(`
             (event: IntegrationTest.TimeProjection.Event) {
             } => {
-                identifier = event.identifier,
-                description = event.description,
+                identifier = event.identifier
+                description = event.description
                 timestamp = @event
             }
         `);
@@ -132,9 +132,9 @@ describe("Time projection", () => {
                     cancellation->event: IntegrationTest.TimeProjection.Event = event
                 ]
             } => {
-                event = event,
-                eventTimestamp = @event,
-                cancellation = cancellation,
+                event = event
+                eventTimestamp = @event
+                cancellation = cancellation
                 cancellationTimestamp = @cancellation
             }
         `);
@@ -161,8 +161,8 @@ describe("Time projection", () => {
                     cancellation->event: IntegrationTest.TimeProjection.Event = event
                 ]
             } => {
-                event = event,
-                eventTimestamp = @event,
+                event = event
+                eventTimestamp = @event
                 cancellation = cancellation
             }
         `);
@@ -202,7 +202,7 @@ describe("Time projection", () => {
         const specification = parseSpecification(`
             (event: IntegrationTest.TimeProjection.Event) {
             } => {
-                identifier = event.identifier,
+                identifier = event.identifier
                 timestamp = @event
             }
         `);
