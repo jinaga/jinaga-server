@@ -104,76 +104,76 @@ export async function streamAsCSVWithStringify(
 ): Promise<void> {
     res.type("text/csv");
 
-    return new Promise(async (resolve, reject) => {
-        try {
-            // Create csv-stringify stringifier with headers from specification
-            const stringifier = stringify({
-                header: true,
-                columns: csvMetadata.headers,
-                cast: {
-                    // Custom casting for special types
-                    boolean: (value) => value ? 'true' : 'false',
-                    date: (value) => {
-                        if (value instanceof Date) {
-                            return value.toISOString();
-                        }
-                        return String(value);
-                    },
-                    object: (value) => {
-                        // Handle nested objects
-                        if (value && typeof value === 'object') {
-                            // Fact reference - just use hash
-                            if (value.type && value.hash) {
-                                return value.hash;
-                            }
-                            // Other objects - stringify
-                            return JSON.stringify(value);
-                        }
-                        return String(value);
+    // Helper to await 'finish' or 'error' events on a stream
+    function finishedAsync(stream: NodeJS.EventEmitter): Promise<void> {
+        return new Promise((resolve, reject) => {
+            stream.once('finish', resolve);
+            stream.once('error', reject);
+        });
+    }
+
+    let stringifier: any;
+    try {
+        // Create csv-stringify stringifier with headers from specification
+        stringifier = stringify({
+            header: true,
+            columns: csvMetadata.headers,
+            cast: {
+                // Custom casting for special types
+                boolean: (value) => value ? 'true' : 'false',
+                date: (value) => {
+                    if (value instanceof Date) {
+                        return value.toISOString();
                     }
+                    return String(value);
+                },
+                object: (value) => {
+                    // Handle nested objects
+                    if (value && typeof value === 'object') {
+                        // Fact reference - just use hash
+                        if (value.type && value.hash) {
+                            return value.hash;
+                        }
+                        // Other objects - stringify
+                        return JSON.stringify(value);
+                    }
+                    return String(value);
                 }
-            });
-
-            // Pipe stringifier to response
-            stringifier.pipe(res);
-
-            // Handle stringifier events
-            stringifier.on('error', (err) => {
-                console.error('CSV stringify error:', err);
-                reject(err);
-            });
-
-            stringifier.on('finish', () => {
-                resolve();
-            });
-
-            // Stream data through stringifier
-            let item: any = null;
-            while ((item = await stream.next()) !== null) {
-                // Extract values in header order
-                const row: any = {};
-                for (const header of csvMetadata.headers) {
-                    const value = extractValueByLabel(item, header);
-                    row[header] = value !== null && value !== undefined ? value : '';
-                }
-                
-                // Write row to stringifier
-                stringifier.write(row);
             }
+        });
 
-            // Signal end of data
-            stringifier.end();
+        // Pipe stringifier to response
+        stringifier.pipe(res);
 
-        } catch (error) {
-            console.error('Error in CSV streaming:', error);
-            if (!res.headersSent) {
-                res.status(500).send('Error generating CSV');
+        // Stream data through stringifier
+        let item: any = null;
+        while ((item = await stream.next()) !== null) {
+            // Extract values in header order
+            const row: any = {};
+            for (const header of csvMetadata.headers) {
+                const value = extractValueByLabel(item, header);
+                row[header] = value !== null && value !== undefined ? value : '';
             }
-            reject(error);
-        } finally {
-            await stream.close();
+            
+            // Write row to stringifier
+            stringifier.write(row);
         }
-    });
+
+        // Signal end of data
+        stringifier.end();
+
+        // Await finish or error
+        await finishedAsync(stringifier);
+
+    } catch (error) {
+        console.error('Error in CSV streaming:', error);
+        if (!res.headersSent) {
+            res.status(500).send('Error generating CSV');
+        }
+        throw error;
+    } finally {
+        await stream.close();
+    }
 }
 
 /**
