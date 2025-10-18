@@ -15,10 +15,10 @@ import {
     Specification,
     SpecificationGiven,
     SpecificationProjection,
+    TimeProjection,
     validateGiven
 } from "jinaga";
 
-import { TimeProjection } from "jinaga/src/specification/specification";
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
