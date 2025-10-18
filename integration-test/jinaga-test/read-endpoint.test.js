@@ -94,7 +94,8 @@ describe('Read Endpoint - Phase 1: Content Negotiation', () => {
     s->pred: ReadTest.Root = root
   ]
 } => {
-  successor = s
+  successorId = s.identifier
+  successorHash = #s
 }`;
 
       const response = await request(app)
@@ -113,6 +114,12 @@ describe('Read Endpoint - Phase 1: Content Negotiation', () => {
       const results = JSON.parse(response.text);
       expect(Array.isArray(results)).toBe(true);
       expect(results.length).toBe(2);
+      
+      // Verify projection fields
+      results.forEach(item => {
+        expect(item).toHaveProperty('successorId');
+        expect(item).toHaveProperty('successorHash');
+      });
       
       // Check that response is pretty-printed (has whitespace)
       expect(response.text).toContain('\n');
@@ -230,7 +237,7 @@ describe('Read Endpoint - Phase 1: Content Negotiation', () => {
       
       // Each line should be valid JSON
       results.forEach(item => {
-        expect(item).toHaveProperty('s');
+        expect(item).toHaveProperty('successor');
       });
     });
   });
