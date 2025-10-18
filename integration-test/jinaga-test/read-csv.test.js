@@ -45,6 +45,7 @@ describe('Read Endpoint - CSV Output', () => {
   let j;
   let close;
   let root;
+  let rootHash;
 
   beforeEach(async () => {
     ({ app, j, close } = await createTestApp());
@@ -55,6 +56,7 @@ describe('Read Endpoint - CSV Output', () => {
     await j.fact(new Successor(`csv-successor-1`, root));
     await j.fact(new Successor(`csv-successor-2`, root));
     await j.fact(new Successor(`csv-successor-3`, root));
+    rootHash = j.hash(root);
   });
 
   afterEach(async () => {
@@ -65,16 +67,17 @@ describe('Read Endpoint - CSV Output', () => {
 
   describe('CSV with Specification Headers', () => {
     it('should use specification labels as CSV headers', async () => {
-      const specification = `root = ${JSON.stringify(root)}
+      const specification = `let root: CSVTest.Root = #${rootHash}
 
 (root: CSVTest.Root) {
-  successorId: s.identifier,
-  successorType: s.type
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  successorId = s.identifier
+  successorHash = #s
+  successorTime = @s
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -82,7 +85,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.type).toBe('text/csv');
       
       // Parse CSV
@@ -91,7 +97,8 @@ s: CSVTest.Successor [
       
       // Headers should match specification labels
       expect(headers).toContain('successorId');
-      expect(headers).toContain('successorType');
+      expect(headers).toContain('successorHash');
+      expect(headers).toContain('successorTime');
       
       // Should have data rows
       expect(lines.length).toBeGreaterThan(1);
@@ -99,17 +106,18 @@ s: CSVTest.Successor [
 
     it('should include headers even with empty result set', async () => {
       const emptyRoot = await j.fact(new Root('empty-csv-test-' + Date.now()));
+      const emptyRootHash = j.hash(emptyRoot);
       
-      const specification = `root = ${JSON.stringify(emptyRoot)}
+      const specification = `let root: CSVTest.Root = #${emptyRootHash}
 
 (root: CSVTest.Root) {
-  successorName: s.identifier,
-  successorHash: s.hash
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  successorName = s.identifier
+  successorHash = #s
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -117,7 +125,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.type).toBe('text/csv');
       
       // Parse CSV
@@ -132,16 +143,16 @@ s: CSVTest.Successor [
     });
 
     it('should properly escape CSV values with commas', async () => {
-      const specification = `root = ${JSON.stringify(root)}
+      const specification = `let root: CSVTest.Root = #${rootHash}
 
 (root: CSVTest.Root) {
-  identifier: s.identifier,
-  type: s.type
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  identifier = s.identifier
+  type = s.type
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -149,7 +160,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.type).toBe('text/csv');
       
       // Response should be valid CSV
@@ -160,18 +174,18 @@ s: CSVTest.Successor [
 
   describe('CSV Validation', () => {
     it('should reject nested object projections', async () => {
-      const specification = `root = ${JSON.stringify(root)}
+      const specification = `let root: CSVTest.Root = #${rootHash}
 
 (root: CSVTest.Root) {
-  successor: {
-    id: s.identifier,
-    type: s.type
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  successor = {
+    id = s.identifier
+    type = s.type
   }
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -179,23 +193,26 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(400);
+      if (response.status !== 400) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(400);
+      }
       expect(response.text).toContain('not compatible with CSV');
       expect(response.text).toContain('Nested object');
     });
 
     it('should accept flat projections with multiple fields', async () => {
-      const specification = `root = ${JSON.stringify(root)}
+      const specification = `let root: CSVTest.Root = #${rootHash}
 
 (root: CSVTest.Root) {
-  id: s.identifier,
-  type: s.type,
-  hash: s.hash
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  id = s.identifier
+  type = s.type
+  hash = #s
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -203,7 +220,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.type).toBe('text/csv');
       
       const lines = response.text.trim().split('\n');
@@ -215,15 +235,15 @@ s: CSVTest.Successor [
     });
 
     it('should provide helpful error message for invalid projections', async () => {
-      const specification = `root = ${JSON.stringify(root)}
+      const specification = `let root: CSVTest.Root = #${rootHash}
 
 (root: CSVTest.Root) {
-  allSuccessors: s
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  allSuccessors = s
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -231,7 +251,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(400);
+      if (response.status !== 400) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(400);
+      }
       expect(response.text).toContain('Hint');
       expect(response.text).toContain('flat projections');
     });
@@ -241,17 +264,18 @@ s: CSVTest.Successor [
     it('should handle special characters properly', async () => {
       // Create successor with special characters in identifier
       const specialRoot = await j.fact(new Root('special-test-' + Date.now()));
+      const specialRootHash = j.hash(specialRoot);
       await j.fact(new Successor('test, with "quotes"', specialRoot));
       
-      const specification = `root = ${JSON.stringify(specialRoot)}
+      const specification = `let root: CSVTest.Root = #${specialRootHash}
 
 (root: CSVTest.Root) {
-  name: s.identifier
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  name = s.identifier
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -259,7 +283,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.type).toBe('text/csv');
       
       // Response should properly escape the value
@@ -269,16 +296,16 @@ s: CSVTest.Successor [
     });
 
     it('should handle date values properly', async () => {
-      const specification = `root = ${JSON.stringify(root)}
+      const specification = `let root: CSVTest.Root = #${rootHash}
 
 (root: CSVTest.Root) {
-  identifier: s.identifier,
-  type: s.type
-}
-
-s: CSVTest.Successor [
-  s->pred: root
-]`;
+  s: CSVTest.Successor [
+    s->pred: CSVTest.Root = root
+  ]
+} => {
+  identifier = s.identifier
+  type = s.type
+}`;
 
       const response = await request(app)
         .post('/read')
@@ -286,7 +313,10 @@ s: CSVTest.Successor [
         .set('Accept', 'text/csv')
         .send(specification);
 
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.type).toBe('text/csv');
       
       // Should successfully generate CSV

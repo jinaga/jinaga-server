@@ -73,15 +73,20 @@ describe('Read Endpoint - Performance Benchmarks', () => {
   describe('Performance: 1000 results', () => {
     it('should complete within reasonable time', async () => {
       const root = await j.fact(new Root('perf-1k-' + Date.now()));
+      const rootHash = j.hash(root);
       
       for (let i = 0; i < 1000; i++) {
         await j.fact(new Successor(`perf-successor-${i}`, root));
       }
 
-      const specification = `(root: PerfTest.Root) {
+      const specification = `let root: PerfTest.Root = #${rootHash}
+
+(root: PerfTest.Root) {
   s: PerfTest.Successor [
-    s->pred: root
+    s->pred: PerfTest.Root = root
   ]
+} => {
+  successor = s
 }`;
 
       const startTime = Date.now();
@@ -89,10 +94,14 @@ describe('Read Endpoint - Performance Benchmarks', () => {
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/json')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(specification);
 
       const duration = Date.now() - startTime;
 
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.status).toBe(200);
       const results = JSON.parse(response.text);
       expect(results.length).toBe(1000);
@@ -105,15 +114,20 @@ describe('Read Endpoint - Performance Benchmarks', () => {
   describe('Performance: NDJSON vs JSON', () => {
     it('should measure time to first byte for NDJSON', async () => {
       const root = await j.fact(new Root('perf-ttfb-' + Date.now()));
+      const rootHash = j.hash(root);
       
       for (let i = 0; i < 100; i++) {
         await j.fact(new Successor(`perf-successor-${i}`, root));
       }
 
-      const specification = `(root: PerfTest.Root) {
+      const specification = `let root: PerfTest.Root = #${rootHash}
+
+(root: PerfTest.Root) {
   s: PerfTest.Successor [
-    s->pred: root
+    s->pred: PerfTest.Root = root
   ]
+} => {
+  successor = s
 }`;
 
       // Test NDJSON
@@ -122,9 +136,13 @@ describe('Read Endpoint - Performance Benchmarks', () => {
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/x-ndjson')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(specification);
       const ndjsonDuration = Date.now() - ndjsonStart;
 
+      if (ndjsonResponse.status !== 200) {
+        expect(ndjsonResponse.text).toBe('');
+        expect(ndjsonResponse.status).toBe(200);
+      }
       expect(ndjsonResponse.status).toBe(200);
       const ndjsonResults = parseNDJSON(ndjsonResponse.text);
       expect(ndjsonResults.length).toBe(100);
@@ -135,9 +153,13 @@ describe('Read Endpoint - Performance Benchmarks', () => {
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/json')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(specification);
       const jsonDuration = Date.now() - jsonStart;
 
+      if (jsonResponse.status !== 200) {
+        expect(jsonResponse.text).toBe('');
+        expect(jsonResponse.status).toBe(200);
+      }
       expect(jsonResponse.status).toBe(200);
       const jsonResults = JSON.parse(jsonResponse.text);
       expect(jsonResults.length).toBe(100);
@@ -149,17 +171,21 @@ describe('Read Endpoint - Performance Benchmarks', () => {
   describe('Concurrent streams', () => {
     it('should handle multiple concurrent requests', async () => {
       const root = await j.fact(new Root('perf-concurrent-' + Date.now()));
+      const rootHash = j.hash(root);
       
       for (let i = 0; i < 100; i++) {
         await j.fact(new Successor(`perf-successor-${i}`, root));
       }
 
-      const specification = `(root: PerfTest.Root) {
+      const specification = `let root: PerfTest.Root = #${rootHash}
+
+(root: PerfTest.Root) {
   s: PerfTest.Successor [
-    s->pred: root
+    s->pred: PerfTest.Root = root
   ]
+} => {
+  successor = s
 }`;
-      const body = `root = ${JSON.stringify(root)}\n${specification}`;
 
       // Launch 5 concurrent requests
       const promises = [];
@@ -169,7 +195,7 @@ describe('Read Endpoint - Performance Benchmarks', () => {
             .post('/read')
             .set('Content-Type', 'text/plain')
             .set('Accept', 'application/x-ndjson')
-            .send(body)
+            .send(specification)
         );
       }
 
@@ -179,6 +205,10 @@ describe('Read Endpoint - Performance Benchmarks', () => {
 
       // All should succeed
       responses.forEach(response => {
+        if (response.status !== 200) {
+          expect(response.text).toBe('');
+          expect(response.status).toBe(200);
+        }
         expect(response.status).toBe(200);
         const results = parseNDJSON(response.text);
         expect(results.length).toBe(100);

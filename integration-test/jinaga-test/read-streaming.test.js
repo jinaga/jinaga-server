@@ -69,6 +69,7 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
     it('should stream NDJSON without loading all into memory', async () => {
       // Create 5000 successors
       const root = await j.fact(new Root('stream-test-' + Date.now()));
+      const rootHash = j.hash(root);
       
       // Create in batches
       for (let i = 0; i < 5000; i++) {
@@ -77,8 +78,10 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
 
       const specification = `(root: StreamTest.Root) {
   s: StreamTest.Successor [
-    s->pred: root
+    s->pred: StreamTest.Root = root
   ]
+} => {
+  s = s
 }`;
 
       const startTime = Date.now();
@@ -86,10 +89,14 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/x-ndjson')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(`let root: StreamTest.Root = #${rootHash}\n${specification}`);
 
       const duration = Date.now() - startTime;
 
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.status).toBe(200);
       expect(response.type).toBe('application/x-ndjson');
       
@@ -109,22 +116,29 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
   describe('2.4: Stream Error Handling', () => {
     it('should handle normal completion without errors', async () => {
       const root = await j.fact(new Root('error-test-' + Date.now()));
+      const rootHash = j.hash(root);
       await j.fact(new Successor(`error-successor-1`, root));
       await j.fact(new Successor(`error-successor-2`, root));
       await j.fact(new Successor(`error-successor-3`, root));
 
       const specification = `(root: StreamTest.Root) {
   s: StreamTest.Successor [
-    s->pred: root
+    s->pred: StreamTest.Root = root
   ]
+} => {
+  s = s
 }`;
 
       const response = await request(app)
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/x-ndjson')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(`let root: StreamTest.Root = #${rootHash}\n${specification}`);
 
+      if (response.status !== 200) {
+        expect(response.text).toBe('');
+        expect(response.status).toBe(200);
+      }
       expect(response.status).toBe(200);
       
       const results = parseNDJSON(response.text);
@@ -140,13 +154,16 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
   describe('2.5: Backward Compatibility with Arrays', () => {
     it('should accept and format array results', async () => {
       const root = await j.fact(new Root('compat-test-' + Date.now()));
+      const rootHash = j.hash(root);
       await j.fact(new Successor(`compat-successor-1`, root));
       await j.fact(new Successor(`compat-successor-2`, root));
 
       const specification = `(root: StreamTest.Root) {
   s: StreamTest.Successor [
-    s->pred: root
+    s->pred: StreamTest.Root = root
   ]
+} => {
+  s = s
 }`;
 
       // Test all formats work with array-based results
@@ -154,8 +171,12 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/json')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(`let root: StreamTest.Root = #${rootHash}\n${specification}`);
 
+      if (jsonResponse.status !== 200) {
+        expect(jsonResponse.text).toBe('');
+        expect(jsonResponse.status).toBe(200);
+      }
       expect(jsonResponse.status).toBe(200);
       const jsonResults = JSON.parse(jsonResponse.text);
       expect(jsonResults.length).toBe(2);
@@ -164,8 +185,12 @@ describe('Read Endpoint - Phase 2: Streaming Infrastructure', () => {
         .post('/read')
         .set('Content-Type', 'text/plain')
         .set('Accept', 'application/x-ndjson')
-        .send(`root = ${JSON.stringify(root)}\n${specification}`);
+        .send(`let root: StreamTest.Root = #${rootHash}\n${specification}`);
 
+      if (ndjsonResponse.status !== 200) {
+        expect(ndjsonResponse.text).toBe('');
+        expect(ndjsonResponse.status).toBe(200);
+      }
       expect(ndjsonResponse.status).toBe(200);
       const ndjsonResults = parseNDJSON(ndjsonResponse.text);
       expect(ndjsonResults.length).toBe(2);
