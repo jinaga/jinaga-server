@@ -217,26 +217,6 @@ function post<T, U>(
     };
 }
 
-function postString<U>(method: (user: RequestUser, message: string) => Promise<U>): Handler {
-    return (req, res, next) => {
-        const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
-        }
-        else {
-            method(user, input)
-                .then(response => {
-                    res.type("text");
-                    res.send(JSON.stringify(response, null, 2));
-                    next();
-                })
-                .catch(error => handleError(error, req, res, next));
-        }
-    };
-}
-
 function postCreate<T>(
     parse: (request: Request) => T,
     method: (user: RequestUser, message: T) => Promise<void>
@@ -481,29 +461,6 @@ export class HttpRouter {
                 }
                 await this.authorization.save(userIdentity, envelopes);
             });
-        });
-    }
-
-    private read(user: RequestUser | null, input: string): Promise<any[]> {
-        return Trace.dependency("read", "", async () => {
-            const knownFacts = await this.getKnownFacts(user);
-            const parser = new SpecificationParser(input);
-            parser.skipWhitespace();
-            const declaration = parser.parseDeclaration(knownFacts);
-            const specification = parser.parseSpecification();
-            parser.expectEnd();
-            const start = this.selectStart(specification, declaration);
-
-            var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
-            if (failures.length > 0) {
-                throw new Invalid(failures.join("\n"));
-            }
-
-            const userIdentity = serializeUserIdentity(user);
-            const results = await this.authorization.read(userIdentity, start, specification);
-            const extracted = extractResults(results);
-            Trace.counter("facts_read", extracted.count);
-            return extracted.result;
         });
     }
 
