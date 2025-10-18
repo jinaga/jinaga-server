@@ -4,12 +4,11 @@ import { CsvMetadata, ProjectionComponent, ProjectionComponentType } from './csv
 /**
  * Validates a specification for CSV compatibility.
  * Returns metadata including headers and validation results.
- * 
+ *
  * CSV requires flat projections with single-valued components:
- * - ✅ Fields (scalar values)
+ * - ✅ Fields (scalar values from matched facts)
  * - ✅ Hashes
  * - ✅ Type names
- * - ✅ Predecessor fields (e.g., item.parent.name)
  * - ❌ Arrays (existential quantifiers)
  * - ❌ Nested objects (composite projections)
  */
@@ -120,7 +119,7 @@ function analyzeProjectionComponent(projection: any): ProjectionComponent {
             label,
             type,
             isValid: false,
-            reason: 'Unknown projection type. CSV supports only simple fields, hashes, types, and predecessor fields.'
+            reason: 'Unknown projection type. CSV supports only simple fields, hashes, and types.'
         };
     }
 
@@ -148,11 +147,6 @@ function determineScalarType(projection: any): ProjectionComponentType {
     // Check for field projection (most common)
     if (projection.type === 'field' || projection.field || projection.fieldName) {
         return 'field';
-    }
-
-    // Check for predecessor projection (path traversal)
-    if (projection.type === 'predecessor' || (projection.path && projection.path.length > 0)) {
-        return 'predecessor';
     }
 
     // If it has a simple structure, assume it's a field

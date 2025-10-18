@@ -47,20 +47,6 @@ describe('CSV Validator', () => {
             expect(metadata.headers).toEqual(['itemType']);
         });
 
-        it('should accept predecessor field projections', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'parentName', type: 'predecessor', path: ['parent', 'name'] }
-                ]
-            } as any;
-
-            const metadata = validateSpecificationForCsv(spec);
-            
-            expect(metadata.isValid).toBe(true);
-            expect(metadata.headers).toEqual(['parentName']);
-        });
-
         it('should reject array projections (existential quantifiers)', () => {
             const spec: Specification = {
                 given: [],

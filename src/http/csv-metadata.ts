@@ -18,11 +18,10 @@ export interface CsvMetadata {
 /**
  * Projection component types
  */
-export type ProjectionComponentType = 
+export type ProjectionComponentType =
     | 'field'        // Scalar field (string, number, boolean)
     | 'hash'         // Fact hash
     | 'type'         // Fact type
-    | 'predecessor'  // Field from predecessor fact
     | 'array'        // Array/collection (invalid for CSV)
     | 'nested'       // Nested object (invalid for CSV)
     | 'unknown';
