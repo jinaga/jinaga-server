@@ -5,9 +5,6 @@ export interface CsvMetadata {
     /** Column headers in order (from specification projection labels) */
     headers: string[];
     
-    /** Mapping from header name to projection label */
-    projectionLabels: Map<string, string>;
-    
     /** Whether the projection is valid for CSV */
     isValid: boolean;
     

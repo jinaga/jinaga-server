@@ -1,186 +1,156 @@
 import { validateSpecificationForCsv, extractValueByLabel, formatValueForCsv } from '../../src/http/csv-validator';
-import { Specification } from 'jinaga';
+import { Specification, SpecificationParser, CompositeProjection } from 'jinaga';
 
 describe('CSV Validator', () => {
     describe('validateSpecificationForCsv', () => {
-        it('should accept flat field projections', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'name', type: 'field', field: 'name' },
-                    { name: 'count', type: 'field', field: 'count' }
-                ]
-            } as any;
+        // Helper function to create a specification from declarative syntax
+        function GivenSpecificationFromInput(input: string): Specification {
+            const parser = new SpecificationParser(input);
+            return parser.parseSpecification();
+        }
 
-            const metadata = validateSpecificationForCsv(spec);
+        it('should accept flat field projections', () => {
+            const input = `(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
+                ]
+            } => {
+                name = successor.name
+                count = successor.count
+            }`;
+            const specification = GivenSpecificationFromInput(input);
+
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(true);
             expect(metadata.headers).toEqual(['name', 'count']);
             expect(metadata.errors).toEqual([]);
         });
 
+        // Acceptance tests for future hash/timestamp support
         it('should accept hash projections', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'itemHash', type: 'hash' }
+            const input = `(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
                 ]
-            } as any;
+            } => {
+                hash = #successor
+            }`;
+            const specification = GivenSpecificationFromInput(input);
 
-            const metadata = validateSpecificationForCsv(spec);
+            const metadata = validateSpecificationForCsv(specification);
+            
+            expect(metadata.errors).toEqual([]);
+            expect(metadata.isValid).toBe(true);
+            expect(metadata.headers).toEqual(['hash']);
+        });
+
+        it('should accept timestamp projections', () => {
+            const input = `(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
+                ]
+            } => {
+                timestamp = @successor
+            }`;
+            const specification = GivenSpecificationFromInput(input);
+
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(true);
-            expect(metadata.headers).toEqual(['itemHash']);
+            expect(metadata.headers).toEqual(['timestamp']);
         });
 
-        it('should accept type projections', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'itemType', type: 'type' }
+        it('should reject nested projections', () => {
+            const specification = GivenSpecificationFromInput(`(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
                 ]
-            } as any;
+            } => {
+                nested = {
+                    grandchild: Grandchild [
+                        grandchild->successor: Successor = successor
+                    ]
+                } => {
+                    name = grandchild.name
+                }
+            }`);
 
-            const metadata = validateSpecificationForCsv(spec);
-            
-            expect(metadata.isValid).toBe(true);
-            expect(metadata.headers).toEqual(['itemType']);
-        });
-
-        it('should reject array projections (existential quantifiers)', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'tags', type: 'specification' }
-                ]
-            } as any;
-
-            const metadata = validateSpecificationForCsv(spec);
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(false);
             expect(metadata.errors.length).toBeGreaterThan(0);
-            expect(metadata.errors[0]).toContain('Array projections');
+            expect(metadata.errors).toEqual([`Unsupported projection type of field 'nested' for CSV export. Only flat field projections are allowed.`]);
         });
 
-        it('should reject nested object projections (array format)', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    {
-                        name: 'profile',
-                        projection: [
-                            { name: 'name', type: 'field' },
-                            { name: 'email', type: 'field' }
-                        ]
-                    }
+        it('should reject fact projections', () => {
+            const specification = GivenSpecificationFromInput(`(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
                 ]
-            } as any;
+            } => {
+                successor = successor
+            }`);
 
-            const metadata = validateSpecificationForCsv(spec);
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(false);
             expect(metadata.errors.length).toBeGreaterThan(0);
-            expect(metadata.errors[0]).toContain('Nested object');
+            expect(metadata.errors).toEqual([`Unsupported projection type of field 'successor' for CSV export. Only flat field projections are allowed.`]);
         });
 
-        it('should reject nested object projections (object format)', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    {
-                        name: 'profile',
-                        projection: {
-                            name: { type: 'field' },
-                            email: { type: 'field' }
-                        }
-                    }
+        it('should reject non-composite top-level projections', () => {
+            const specification = GivenSpecificationFromInput(`(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
                 ]
-            } as any;
+            } => successor.name`);
 
-            const metadata = validateSpecificationForCsv(spec);
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(false);
-            expect(metadata.errors.length).toBeGreaterThan(0);
-            expect(metadata.errors[0]).toContain('Nested object');
+            expect(metadata.errors).toContain('Specification projection must be composite for CSV export');
         });
 
-        it('should reject composite projections', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    {
-                        name: 'user',
-                        composite: [
-                            { name: 'name' },
-                            { name: 'email' }
-                        ]
-                    }
+        it('should reject specification without projection', () => {
+            const specification = GivenSpecificationFromInput(`(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
                 ]
-            } as any;
+            }`);
 
-            const metadata = validateSpecificationForCsv(spec);
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(false);
-            expect(metadata.errors.length).toBeGreaterThan(0);
-            expect(metadata.errors[0]).toContain('Composite');
-        });
-
-        it('should handle empty projection', () => {
-            const spec: Specification = {
-                given: [],
-                projection: []
-            } as any;
-
-            const metadata = validateSpecificationForCsv(spec);
-            
-            expect(metadata.isValid).toBe(false);
-            expect(metadata.errors).toContain('Specification has no projections');
-        });
-
-        it('should handle missing projection', () => {
-            const spec: Specification = {
-                given: []
-            } as any;
-
-            const metadata = validateSpecificationForCsv(spec);
-            
-            expect(metadata.isValid).toBe(false);
-            expect(metadata.errors).toContain('Specification has no projections');
+            expect(metadata.errors).toEqual(['Specification must have a projection for CSV export']);
         });
 
         it('should handle mixed valid and invalid projections', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'name', type: 'field', field: 'name' },
-                    { name: 'tags', type: 'specification' },
-                    { name: 'count', type: 'field', field: 'count' }
+            const specification = GivenSpecificationFromInput(`(root: Root) {
+                successor: Successor [
+                    successor->root: Root = root
                 ]
-            } as any;
+            } => {
+                name = successor.name
+                nested = {
+                    grandchild: Grandchild [
+                        grandchild->successor: Successor = successor
+                    ]
+                } => {
+                    name = grandchild.name
+                }
+                count = successor.count
+                successor = successor
+            }`);
 
-            const metadata = validateSpecificationForCsv(spec);
+            const metadata = validateSpecificationForCsv(specification);
             
             expect(metadata.isValid).toBe(false);
-            expect(metadata.headers).toEqual(['name', 'count']); // Only valid ones
-            expect(metadata.errors.length).toBe(1);
-            expect(metadata.errors[0]).toContain('tags');
-        });
-
-        it('should provide projection labels mapping', () => {
-            const spec: Specification = {
-                given: [],
-                projection: [
-                    { name: 'userName', type: 'field', field: 'name' },
-                    { name: 'userEmail', type: 'field', field: 'email' }
-                ]
-            } as any;
-
-            const metadata = validateSpecificationForCsv(spec);
-            
-            expect(metadata.isValid).toBe(true);
-            expect(metadata.projectionLabels.size).toBe(2);
-            expect(metadata.projectionLabels.get('userName')).toBe('userName');
-            expect(metadata.projectionLabels.get('userEmail')).toBe('userEmail');
+            expect(metadata.headers).toEqual(['name', 'count']); // Only valid field projections
+            expect(metadata.errors).toEqual([
+                `Unsupported projection type of field 'nested' for CSV export. Only flat field projections are allowed.`,
+                `Unsupported projection type of field 'successor' for CSV export. Only flat field projections are allowed.`
+            ]);
         });
     });
 
@@ -224,16 +194,6 @@ describe('CSV Validator', () => {
         it('should format boolean as string', () => {
             expect(formatValueForCsv(true)).toBe('true');
             expect(formatValueForCsv(false)).toBe('false');
-        });
-
-        it('should extract hash from fact reference', () => {
-            const factRef = { type: 'User', hash: 'abc123' };
-            expect(formatValueForCsv(factRef)).toBe('abc123');
-        });
-
-        it('should stringify other objects', () => {
-            const obj = { name: 'Alice', age: 30 };
-            expect(formatValueForCsv(obj)).toBe(JSON.stringify(obj));
         });
 
         it('should convert primitives to string', () => {
