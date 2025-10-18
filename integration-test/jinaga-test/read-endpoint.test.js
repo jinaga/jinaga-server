@@ -327,3 +327,116 @@ describe('Read Endpoint - Phase 1: Content Negotiation', () => {
     }, 60000); // 60 second timeout for large dataset
   });
 });
+
+describe('Read Endpoint - Regression Tests', () => {
+  let app;
+  let j;
+  let close;
+
+  // Test model for nested projections
+  class TestSite {
+    static Type = "ReadTest.Site";
+    type = TestSite.Type;
+
+    constructor(domain) {
+      this.domain = domain;
+    }
+  }
+
+  class TestPost {
+    static Type = "ReadTest.Post";
+    type = TestPost.Type;
+
+    constructor(site, createdAt) {
+      this.site = site;
+      this.createdAt = createdAt;
+    }
+  }
+
+  class TestTitle {
+    static Type = "ReadTest.Title";
+    type = TestTitle.Type;
+
+    constructor(post, value, prior) {
+      this.post = post;
+      this.value = value;
+      this.prior = prior;
+    }
+  }
+
+  beforeEach(async () => {
+    ({ app, j, close } = await createTestApp());
+    await j.local();
+  });
+
+  afterEach(async () => {
+    if (close) {
+      await close();
+    }
+  });
+
+  it('should handle nested projections without CSV validation when no Accept header is set', async () => {
+    // Create test data with nested structure
+    const site = await j.fact(new TestSite('test.com'));
+    const siteHash = j.hash(site);
+    
+    // Create posts
+    const post1 = await j.fact(new TestPost(site, new Date().toISOString()));
+    const post2 = await j.fact(new TestPost(site, new Date().toISOString()));
+    
+    // Create titles for posts (nested projections)
+    await j.fact(new TestTitle(post1, 'First Post Title', null));
+    await j.fact(new TestTitle(post2, 'Second Post Title', null));
+    await j.fact(new TestTitle(post2, 'Updated Second Post Title', null));
+
+    // Specification with nested projection (similar to the bug report)
+    const specification = `let site: ReadTest.Site = #${siteHash}
+
+(site: ReadTest.Site) {
+    post: ReadTest.Post [
+        post->site: ReadTest.Site = site
+    ]
+} => {
+    id = #post
+    createdAt = post.createdAt
+    titles = {
+        title: ReadTest.Title [
+            title->post: ReadTest.Post = post
+        ]
+    } => title.value
+}`;
+
+    // Make request WITHOUT setting Accept header (this was triggering CSV validation bug)
+    const response = await request(app)
+      .post('/read')
+      .set('Content-Type', 'text/plain')
+      .send(specification);
+
+    // Verify request succeeds
+    expect(response.status).toBe(200);
+    
+    // Verify response is JSON (text/plain is the default format, returns JSON)
+    expect(response.type).toBe('text/plain');
+    
+    // Parse and verify the response is valid JSON
+    const results = JSON.parse(response.text);
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBe(2);
+    
+    // Verify nested projection data is included
+    results.forEach(post => {
+      expect(post).toHaveProperty('id');
+      expect(post).toHaveProperty('createdAt');
+      expect(post).toHaveProperty('titles');
+      expect(Array.isArray(post.titles)).toBe(true);
+      expect(post.titles.length).toBeGreaterThan(0);
+      post.titles.forEach(title => {
+        expect(typeof title).toBe('string');
+      });
+    });
+    
+    // Verify no CSV validation error was thrown (we successfully got JSON back)
+    expect(response.text).not.toContain('CSV');
+    expect(response.text).not.toContain('error');
+  });
+});

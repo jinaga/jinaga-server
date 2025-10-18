@@ -263,10 +263,17 @@ function postReadWithStreaming(
             res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
         }
         else {
-            // Determine accepted content type
-            const acceptType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']) || 'text/plain';
+            // Check if Accept header explicitly prefers a specific format
+            const acceptHeader = req.get('Accept');
+            let acceptType: string = 'text/plain'; // Default for backward compatibility
+
+            if (acceptHeader && acceptHeader !== '*/*') {
+                // Only use req.accepts() when there's a specific preference
+                const preferredType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']);
+                acceptType = preferredType ? String(preferredType) : 'text/plain';
+            }
             
-            method(user, input, acceptType as string)
+            method(user, input, acceptType)
                 .then(response => {
                     if (!response) {
                         res.sendStatus(404);
