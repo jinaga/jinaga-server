@@ -192,18 +192,6 @@ describe('CSV Validator', () => {
             expect(extractValueByLabel(result, 'age')).toBe(30);
         });
 
-        it('should extract nested property with dot notation', () => {
-            const result = {
-                user: {
-                    name: 'Bob',
-                    email: 'bob@example.com'
-                }
-            };
-            
-            expect(extractValueByLabel(result, 'user.name')).toBe('Bob');
-            expect(extractValueByLabel(result, 'user.email')).toBe('bob@example.com');
-        });
-
         it('should return null for missing properties', () => {
             const result = { name: 'Alice' };
             
@@ -216,12 +204,6 @@ describe('CSV Validator', () => {
 
         it('should return null for undefined result', () => {
             expect(extractValueByLabel(undefined, 'name')).toBeNull();
-        });
-
-        it('should handle nested null values', () => {
-            const result = { user: null };
-            
-            expect(extractValueByLabel(result, 'user.name')).toBeNull();
         });
     });
 

@@ -158,7 +158,8 @@ function determineScalarType(projection: any): ProjectionComponentType {
 }
 
 /**
- * Extract value from result object using projection label
+ * Extract value from result object using projection label.
+ * Since CSV only supports flat projections, labels are simple property names.
  */
 export function extractValueByLabel(result: any, label: string): any {
     if (result == null) {
@@ -166,20 +167,7 @@ export function extractValueByLabel(result: any, label: string): any {
     }
     
     // Direct property access
-    if (label in result) {
-        return result[label];
-    }
-    
-    // Try nested access with dot notation
-    const parts = label.split('.');
-    let value = result;
-    
-    for (const part of parts) {
-        if (value == null) {
-            return null;
-        }
-        value = value[part];
-    }
+    const value = result[label];
     
     // Return null instead of undefined
     return value ?? null;
