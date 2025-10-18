@@ -32,12 +32,12 @@ import {
     UserIdentity,
     verifyEnvelopes
 } from "jinaga";
-import { createLineReader } from "./line-reader";
-import { Stream } from "./stream";
-import { outputReadResultsStreaming } from "./output-formatters";
-import { ResultStream, AsyncIterableResultStream } from "./result-stream";
-import { validateSpecificationForCsv } from "./csv-validator";
 import { CsvMetadata } from "./csv-metadata";
+import { validateSpecificationForCsv } from "./csv-validator";
+import { createLineReader } from "./line-reader";
+import { outputReadResultsStreaming } from "./output-formatters";
+import { arrayToResultStream, ResultStream } from "./result-stream";
+import { Stream } from "./stream";
 
 function getOrStream<U>(
     getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
@@ -253,7 +253,10 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
 }
 
 function postReadWithStreaming(
-    method: (user: RequestUser, message: string, acceptType: string) => Promise<any[] | ResultStream<any> | { result: any[] | ResultStream<any>, csvMetadata?: CsvMetadata }>
+    method: (user: RequestUser, message: string, acceptType: string) => Promise<{
+        resultStream: ResultStream<any>,
+        csvMetadata?: CsvMetadata
+    }>
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
@@ -274,26 +277,9 @@ function postReadWithStreaming(
             }
             
             method(user, input, acceptType)
-                .then(response => {
-                    if (!response) {
-                        res.sendStatus(404);
-                        next();
-                    }
-                    else {
-                        // Handle both direct results and wrapped results with metadata
-                        let result: any[] | ResultStream<any>;
-                        let csvMetadata: CsvMetadata | undefined;
-                        
-                        if (response && typeof response === 'object' && 'result' in response) {
-                            result = response.result;
-                            csvMetadata = response.csvMetadata;
-                        } else {
-                            result = response as any[] | ResultStream<any>;
-                        }
-                        
-                        outputReadResults(result, res, (type) => req.accepts(type), csvMetadata);
-                        next();
-                    }
+                .then(({resultStream, csvMetadata}) => {
+                    outputReadResults(resultStream, res, acceptType, csvMetadata);
+                    next();
                 })
                 .catch(error => handleError(error, req, res, next));
         }
@@ -357,13 +343,13 @@ function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: strin
 }
 
 function outputReadResults(
-    result: any[] | ResultStream<any>, 
+    result: ResultStream<any>, 
     res: Response, 
-    accepts: (type: string) => string | false,
+    acceptType: string,
     csvMetadata?: CsvMetadata
 ) {
     // Use streaming output formatter
-    outputReadResultsStreaming(result, res, accepts, csvMetadata)
+    outputReadResultsStreaming(result, res, acceptType, csvMetadata)
         .catch(error => {
             console.error('Error in outputReadResults:', error);
             if (!res.headersSent) {
@@ -400,7 +386,13 @@ export class HttpRouter {
             (user, graphSource) => this.save(user, graphSource)
         ));
 
-        router.post('/read', applyAllowOrigin, postReadWithStreaming((user, input: string, acceptType: string) => this.readWithStreaming(user, input, acceptType)));
+        router.post('/read', applyAllowOrigin, postReadWithStreaming((user, input: string, acceptType: string) =>
+            this.readWithStreaming(
+                user,
+                input,
+                acceptType === 'text/csv' ? preProcessForCsv : preProcessForOther
+            )
+        ));
         router.post('/write', applyAllowOrigin, postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', applyAllowOrigin, post(
             parseString,
@@ -480,8 +472,11 @@ export class HttpRouter {
     private async readWithStreaming(
         user: RequestUser | null, 
         input: string,
-        acceptType: string
-    ): Promise<any[] | ResultStream<any> | { result: any[] | ResultStream<any>, csvMetadata?: CsvMetadata }> {
+        preProcess: (specification: Specification) => CsvMetadata | undefined
+    ): Promise<{
+        resultStream: ResultStream<any>,
+        csvMetadata?: CsvMetadata
+    }> {
         return Trace.dependency("readWithStreaming", "", async () => {
             const knownFacts = await this.getKnownFacts(user);
             const parser = new SpecificationParser(input);
@@ -489,54 +484,24 @@ export class HttpRouter {
             const declaration = parser.parseDeclaration(knownFacts);
             const specification = parser.parseSpecification();
             parser.expectEnd();
-            const start = this.selectStart(specification, declaration);
 
             var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
             if (failures.length > 0) {
                 throw new Invalid(failures.join("\n"));
             }
 
-            // Validate specification for CSV if CSV format is requested
-            let csvMetadata: CsvMetadata | undefined;
-            if (acceptType === 'text/csv') {
-                csvMetadata = validateSpecificationForCsv(specification);
-                
-                if (!csvMetadata.isValid) {
-                    throw new Invalid(
-                        `Specification is not compatible with CSV format:\n\n` +
-                        csvMetadata.errors.join('\n\n') +
-                        `\n\nHint: CSV requires flat projections with single-valued fields. ` +
-                        `Avoid arrays (existential quantifiers) and nested objects.`
-                    );
-                }
-            }
+            const csvMetadata = preProcess(specification);
 
             const userIdentity = serializeUserIdentity(user);
-            
-            // Check if authorization supports streaming
-            if (typeof (this.authorization as any).readStream === 'function') {
-                // Use streaming if available
-                const streamResults = await (this.authorization as any).readStream(userIdentity, start, specification);
-                Trace.counter("facts_read_streaming", 1);
-                
-                // Wrap in AsyncIterableResultStream if it's an async iterable
-                if (streamResults && typeof streamResults[Symbol.asyncIterator] === 'function') {
-                    const resultStream = new AsyncIterableResultStream(streamResults);
-                    return csvMetadata ? { result: resultStream, csvMetadata } : resultStream;
-                }
-                
-                // If it returned something else, try to use it as a ResultStream
-                if (streamResults && typeof streamResults.next === 'function') {
-                    return csvMetadata ? { result: streamResults, csvMetadata } : streamResults;
-                }
-            }
-            
-            // Fallback to array-based read
+            const start = this.selectStart(specification, declaration);
             const results = await this.authorization.read(userIdentity, start, specification);
-            const extracted = extractResults(results);
-            Trace.counter("facts_read", extracted.count);
-            
-            return csvMetadata ? { result: extracted.result, csvMetadata } : extracted.result;
+            Trace.counter("facts_read", results.length);
+            const resultStream = arrayToResultStream(results.map(r => r.result));
+
+            return {
+                resultStream,
+                csvMetadata
+            };
         });
     }
 
@@ -987,33 +952,30 @@ export class HttpRouter {
     }
 }
 
+function preProcessForCsv(specification: Specification): CsvMetadata | undefined {
+    const csvMetadata = validateSpecificationForCsv(specification);
+
+    if (!csvMetadata.isValid) {
+        throw new Invalid(
+            `Specification is not compatible with CSV format:\n\n` +
+            csvMetadata.errors.join('\n\n') +
+            `\n\nHint: CSV requires flat projections with single-valued fields. ` +
+            `Avoid nested specifications.`
+        );
+    }
+    return csvMetadata;
+}
+
+function preProcessForOther(specification: Specification): CsvMetadata | undefined {
+    // For non-CSV formats, no special preprocessing is needed.
+    return undefined;
+}
+
 function parseString(input: any): string {
     if (typeof input !== 'string') {
         throw new Invalid("Expected a string. Check the content type of the request.");
     }
     return input;
-}
-
-function extractResults(obj: any): { result: any, count: number } {
-    if (Array.isArray(obj)) {
-        const projectedResults: ProjectedResult[] = obj;
-        const results = projectedResults.map(r => extractResults(r.result));
-        const count = results.reduce((acc, res) => acc + res.count + 1, 0);
-        return { result: results.map(r => r.result), count };
-    }
-    else if (typeof obj === "object") {
-        const keys = Object.keys(obj);
-        const results = keys.reduce((acc, key) => {
-            const extracted = extractResults(obj[key]);
-            acc.result[key] = extracted.result;
-            acc.count += extracted.count;
-            return acc;
-        }, { result: {} as any, count: 0 });
-        return results;
-    }
-    else {
-        return { result: obj, count: 0 };
-    }
 }
 
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {

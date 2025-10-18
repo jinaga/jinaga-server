@@ -1,50 +1,43 @@
-import { Response } from "express";
 import { stringify } from 'csv-stringify';
-import { ResultStream, arrayToResultStream } from "./result-stream";
+import { Response } from "express";
+import { ProjectedResult } from "jinaga";
 import { CsvMetadata } from "./csv-metadata";
-import { extractValueByLabel, formatValueForCsv } from "./csv-validator";
+import { extractValueByLabel } from "./csv-validator";
+import { ResultStream } from "./result-stream";
 
 /**
  * Output read results with streaming support.
  * Handles content negotiation and streams data when possible.
  */
 export async function outputReadResultsStreaming(
-    result: any[] | ResultStream<any>,
+    result: ResultStream<any>,
     res: Response,
-    accepts: (type: string) => string | false,
+    acceptType: string,
     csvMetadata?: CsvMetadata
 ): Promise<void> {
-    // Convert array to stream if needed
-    const stream = Array.isArray(result) ? arrayToResultStream(result) : result;
-
-    // Check if all types are accepted (no specific preference / no Accept header)
-    // In this case, default to text/plain for backward compatibility
-    const allTypesAccepted =
-        accepts("application/x-ndjson") &&
-        accepts("text/csv") &&
-        accepts("application/json") &&
-        accepts("text/plain");
-
-    if (allTypesAccepted) {
-        // Default to text/plain when no specific Accept header
-        await collectAndSendJSON(stream, res, () => false); // Forces text/plain
-    }
-    else if (accepts("application/x-ndjson")) {
-        // NDJSON format - stream one JSON object per line
-        await streamAsNDJSON(stream, res);
-    }
-    else if (accepts("text/csv")) {
-        // CSV format - stream as CSV using csv-stringify
-        if (csvMetadata) {
-            await streamAsCSVWithStringify(stream, res, csvMetadata);
-        } else {
-            // Fallback to old implementation if no metadata
-            await streamAsCSV(stream, res);
-        }
-    }
-    else {
-        // For JSON and text/plain, collect all results first
-        await collectAndSendJSON(stream, res, accepts);
+    switch (acceptType) {
+        case "application/x-ndjson":
+            // NDJSON format - stream one JSON object per line
+            await streamAsNDJSON(result, res);
+            break;
+        case "text/csv":
+            // CSV format - stream as CSV using csv-stringify
+            if (csvMetadata) {
+                await streamAsCSVWithStringify(result, res, csvMetadata);
+            } else {
+                throw new Error("CSV metadata is required for CSV output format");
+            }
+            break;
+        case "application/json":
+        case "text/plain":
+            // For JSON and text/plain, collect all results first
+            await collectAndSendJSON(result, res, (type: string) => type === acceptType ? type : false);
+            break;
+        default:
+            // Unsupported type - respond with 406 Not Acceptable
+            res.status(406).send(`Unsupported Accept type: ${acceptType}`);
+            await result.close();
+            break;
     }
 }
 
@@ -186,67 +179,4 @@ export async function streamAsCSVWithStringify(
     } finally {
         await stream.close();
     }
-}
-
-/**
- * Stream results as CSV (legacy implementation without metadata).
- * Used as fallback when CSV is requested without specification metadata.
- * Headers are extracted from first data row.
- */
-export async function streamAsCSV(stream: ResultStream<any>, res: Response): Promise<void> {
-    res.type("text/csv");
-
-    try {
-        let isFirstRow = true;
-        let headers: string[] = [];
-
-        let item: any = null;
-        while ((item = await stream.next()) !== null) {
-            if (isFirstRow) {
-                // Extract headers from first item
-                headers = Object.keys(item);
-                
-                // Write CSV header row
-                res.write(headers.map(escapeCSV).join(',') + '\n');
-                isFirstRow = false;
-            }
-
-            // Write data row
-            const values = headers.map(key => {
-                const value = item[key];
-                if (value === null || value === undefined) {
-                    return '';
-                }
-                if (typeof value === 'object') {
-                    return escapeCSV(JSON.stringify(value));
-                }
-                return escapeCSV(String(value));
-            });
-            res.write(values.join(',') + '\n');
-        }
-
-        if (isFirstRow) {
-            // No data, just write empty file
-            res.write('');
-        }
-
-        res.end();
-    } catch (error) {
-        // For CSV, we can't send error frames like NDJSON
-        // Just end the response
-        res.end();
-    } finally {
-        await stream.close();
-    }
-}
-
-/**
- * Escape a value for CSV format.
- */
-function escapeCSV(value: string): string {
-    // If value contains comma, quote, or newline, wrap in quotes and escape quotes
-    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-        return '"' + value.replace(/"/g, '""') + '"';
-    }
-    return value;
 }
