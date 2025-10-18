@@ -17,7 +17,19 @@ export async function outputReadResultsStreaming(
     // Convert array to stream if needed
     const stream = Array.isArray(result) ? arrayToResultStream(result) : result;
 
-    if (accepts("application/x-ndjson")) {
+    // Check if all types are accepted (no specific preference / no Accept header)
+    // In this case, default to text/plain for backward compatibility
+    const allTypesAccepted =
+        accepts("application/x-ndjson") &&
+        accepts("text/csv") &&
+        accepts("application/json") &&
+        accepts("text/plain");
+
+    if (allTypesAccepted) {
+        // Default to text/plain when no specific Accept header
+        await collectAndSendJSON(stream, res, () => false); // Forces text/plain
+    }
+    else if (accepts("application/x-ndjson")) {
         // NDJSON format - stream one JSON object per line
         await streamAsNDJSON(stream, res);
     }
