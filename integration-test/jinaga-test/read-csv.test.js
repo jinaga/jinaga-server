@@ -40,26 +40,6 @@ async function createTestApp() {
   return { app, j, close };
 }
 
-// Helper to parse CSV
-function parseCSV(text) {
-  const lines = text.trim().split('\n');
-  if (lines.length === 0) return [];
-  
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-  const rows = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
-    const row = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index];
-    });
-    rows.push(row);
-  }
-  
-  return { headers, rows };
-}
-
 describe('Read Endpoint - CSV Output', () => {
   let app;
   let j;
