@@ -32,7 +32,11 @@ import {
     UserIdentity,
     verifyEnvelopes
 } from "jinaga";
+import { CsvMetadata } from "./csv-metadata";
+import { validateSpecificationForCsv } from "./csv-validator";
 import { createLineReader } from "./line-reader";
+import { outputReadResultsStreaming } from "./output-formatters";
+import { arrayToResultStream, ResultStream } from "./result-stream";
 import { Stream } from "./stream";
 
 function getOrStream<U>(
@@ -213,26 +217,6 @@ function post<T, U>(
     };
 }
 
-function postString<U>(method: (user: RequestUser, message: string) => Promise<U>): Handler {
-    return (req, res, next) => {
-        const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
-        }
-        else {
-            method(user, input)
-                .then(response => {
-                    res.type("text");
-                    res.send(JSON.stringify(response, null, 2));
-                    next();
-                })
-                .catch(error => handleError(error, req, res, next));
-        }
-    };
-}
-
 function postCreate<T>(
     parse: (request: Request) => T,
     method: (user: RequestUser, message: T) => Promise<void>
@@ -261,6 +245,40 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
             method(user, input)
                 .then(_ => {
                     res.sendStatus(201);
+                    next();
+                })
+                .catch(error => handleError(error, req, res, next));
+        }
+    };
+}
+
+function postReadWithStreaming(
+    method: (user: RequestUser, message: string, acceptType: string) => Promise<{
+        resultStream: ResultStream<any>,
+        csvMetadata?: CsvMetadata
+    }>
+): Handler {
+    return (req, res, next) => {
+        const user = <RequestUser>(req as any).user;
+        const input = parseString(req.body);
+        if (!input || typeof (input) !== 'string') {
+            res.type("text");
+            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
+        }
+        else {
+            // Check if Accept header explicitly prefers a specific format
+            const acceptHeader = req.get('Accept');
+            let acceptType: string = 'text/plain'; // Default for backward compatibility
+
+            if (acceptHeader && acceptHeader !== '*/*') {
+                // Only use req.accepts() when there's a specific preference
+                const preferredType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']);
+                acceptType = preferredType ? String(preferredType) : 'text/plain';
+            }
+            
+            method(user, input, acceptType)
+                .then(({resultStream, csvMetadata}) => {
+                    outputReadResults(resultStream, res, acceptType, csvMetadata);
                     next();
                 })
                 .catch(error => handleError(error, req, res, next));
@@ -324,6 +342,22 @@ function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: strin
     res.send(JSON.stringify(result));
 }
 
+function outputReadResults(
+    result: ResultStream<any>, 
+    res: Response, 
+    acceptType: string,
+    csvMetadata?: CsvMetadata
+) {
+    // Use streaming output formatter
+    outputReadResultsStreaming(result, res, acceptType, csvMetadata)
+        .catch(error => {
+            console.error('Error in outputReadResults:', error);
+            if (!res.headersSent) {
+                res.status(500).send('Internal server error');
+            }
+        });
+}
+
 export interface RequestUser {
     provider: string;
     id: string;
@@ -352,7 +386,13 @@ export class HttpRouter {
             (user, graphSource) => this.save(user, graphSource)
         ));
 
-        router.post('/read', applyAllowOrigin, postString((user, input: string) => this.read(user, input)));
+        router.post('/read', applyAllowOrigin, postReadWithStreaming((user, input: string, acceptType: string) =>
+            this.readWithStreaming(
+                user,
+                input,
+                acceptType === 'text/csv' ? preProcessForCsv : preProcessForOther
+            )
+        ));
         router.post('/write', applyAllowOrigin, postStringCreate((user, input: string) => this.write(user, input)));
         router.post('/feeds', applyAllowOrigin, post(
             parseString,
@@ -423,26 +463,46 @@ export class HttpRouter {
         });
     }
 
-    private read(user: RequestUser | null, input: string): Promise<any[]> {
-        return Trace.dependency("read", "", async () => {
+    /**
+     * Read with streaming support.
+     * Uses readStream if available on the authorization object, otherwise falls back to read().
+     * 
+     * When CSV format is requested, validates that the specification contains only flat projections.
+     */
+    private async readWithStreaming(
+        user: RequestUser | null, 
+        input: string,
+        preProcess: (specification: Specification) => CsvMetadata | undefined
+    ): Promise<{
+        resultStream: ResultStream<any>,
+        csvMetadata?: CsvMetadata
+    }> {
+        return Trace.dependency("readWithStreaming", "", async () => {
             const knownFacts = await this.getKnownFacts(user);
             const parser = new SpecificationParser(input);
             parser.skipWhitespace();
             const declaration = parser.parseDeclaration(knownFacts);
             const specification = parser.parseSpecification();
             parser.expectEnd();
-            const start = this.selectStart(specification, declaration);
 
             var failures: string[] = this.factManager.testSpecificationForCompliance(specification);
             if (failures.length > 0) {
                 throw new Invalid(failures.join("\n"));
             }
 
+            const csvMetadata = preProcess(specification);
+
             const userIdentity = serializeUserIdentity(user);
+            const start = this.selectStart(specification, declaration);
             const results = await this.authorization.read(userIdentity, start, specification);
             const extracted = extractResults(results);
             Trace.counter("facts_read", extracted.count);
-            return extracted.result;
+            const resultStream = arrayToResultStream(extracted.result);
+
+            return {
+                resultStream,
+                csvMetadata
+            };
         });
     }
 
@@ -891,6 +951,25 @@ export class HttpRouter {
             next();
         }
     }
+}
+
+function preProcessForCsv(specification: Specification): CsvMetadata | undefined {
+    const csvMetadata = validateSpecificationForCsv(specification);
+
+    if (!csvMetadata.isValid) {
+        throw new Invalid(
+            `Specification is not compatible with CSV format:\n\n` +
+            csvMetadata.errors.join('\n\n') +
+            `\n\nHint: CSV requires flat projections with single-valued fields. ` +
+            `Avoid nested specifications.`
+        );
+    }
+    return csvMetadata;
+}
+
+function preProcessForOther(specification: Specification): CsvMetadata | undefined {
+    // For non-CSV formats, no special preprocessing is needed.
+    return undefined;
 }
 
 function parseString(input: any): string {
