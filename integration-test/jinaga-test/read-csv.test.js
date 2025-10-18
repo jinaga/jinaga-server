@@ -181,9 +181,12 @@ describe('Read Endpoint - CSV Output', () => {
     s->pred: CSVTest.Root = root
   ]
 } => {
-  successor = {
-    id = s.identifier
-    type = s.type
+  nested = {
+    grandchild: CSVTest.Grandchild [
+      grandchild->parent: CSVTest.Successor = s
+    ]
+  } => {
+    grandchildHash = #grandchild
   }
 }`;
 
@@ -198,7 +201,7 @@ describe('Read Endpoint - CSV Output', () => {
         expect(response.status).toBe(400);
       }
       expect(response.text).toContain('not compatible with CSV');
-      expect(response.text).toContain('Nested object');
+      expect(response.text).toContain(`Unsupported projection type of field 'nested' for CSV export.`);
     });
 
     it('should accept flat projections with multiple fields', async () => {
