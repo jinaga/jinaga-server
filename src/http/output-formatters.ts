@@ -1,6 +1,5 @@
 import { stringify } from 'csv-stringify';
 import { Response } from "express";
-import { ProjectedResult } from "jinaga";
 import { CsvMetadata } from "./csv-metadata";
 import { extractValueByLabel } from "./csv-validator";
 import { ResultStream } from "./result-stream";
@@ -29,14 +28,16 @@ export async function outputReadResultsStreaming(
             }
             break;
         case "application/json":
+            // Compact JSON
+            await collectAndSendCompactJSON(result, res);
+            break;
         case "text/plain":
-            // For JSON and text/plain, collect all results first
-            await collectAndSendJSON(result, res, (type: string) => type === acceptType ? type : false);
+            // Pretty-printed JSON
+            await collectAndSendPrettyJSON(result, res);
             break;
         default:
-            // Unsupported type - respond with 406 Not Acceptable
-            res.status(406).send(`Unsupported Accept type: ${acceptType}`);
-            await result.close();
+            // Default to pretty-printed JSON for unrecognized types
+            await collectAndSendPrettyJSON(result, res);
             break;
     }
 }
@@ -68,13 +69,12 @@ export async function streamAsNDJSON(stream: ResultStream<any>, res: Response): 
 }
 
 /**
- * Collect all results from stream and send as JSON.
- * Used for application/json and text/plain formats that need complete data.
+ * Collect all results from stream and send as compact JSON.
+ * Used for application/json format.
  */
-export async function collectAndSendJSON(
+export async function collectAndSendCompactJSON(
     stream: ResultStream<any>,
-    res: Response,
-    accepts: (type: string) => string | false
+    res: Response
 ): Promise<void> {
     try {
         const results: any[] = [];
@@ -83,16 +83,30 @@ export async function collectAndSendJSON(
             results.push(item);
         }
 
-        if (accepts("application/json")) {
-            // Compact JSON
-            res.type("application/json");
-            res.send(JSON.stringify(results));
+        res.type("application/json");
+        res.send(JSON.stringify(results));
+    } finally {
+        await stream.close();
+    }
+}
+
+/**
+ * Collect all results from stream and send as pretty-printed JSON.
+ * Used for text/plain format and as default for unrecognized Accept types.
+ */
+export async function collectAndSendPrettyJSON(
+    stream: ResultStream<any>,
+    res: Response
+): Promise<void> {
+    try {
+        const results: any[] = [];
+        let item;
+        while ((item = await stream.next()) !== null) {
+            results.push(item);
         }
-        else {
-            // Default: text/plain with pretty-printed JSON
-            res.type("text/plain");
-            res.send(JSON.stringify(results, null, 2));
-        }
+
+        res.type("text/plain");
+        res.send(JSON.stringify(results, null, 2));
     } finally {
         await stream.close();
     }
