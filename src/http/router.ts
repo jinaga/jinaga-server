@@ -986,7 +986,11 @@ function extractResults(obj: any): { result: any, count: number } {
         const count = results.reduce((acc, res) => acc + res.count + 1, 0);
         return { result: results.map(r => r.result), count };
     }
-    else if (typeof obj === "object") {
+    else if (obj instanceof Date) {
+        // Preserve Date objects as-is
+        return { result: obj, count: 0 };
+    }
+    else if (obj !== null && typeof obj === "object") {
         const keys = Object.keys(obj);
         const results = keys.reduce((acc, key) => {
             const extracted = extractResults(obj[key]);

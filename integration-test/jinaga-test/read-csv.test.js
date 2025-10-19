@@ -114,13 +114,12 @@ describe('Read Endpoint - CSV Output', () => {
       expect(lines[3].split(',')[1]).toBe(j.hash(new Successor('csv-successor-3', root)));
 
       // Successor time should be recent timestamps
-      expect(lines[1].split(',')[2]).not.toBe('{}');
-      expect(new Date(lines[1].split(',')[2])).toBeLessThan(new Date());
-      expect(new Date(lines[1].split(',')[2])).toBeGreaterThan(new Date(Date.now() - 10000));
-      expect(new Date(lines[2].split(',')[2])).toBeLessThan(new Date());
-      expect(new Date(lines[2].split(',')[2])).toBeGreaterThan(new Date(Date.now() - 10000));
-      expect(new Date(lines[3].split(',')[2])).toBeLessThan(new Date());
-      expect(new Date(lines[3].split(',')[2])).toBeGreaterThan(new Date(Date.now() - 10000));
+      expect(new Date(lines[1].split(',')[2]).getTime()).toBeLessThanOrEqual(Date.now());
+      expect(new Date(lines[1].split(',')[2]).getTime()).toBeGreaterThan(Date.now() - 10000);
+      expect(new Date(lines[2].split(',')[2]).getTime()).toBeLessThanOrEqual(Date.now());
+      expect(new Date(lines[2].split(',')[2]).getTime()).toBeGreaterThan(Date.now() - 10000);
+      expect(new Date(lines[3].split(',')[2]).getTime()).toBeLessThanOrEqual(Date.now());
+      expect(new Date(lines[3].split(',')[2]).getTime()).toBeGreaterThan(Date.now() - 10000);
     });
 
     it('should include headers even with empty result set', async () => {
