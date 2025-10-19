@@ -101,7 +101,27 @@ describe('Read Endpoint - CSV Output', () => {
       expect(headers).toContain('successorTime');
       
       // Should have data rows
-      expect(lines.length).toBeGreaterThan(1);
+      expect(lines.length).toBe(4);
+
+      // Successor id should be the known strings
+      expect(lines[1].split(',')[0]).toBe('csv-successor-1');
+      expect(lines[2].split(',')[0]).toBe('csv-successor-2');
+      expect(lines[3].split(',')[0]).toBe('csv-successor-3');
+
+      // Successor hash should be the known hashes
+      expect(lines[1].split(',')[1]).toBe(j.hash(new Successor('csv-successor-1', root)));
+      expect(lines[2].split(',')[1]).toBe(j.hash(new Successor('csv-successor-2', root)));
+      expect(lines[3].split(',')[1]).toBe(j.hash(new Successor('csv-successor-3', root)));
+
+      // Successor time should be recent timestamps
+      function expectRecentTimestamp(line) {
+        const timestamp = new Date(line.split(',')[2]).getTime();
+        expect(timestamp).toBeLessThanOrEqual(Date.now());
+        expect(timestamp).toBeGreaterThan(Date.now() - 10000);
+      }
+      expectRecentTimestamp(lines[1]);
+      expectRecentTimestamp(lines[2]);
+      expectRecentTimestamp(lines[3]);
     });
 
     it('should include headers even with empty result set', async () => {
