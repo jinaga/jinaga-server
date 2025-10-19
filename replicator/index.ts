@@ -12,8 +12,10 @@ const app = express();
 const server = http.createServer(app);
 
 app.set('port', process.env.PORT || 8080);
-app.use(express.json());
+// Order matters: text() before json() so text/plain endpoints work correctly
+// when clients omit Content-Type headers
 app.use(express.text());
+app.use(express.json());
 
 const pgConnection = process.env.JINAGA_POSTGRESQL ||
   'postgresql://appuser:apppw@localhost:5432/appdb';
