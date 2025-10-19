@@ -198,22 +198,39 @@ function post<T, U>(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const message = parse(req.body);
-        if (!message) {
-            throw new Error('Ensure that you have called app.use(express.json()).');
+        try {
+            const message = parse(req.body);
+            if (!message) {
+                const contentType = req.get('Content-Type') || 'none';
+                throw new Invalid(
+                    `Failed to parse request body for ${req.method} ${req.path}\n\n` +
+                    `The request body could not be parsed into the expected format.\n\n` +
+                    `Received Content-Type: ${contentType}\n\n` +
+                    `Common causes:\n` +
+                    `1. Missing or incorrect Content-Type header (should be 'application/json' for JSON endpoints)\n` +
+                    `2. Invalid JSON syntax in request body\n` +
+                    `3. Missing middleware configuration on server\n\n` +
+                    `To fix:\n` +
+                    `- Client: Ensure Content-Type header matches the data format being sent\n` +
+                    `- Client: Validate JSON syntax before sending\n` +
+                    `- Server: Ensure app.use(express.json()) is called BEFORE mounting the router`
+                );
+            }
+            method(user, message, req.params)
+                .then(response => {
+                    if (!response) {
+                        res.sendStatus(404);
+                        next();
+                    }
+                    else {
+                        output(response, res, (type) => req.accepts(type));
+                        next();
+                    }
+                })
+            .catch(error => handleError(error, req, res, next));
+        } catch (error) {
+            handleError(error, req, res, next);
         }
-        method(user, message, req.params)
-            .then(response => {
-                if (!response) {
-                    res.sendStatus(404);
-                    next();
-                }
-                else {
-                    output(response, res, (type) => req.accepts(type));
-                    next();
-                }
-            })
-        .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -245,7 +262,16 @@ function postStringCreate(method: (user: RequestUser, message: string) => Promis
                 })
                 .catch(error => handleError(error, req, res, next));
         } catch (error) {
-            handleError(error, req, res, next);
+            // Add endpoint context to parsing errors
+            if (error instanceof Invalid && error.message.includes('Expected a string')) {
+                const enhancedError = new Invalid(
+                    `${error.message}\n\n` +
+                    `Endpoint: ${req.method} ${req.path}`
+                );
+                handleError(enhancedError, req, res, next);
+            } else {
+                handleError(error, req, res, next);
+            }
         }
     };
 }
@@ -277,7 +303,17 @@ function postReadWithStreaming(
                 })
                 .catch(error => handleError(error, req, res, next));
         } catch (error) {
-            handleError(error, req, res, next);
+            // Add endpoint context to parsing errors
+            if (error instanceof Invalid && error.message.includes('Expected a string')) {
+                const enhancedError = new Invalid(
+                    `${error.message}\n\n` +
+                    `Endpoint: ${req.method} ${req.path}\n` +
+                    `Expected format: Jinaga specification query as plain text`
+                );
+                handleError(enhancedError, req, res, next);
+            } else {
+                handleError(error, req, res, next);
+            }
         }
     };
 }
@@ -304,7 +340,34 @@ function inputSaveMessage(req: Request): GraphSource {
             read: async (onEnvelopes) => {
                 const message = parseSaveMessage(req.body);
                 if (!message) {
-                    throw new Error('Ensure that you have called app.use(express.json()).');
+                    const contentType = req.get('Content-Type') || 'none';
+                    const bodyType = typeof req.body;
+                    const bodyPreview = req.body ?
+                        (bodyType === 'string' ? req.body.substring(0, 100) : JSON.stringify(req.body).substring(0, 100))
+                        : 'empty';
+                    
+                    throw new Invalid(
+                        `Failed to parse save message for POST ${req.path}\n\n` +
+                        `The request body could not be parsed into a valid save message format.\n\n` +
+                        `Received:\n` +
+                        `- Content-Type: ${contentType}\n` +
+                        `- Body type: ${bodyType}\n` +
+                        `- Body preview: ${bodyPreview}\n\n` +
+                        `Expected format:\n` +
+                        `- Content-Type: 'application/json' OR 'application/x-jinaga-graph-v1'\n` +
+                        `- Body: JSON object with 'facts' array OR streaming graph format\n\n` +
+                        `Common causes:\n` +
+                        `1. Missing Content-Type header in request\n` +
+                        `2. Incorrect Content-Type (must be application/json or application/x-jinaga-graph-v1)\n` +
+                        `3. Invalid JSON syntax in request body\n` +
+                        `4. Request body is empty or malformed\n` +
+                        `5. Server middleware not configured correctly\n\n` +
+                        `To fix:\n` +
+                        `- Client: Set Content-Type header to 'application/json'\n` +
+                        `- Client: Ensure body contains valid JSON with a 'facts' property\n` +
+                        `- Client: Example: { "facts": [ { "type": "MyType", "fields": {} } ] }\n` +
+                        `- Server: Ensure app.use(express.json()) is called BEFORE mounting the router`
+                    );
                 }
                 await onEnvelopes(message.facts.map(fact => ({
                     fact: fact,
