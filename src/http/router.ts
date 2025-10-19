@@ -236,18 +236,16 @@ function postCreate<T>(
 function postStringCreate(method: (user: RequestUser, message: string) => Promise<void>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
-        }
-        else {
+        try {
+            const input = parseString(req.body);
             method(user, input)
                 .then(_ => {
                     res.sendStatus(201);
                     next();
                 })
                 .catch(error => handleError(error, req, res, next));
+        } catch (error) {
+            handleError(error, req, res, next);
         }
     };
 }
@@ -260,12 +258,8 @@ function postReadWithStreaming(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
-        }
-        else {
+        try {
+            const input = parseString(req.body);
             // Check if Accept header explicitly prefers a specific format
             const acceptHeader = req.get('Accept');
             let acceptType: string = 'text/plain'; // Default for backward compatibility
@@ -282,6 +276,8 @@ function postReadWithStreaming(
                     next();
                 })
                 .catch(error => handleError(error, req, res, next));
+        } catch (error) {
+            handleError(error, req, res, next);
         }
     };
 }
@@ -974,7 +970,15 @@ function preProcessForOther(specification: Specification): CsvMetadata | undefin
 
 function parseString(input: any): string {
     if (typeof input !== 'string') {
-        throw new Invalid("Expected a string. Check the content type of the request.");
+        throw new Invalid(
+            "Expected a string but received an object.\n\n" +
+            "This error can occur due to:\n" +
+            "1. Server configuration: Missing express.text() middleware or incorrect middleware order\n" +
+            "2. Client request: Missing or incorrect Content-Type header\n\n" +
+            "To fix:\n" +
+            "- Server: Ensure app.use(express.text()) is called BEFORE the router is mounted\n" +
+            "- Client: Include 'Content-Type: text/plain' header in your request"
+        );
     }
     return input;
 }
