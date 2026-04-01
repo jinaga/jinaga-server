@@ -125,7 +125,7 @@ The observer also registers inverse specification listeners. When FeedA delivers
 
 ## Impact
 
-Any event that has ever been deleted (even if subsequently restored) will have its name and other projection facts permanently withheld from all projection feeds. The event itself still appears (via FeedC — though FeedC has the same bug, so events with any EventDelete also don't appear there). This affects:
+Any event that has ever been deleted (even if subsequently restored) will have its name and other projection facts permanently withheld from all projection feeds, while the base `Event` fact itself still appears (for example via FeedC). This affects:
 
 - `CodeLaunch.Event.Name` — event name not shown in nav dropdown
 - `CodeLaunch.Event.Date` — event dates not shown
