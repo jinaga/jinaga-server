@@ -1,0 +1,51 @@
+name: Upgrade jinaga
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Get versions
+        id: versions
+        run: |
+          CURRENT=$(node -p "require('./package.json').dependencies.jinaga.replace(/[\^~]/, '')")
+          LATEST=$(npm view jinaga dist-tags.latest)
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST"   >> "$GITHUB_OUTPUT"
+
+      - name: Update root
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        run: npm install jinaga@${{ steps.versions.outputs.latest }}
+
+      - name: Update integration-test
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        working-directory: integration-test/jinaga-test
+        run: npm install jinaga@${{ steps.versions.outputs.latest }}
+
+      - name: Open PR
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upgrade/jinaga-${{ steps.versions.outputs.latest }}
+          commit-message: "Upgraded Jinaga to ${{ steps.versions.outputs.latest }}"
+          title: "Upgraded Jinaga to ${{ steps.versions.outputs.latest }}"
+          body: |
+            Automated upgrade of `jinaga` from `${{ steps.versions.outputs.current }}` to `${{ steps.versions.outputs.latest }}`.
+          labels: dependencies
+          delete-branch: true
