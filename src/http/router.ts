@@ -412,7 +412,7 @@ function outputReadResults(
         .catch(error => {
             console.error('Error in outputReadResults:', error);
             if (!res.headersSent) {
-                res.status(500).send('Internal server error');
+                res.type("text").status(500).send('Internal server error');
             }
         });
 }
@@ -1070,6 +1070,7 @@ function extractResults(obj: any): { result: any, count: number } {
 
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {
     const requestPath = req.path;
+    res.set('X-Content-Type-Options', 'nosniff');
     if (error instanceof Forbidden) {
         Trace.warn(`Forbidden: ${error.message} (Path: ${requestPath})`);
         res.type("text");
