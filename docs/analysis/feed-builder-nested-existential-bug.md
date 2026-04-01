@@ -187,5 +187,5 @@ Option B is simpler, has no SQL changes, and aligns with the documented design p
 | File | Role |
 |---|---|
 | `jinaga/src/specification/feed-builder.ts` | `buildExistentialCondition` — drops inner `!E` conditions |
-| `jinaga-server/src/postgres/specification-sql.ts` | `generateNotExistsWhereClause` — only handles flat conditions |
-| `jinaga-server/src/distribution/distribution-engine.ts` | `notExistsConditionsEqual` — explicitly skips nested comparison |
+| `src/postgres/specification-sql.ts` | `generateNotExistsWhereClause` — only handles flat conditions |
+| `jinaga/src/distribution/distribution-engine.ts` | `notExistsConditionsEqual` — explicitly skips nested comparison |
