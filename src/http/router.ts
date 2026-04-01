@@ -345,14 +345,22 @@ function inputSaveMessage(req: Request): GraphSource {
                     const bodyPreview = req.body ?
                         (bodyType === 'string' ? req.body.substring(0, 100) : JSON.stringify(req.body).substring(0, 100))
                         : 'empty';
-                    
+
+                    // Log detailed diagnostics server-side, including a redacted body preview.
+                    console.error(
+                        `Failed to parse save message for POST ${req.path}\n` +
+                        `Received:\n` +
+                        `- Content-Type: ${contentType}\n` +
+                        `- Body type: ${bodyType}\n` +
+                        `- Body preview (first 100 chars): ${bodyPreview}`
+                    );
+
                     throw new Invalid(
                         `Failed to parse save message for POST ${req.path}\n\n` +
                         `The request body could not be parsed into a valid save message format.\n\n` +
                         `Received:\n` +
                         `- Content-Type: ${contentType}\n` +
-                        `- Body type: ${bodyType}\n` +
-                        `- Body preview: ${bodyPreview}\n\n` +
+                        `- Body type: ${bodyType}\n\n` +
                         `Expected format:\n` +
                         `- Content-Type: 'application/json' OR 'application/x-jinaga-graph-v1'\n` +
                         `- Body: JSON object with 'facts' array OR streaming graph format\n\n` +
