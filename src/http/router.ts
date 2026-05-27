@@ -585,9 +585,28 @@ export class HttpRouter {
             // original spec but the distribution rules can rewrite it via
             // intersection (jinaga.js#130), accept the subscription with
             // empty results and let the inverse engine activate it later.
+            //
+            // Even when no rule applies at all, accept the subscription:
+            // the per-query distribution check inside streamFeed /
+            // feed catches Forbidden and keeps the stream alive so the
+            // client can be notified the moment the authorizing fact does
+            // arrive (or a matching rule is added). Failing /feeds here
+            // would force the client to re-subscribe on a poll loop.
             const userIdentity = serializeUserIdentity(user);
-            const branches = await this.resolveSubscriptionBranches(userIdentity, specification, namedStart);
-            const intersected = branches.length !== 1 || branches[0].specification !== specification;
+            let branches: DistributionIntersectionBranch[];
+            let intersected: boolean;
+            try {
+                branches = await this.resolveSubscriptionBranches(userIdentity, specification, namedStart);
+                intersected = branches.length !== 1 || branches[0].specification !== specification;
+            } catch (error) {
+                if (error instanceof Forbidden) {
+                    Trace.warn(`/feeds accepting spec without applicable distribution rule: ${error.message}`);
+                    branches = [{ start, specification }];
+                    intersected = false;
+                } else {
+                    throw error;
+                }
+            }
 
             const feedHashes: string[] = [];
             for (const branch of branches) {
@@ -656,7 +675,19 @@ export class HttpRouter {
 
             const userIdentity = serializeUserIdentity(user);
             const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
-            const results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+            let results;
+            try {
+                results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+            } catch (error) {
+                if (error instanceof Forbidden) {
+                    // The subscription has been accepted; treat poll-time
+                    // distribution failures as an empty page so the client
+                    // can keep polling and pick up results when an
+                    // authorizing fact arrives.
+                    return { references: [], bookmark } as FeedResponse;
+                }
+                throw error;
+            }
             // Return distinct fact references from all the tuples.
             const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
                 self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
@@ -841,8 +872,22 @@ export class HttpRouter {
         while (hasMoreResults && pageCount < maxPages) {
             const pageStart = Date.now();
             console.log(`[InitialResults:${streamId}] Fetching page ${pageCount + 1} - Bookmark: ${bookmark || 'empty'}`);
-            
-            const results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+
+            let results;
+            try {
+                results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+            } catch (error) {
+                if (error instanceof Forbidden) {
+                    // The subscription has already been accepted; tearing
+                    // down the stream on a distribution failure would force
+                    // the client to re-subscribe just to keep waiting.
+                    // Treat as empty and let the listener path re-evaluate
+                    // when an authorizing fact arrives.
+                    console.log(`[InitialResults:${streamId}] Distribution failed (${error.message}) - serving empty and keeping stream live`);
+                    return bookmark;
+                }
+                throw error;
+            }
             const fetchDuration = Date.now() - pageStart;
             
             console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} fetched - Tuples: ${results.tuples.length}, Duration: ${fetchDuration}ms`);
@@ -918,9 +963,21 @@ export class HttpRouter {
         console.log(`[FeedResponse:${responseId}] Starting feed response - Bookmark: ${bookmark || 'empty'}, Skip if empty: ${skipIfEmpty}`);
         
         const feedStart = Date.now();
-        const results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+        let results;
+        try {
+            results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+        } catch (error) {
+            if (error instanceof Forbidden) {
+                // The subscription stays live across distribution failures
+                // so the inverse / anchor listeners can deliver results
+                // once the authorizing fact arrives.
+                console.log(`[FeedResponse:${responseId}] Distribution failed (${error.message}) - keeping stream live`);
+                return bookmark;
+            }
+            throw error;
+        }
         const feedDuration = Date.now() - feedStart;
-        
+
         console.log(`[FeedResponse:${responseId}] Authorization feed complete - Tuples: ${results.tuples.length}, Duration: ${feedDuration}ms`);
         
         // Return distinct fact references from all the tuples.
