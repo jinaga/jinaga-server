@@ -75,6 +75,6 @@ export class MemoryKeystore implements Keystore {
     private generateKeyPair(key: string) {
         const keyPair = generateKeyPair();
         this.keyPairs[key] = keyPair;
-        return keyPair.privatePem;
+        return keyPair.publicPem;
     }
 }

@@ -17,6 +17,11 @@ import {
     factReferenceEquals
 } from "jinaga";
 
+export interface DistributionIntersectionBranch {
+    start: FactReference[];
+    specification: Specification;
+}
+
 import { Keystore } from "../keystore";
 import { DistributedFactCache } from "./distributed-fact-cache";
 
@@ -94,6 +99,25 @@ export class AuthorizationKeystore implements Authorization {
         }
     }
 
+    async feedPreVerified(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
+        // Caller has already established that this feed is safe to serve
+        // (e.g. produced by intersectForSubscribe — the spec lifts its own
+        // authorization condition into the matches and therefore self-
+        // filters). Skip the redundant per-query distribution check, but
+        // keep tracking the returned references so /load stays consistent.
+        const factFeed = await this.store.feed(specification, start, bookmark);
+        if (this.distributionEngine) {
+            const userReference: FactReference | null = userIdentity
+                ? await this.keystore.getUserFact(userIdentity)
+                : null;
+            const factReferences = factFeed.tuples
+                .flatMap(tuple => tuple.facts)
+                .filter((value, index, self) => self.findIndex(factReferenceEquals(value)) === index);
+            this.distributedFacts.add(factReferences, userReference);
+        }
+        return factFeed;
+    }
+
     async load(userIdentity: UserIdentity, references: FactReference[]) {
         if (this.distributionEngine) {
             const userFact = userIdentity ? await this.keystore.getUserFact(userIdentity) : null;
@@ -164,5 +188,29 @@ export class AuthorizationKeystore implements Authorization {
         if (canDistribute.type === "failure") {
             throw new Forbidden(canDistribute.reason);
         }
+    }
+
+    async verifyDistributionOrIntersect(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        namedStart: ReferencesByName
+    ): Promise<DistributionIntersectionBranch[]> {
+        const start = specification.given.map(g => namedStart[g.label.name]);
+        if (!this.distributionEngine) {
+            return [{ start, specification }];
+        }
+        const userReference: FactReference | null = userIdentity
+            ? await this.keystore.getUserFact(userIdentity)
+            : null;
+        const targetFeeds = buildFeeds(specification);
+        const canDistribute = await this.distributionEngine.canDistributeToAll(targetFeeds, namedStart, userReference);
+        if (canDistribute.type === "success") {
+            return [{ start, specification }];
+        }
+        const result = await this.distributionEngine.intersectForSubscribe(start, specification, userReference);
+        if (!result.intersected) {
+            throw new Forbidden(canDistribute.reason);
+        }
+        return result.branches;
     }
 }

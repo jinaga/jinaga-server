@@ -27,11 +27,13 @@ import {
     ProjectedResult,
     ReferencesByName,
     Specification,
+    SpecificationListener,
     SpecificationParser,
     Trace,
     UserIdentity,
     verifyEnvelopes
 } from "jinaga";
+import { DistributionIntersectionBranch } from "../authorization/authorization-keystore";
 import { CsvMetadata } from "./csv-metadata";
 import { validateSpecificationForCsv } from "./csv-validator";
 import { createLineReader } from "./line-reader";
@@ -364,12 +366,30 @@ export interface RequestUser {
     profile: ProfileMessage;
 }
 
+export interface SubscriptionAuthorizer {
+    verifyDistributionOrIntersect(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        namedStart: ReferencesByName
+    ): Promise<DistributionIntersectionBranch[]>;
+    feedPreVerified(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<import("jinaga").FactFeed>;
+}
+
 export class HttpRouter {
     handler: Handler;
+    // Set of feed hashes the server has cleared via intersection. Queries
+    // against these hashes skip the per-request distribution check because
+    // their cached spec self-filters by the lifted auth condition.
+    private intersectedFeedHashes = new Set<string>();
 
     constructor(
         private factManager: FactManager,
-        private authorization: Authorization,
+        private authorization: Authorization & Partial<SubscriptionAuthorizer>,
         private feedCache: FeedCache,
         private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
     ) {
@@ -555,23 +575,69 @@ export class HttpRouter {
             if (failures.length > 0) {
                 throw new Invalid(failures.join("\n"));
             }
-            
+
             const namedStart = specification.given.reduce((map, g, index) => ({
                 ...map,
                 [g.label.name]: start[index]
             }), {} as ReferencesByName);
 
-            // Verify that I can distribute all feeds to the user.
-            const feeds = buildFeeds(specification);
+            // Resolve distribution. When the user is not authorized for the
+            // original spec but the distribution rules can rewrite it via
+            // intersection (jinaga.js#130), accept the subscription with
+            // empty results and let the inverse engine activate it later.
             const userIdentity = serializeUserIdentity(user);
-            await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
+            const branches = await this.resolveSubscriptionBranches(userIdentity, specification, namedStart);
+            const intersected = branches.length !== 1 || branches[0].specification !== specification;
 
-            const feedHashes = this.feedCache.addFeeds(feeds, namedStart);
+            const feedHashes: string[] = [];
+            for (const branch of branches) {
+                const branchNamedStart = branch.specification.given.reduce((map, g, index) => ({
+                    ...map,
+                    [g.label.name]: branch.start[index]
+                }), {} as ReferencesByName);
+                const branchFeeds = buildFeeds(branch.specification);
+                const branchHashes = this.feedCache.addFeeds(branchFeeds, branchNamedStart);
+                feedHashes.push(...branchHashes);
+                if (intersected) {
+                    for (const hash of branchHashes) {
+                        this.intersectedFeedHashes.add(hash);
+                    }
+                }
+            }
 
             return {
                 feeds: feedHashes
             }
         });
+    }
+
+    private queryFeed(
+        feedHash: string,
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<import("jinaga").FactFeed> {
+        if (this.intersectedFeedHashes.has(feedHash) && this.authorization.feedPreVerified) {
+            return this.authorization.feedPreVerified(userIdentity, specification, start, bookmark);
+        }
+        return this.authorization.feed(userIdentity, specification, start, bookmark);
+    }
+
+    private async resolveSubscriptionBranches(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        namedStart: ReferencesByName
+    ): Promise<DistributionIntersectionBranch[]> {
+        const start = specification.given.map(g => namedStart[g.label.name]);
+        if (this.authorization.verifyDistributionOrIntersect) {
+            return await this.authorization.verifyDistributionOrIntersect(userIdentity, specification, namedStart);
+        }
+        // Fall back to plain verification for Authorization implementations
+        // that don't expose the intersect path.
+        const feeds = buildFeeds(specification);
+        await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
+        return [{ start, specification }];
     }
 
     private feed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<FeedResponse | null> {
@@ -590,7 +656,7 @@ export class HttpRouter {
 
             const userIdentity = serializeUserIdentity(user);
             const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
-            const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+            const results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
             // Return distinct fact references from all the tuples.
             const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
                 self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
@@ -636,7 +702,7 @@ export class HttpRouter {
             // Continuous initial query until exhausted
             console.log(`[StreamFeed:${connectionId}] Starting initial data streaming...`);
             const initialStart = Date.now();
-            bookmark = await this.streamAllInitialResults(userIdentity, feedDefinition, start, bookmark, stream);
+            bookmark = await this.streamAllInitialResults(feedHash, userIdentity, feedDefinition, start, bookmark, stream);
             const initialDuration = Date.now() - initialStart;
             console.log(`[StreamFeed:${connectionId}] Initial data streaming complete - Duration: ${initialDuration}ms, Final bookmark: ${bookmark || 'empty'}`);
             
@@ -664,7 +730,7 @@ export class HttpRouter {
                             if (matchingResults.length != 0) {
                                 console.log(`[StreamFeed:${connectionId}] Processing matching results...`);
                                 const responseStart = Date.now();
-                                bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
+                                bookmark = await this.streamFeedResponse(feedHash, userIdentity, feedDefinition, start, bookmark, stream, true);
                                 const responseDuration = Date.now() - responseStart;
                                 console.log(`[StreamFeed:${connectionId}] Feed response sent - Duration: ${responseDuration}ms, New bookmark: ${bookmark || 'empty'}`);
                             } else {
@@ -714,6 +780,7 @@ export class HttpRouter {
     }
 
     private async streamAllInitialResults(
+        feedHash: string,
         userIdentity: UserIdentity | null,
         feedDefinition: FeedObject,
         start: FactReference[],
@@ -734,7 +801,7 @@ export class HttpRouter {
             const pageStart = Date.now();
             console.log(`[InitialResults:${streamId}] Fetching page ${pageCount + 1} - Bookmark: ${bookmark || 'empty'}`);
             
-            const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+            const results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
             const fetchDuration = Date.now() - pageStart;
             
             console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} fetched - Tuples: ${results.tuples.length}, Duration: ${fetchDuration}ms`);
@@ -803,14 +870,14 @@ export class HttpRouter {
         return bookmark;
     }
 
-    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
+    private async streamFeedResponse(feedHash: string, userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
         const responseId = Math.random().toString(36).substring(2, 6);
         const startTime = Date.now();
         
         console.log(`[FeedResponse:${responseId}] Starting feed response - Bookmark: ${bookmark || 'empty'}, Skip if empty: ${skipIfEmpty}`);
         
         const feedStart = Date.now();
-        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+        const results = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
         const feedDuration = Date.now() - feedStart;
         
         console.log(`[FeedResponse:${responseId}] Authorization feed complete - Tuples: ${results.tuples.length}, Duration: ${feedDuration}ms`);
