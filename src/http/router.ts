@@ -749,11 +749,45 @@ export class HttpRouter {
             });
             
             console.log(`[StreamFeed:${connectionId}] All listeners registered - Count: ${listeners.length}`);
-            
+
+            // Anchor listeners (jinaga.js#129): the inverse-listener path
+            // above only fires when a descendant of the given arrives. If
+            // the given fact itself isn't yet in the store when the client
+            // subscribes, neither the initial query nor any later inverse
+            // can deliver results until the given is recorded — and the
+            // given fact has no descendants whose save would re-trigger the
+            // inverse with the matching givenHash. Register a listener per
+            // unique anchor that re-runs streamFeedResponse the moment a
+            // saved fact matches the anchor's (type, hash).
+            const uniqueAnchors = start.filter((s, i, arr) =>
+                arr.findIndex(other => other.type === s.type && other.hash === s.hash) === i);
+            console.log(`[StreamFeed:${connectionId}] Registering ${uniqueAnchors.length} anchor listener(s)`);
+            const anchorListeners = uniqueAnchors.map(anchor => {
+                const anchorSpec: Specification = {
+                    given: [{ label: { name: "x", type: anchor.type }, conditions: [] }],
+                    matches: [],
+                    projection: { type: "fact", label: "x" }
+                };
+                return this.factManager.addSpecificationListener(anchorSpec, async (results) => {
+                    try {
+                        const matched = results.some(pr => {
+                            const ref = pr.tuple && (pr.tuple as any).x;
+                            return ref && ref.type === anchor.type && ref.hash === anchor.hash;
+                        });
+                        if (matched) {
+                            console.log(`[StreamFeed:${connectionId}] Anchor fact arrived - Type: ${anchor.type}, Hash: ${anchor.hash.substring(0, 8)}...`);
+                            bookmark = await this.streamFeedResponse(feedHash, userIdentity, feedDefinition, start, bookmark, stream, true);
+                        }
+                    } catch (error) {
+                        console.error(`[StreamFeed:${connectionId}] ERROR in anchor listener: ${error}`);
+                    }
+                });
+            });
+
             stream.done(() => {
                 const cleanupStart = Date.now();
-                console.log(`[StreamFeed:${connectionId}] CLEANUP STARTED - Removing ${listeners.length} listeners`);
-                
+                console.log(`[StreamFeed:${connectionId}] CLEANUP STARTED - Removing ${listeners.length + anchorListeners.length} listener(s)`);
+
                 for (let i = 0; i < listeners.length; i++) {
                     try {
                         this.factManager.removeSpecificationListener(listeners[i]);
@@ -762,7 +796,14 @@ export class HttpRouter {
                         console.error(`[StreamFeed:${connectionId}] ERROR removing listener ${i + 1}: ${error}`);
                     }
                 }
-                
+                for (let i = 0; i < anchorListeners.length; i++) {
+                    try {
+                        this.factManager.removeSpecificationListener(anchorListeners[i]);
+                    } catch (error) {
+                        console.error(`[StreamFeed:${connectionId}] ERROR removing anchor listener ${i + 1}: ${error}`);
+                    }
+                }
+
                 const cleanupDuration = Date.now() - cleanupStart;
                 const totalDuration = Date.now() - startTime;
                 console.log(`[StreamFeed:${connectionId}] CLEANUP COMPLETE - Cleanup duration: ${cleanupDuration}ms, Total connection duration: ${totalDuration}ms`);
