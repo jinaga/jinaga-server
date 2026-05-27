@@ -288,6 +288,10 @@ function postReadWithStreaming(
     };
 }
 
+function subscriptionOwnerKey(userIdentity: UserIdentity | null): string | null {
+    return userIdentity ? `${userIdentity.provider}|${userIdentity.id}` : null;
+}
+
 function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     if (!user) {
         return null;
@@ -382,10 +386,15 @@ export interface SubscriptionAuthorizer {
 
 export class HttpRouter {
     handler: Handler;
-    // Set of feed hashes the server has cleared via intersection. Queries
-    // against these hashes skip the per-request distribution check because
-    // their cached spec self-filters by the lifted auth condition.
-    private intersectedFeedHashes = new Set<string>();
+    // Map from feed hash → owning user key, for feeds the server cleared
+    // via intersection. The cached spec self-filters by the lifted auth
+    // condition (the requesting user's fact is baked into start), so it
+    // is safe to skip the per-query distribution check — but ONLY for
+    // the same user who originally requested the subscription. Another
+    // authenticated user who somehow obtained the hash must go through
+    // the normal authorization.feed path, which will deny their request
+    // since the intersected spec is not authorizable in its own right.
+    private intersectedFeedOwners = new Map<string, string | null>();
 
     constructor(
         private factManager: FactManager,
@@ -608,6 +617,7 @@ export class HttpRouter {
                 }
             }
 
+            const ownerKey = subscriptionOwnerKey(userIdentity);
             const feedHashes: string[] = [];
             for (const branch of branches) {
                 const branchNamedStart = branch.specification.given.reduce((map, g, index) => ({
@@ -619,7 +629,12 @@ export class HttpRouter {
                 feedHashes.push(...branchHashes);
                 if (intersected) {
                     for (const hash of branchHashes) {
-                        this.intersectedFeedHashes.add(hash);
+                        // Bind the hash to its owner so a different
+                        // authenticated user who obtains it cannot reuse
+                        // the cached spec — which carries the original
+                        // owner's user fact in its start — to fetch
+                        // facts authorized for that owner.
+                        this.intersectedFeedOwners.set(hash, ownerKey);
                     }
                 }
             }
@@ -637,9 +652,17 @@ export class HttpRouter {
         start: FactReference[],
         bookmark: string
     ): Promise<import("jinaga").FactFeed> {
-        if (this.intersectedFeedHashes.has(feedHash) && this.authorization.feedPreVerified) {
+        const cachedOwner = this.intersectedFeedOwners.get(feedHash);
+        const requesterOwner = subscriptionOwnerKey(userIdentity);
+        if (cachedOwner !== undefined
+            && cachedOwner === requesterOwner
+            && this.authorization.feedPreVerified) {
             return this.authorization.feedPreVerified(userIdentity, specification, start, bookmark);
         }
+        // For everyone else (different user, anonymous mismatch, or a
+        // non-intersected hash) go through the normal distribution-checked
+        // path. If that user isn't authorized, Forbidden propagates and
+        // the streaming / polling caller turns it into an empty page.
         return this.authorization.feed(userIdentity, specification, start, bookmark);
     }
 

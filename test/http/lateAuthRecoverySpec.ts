@@ -153,6 +153,67 @@ describe("late-auth subscription recovery", () => {
             .toContain(dehydrateFact(existingOffice).find(f => f.type === Office.Type)!.hash);
     });
 
+    it("does not let another authenticated user reuse an intersected feed hash", async () => {
+        const h = await makeHarness();
+        const company = new Company(h.creator, "Acme");
+        const companyRef = dehydrateFact(company).find(f => f.type === Company.Type)!;
+
+        // Alice (the subscriber) gets an authorizing Administrator and an
+        // existing Office. Without intersection she would already be
+        // authorized — but we want the *cached* intersected hash, so we
+        // build it before saving the Administrator.
+        const office = new Office(company, "HQ");
+        await h.factManager.save(dehydrateFact(office).map(f => ({ fact: f, signatures: [] })));
+
+        const input =
+            `let p1: ${Company.Type} = #${companyRef.hash}\n` +
+            `(p1: ${Company.Type}) {\n` +
+            `    o: ${Office.Type} [\n` +
+            `        o->company: ${Company.Type} = p1\n` +
+            `    ]\n` +
+            `} => o`;
+
+        const aliceResponse = await (h.router as any).feeds(h.requestUser, input);
+        const intersectedHash: string = aliceResponse.feeds[0];
+
+        // Now grant Alice the Administrator role so the lifted spec
+        // actually produces rows when queried as Alice.
+        const admin = new Administrator(company, h.subscriber, new Date("2026-05-27"));
+        await h.factManager.save(dehydrateFact(admin).map(f => ({ fact: f, signatures: [] })));
+
+        // Alice can read her own intersected feed and sees the office.
+        const alicePage = await (h.router as any).feed(h.requestUser, { hash: intersectedHash }, {});
+        expect(alicePage.references.some((r: any) => r.type === Office.Type)).toBe(true);
+
+        // Mallory authenticates as a different user, then attempts to
+        // reuse the hash she obtained out of band. She must not be able
+        // to read Alice's data: the cached spec carries Alice's user
+        // fact, so allowing feedPreVerified would leak across users.
+        const malloryIdentity = { provider: "mock", id: "mallory" };
+        // Register Mallory with the keystore so getUserFact succeeds.
+        const malloryKeystore = (h.factManager as any); // unused; just to satisfy types
+        void malloryKeystore;
+        // The harness keystore is private; the lookup happens via the
+        // authorization keystore which the router holds. Re-using the
+        // harness keystore: get a fact for Mallory directly.
+        // (We rely on the keystore being shared with authorization.)
+        const malloryRequest: RequestUser = {
+            provider: malloryIdentity.provider,
+            id: malloryIdentity.id,
+            profile: {} as any
+        };
+
+        // First make Mallory exist in the keystore via a login-style call.
+        await (h.router as any).login(malloryRequest);
+
+        const malloryPage = await (h.router as any).feed(malloryRequest, { hash: intersectedHash }, {});
+        // The router must NOT have served Alice's data to Mallory. With
+        // the bind-to-owner fix in place, queryFeed routes Mallory
+        // through the normal distribution check, which fails, and the
+        // polling path returns an empty page.
+        expect(malloryPage.references.filter((r: any) => r.type === Office.Type)).toHaveLength(0);
+    });
+
     it("does not return a 403 from /feeds when no rule applies — connection stays available", async () => {
         const h = await makeHarness();
 
