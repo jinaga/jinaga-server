@@ -32,6 +32,7 @@ import {
     UserIdentity,
     verifyEnvelopes
 } from "jinaga";
+import { DistributionIntersectionBranch, FeedResult, SubscriptionAuthorizer } from "../authorization/authorization-keystore";
 import { CsvMetadata } from "./csv-metadata";
 import { validateSpecificationForCsv } from "./csv-validator";
 import { createLineReader } from "./line-reader";
@@ -286,6 +287,10 @@ function postReadWithStreaming(
     };
 }
 
+function subscriptionOwnerKey(userIdentity: UserIdentity | null): string | null {
+    return userIdentity ? `${userIdentity.provider}|${userIdentity.id}` : null;
+}
+
 function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     if (!user) {
         return null;
@@ -366,10 +371,19 @@ export interface RequestUser {
 
 export class HttpRouter {
     handler: Handler;
+    // Map from feed hash → owning user key, for feeds the server cleared
+    // via intersection. The cached spec self-filters by the lifted auth
+    // condition (the requesting user's fact is baked into start), so it
+    // is safe to skip the per-query distribution check — but ONLY for
+    // the same user who originally requested the subscription. Another
+    // authenticated user who somehow obtained the hash must go through
+    // the normal authorization.feed path, which will deny their request
+    // since the intersected spec is not authorizable in its own right.
+    private intersectedFeedOwners = new Map<string, string | null>();
 
     constructor(
         private factManager: FactManager,
-        private authorization: Authorization,
+        private authorization: Authorization & SubscriptionAuthorizer,
         private feedCache: FeedCache,
         private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
     ) {
@@ -555,23 +569,95 @@ export class HttpRouter {
             if (failures.length > 0) {
                 throw new Invalid(failures.join("\n"));
             }
-            
+
             const namedStart = specification.given.reduce((map, g, index) => ({
                 ...map,
                 [g.label.name]: start[index]
             }), {} as ReferencesByName);
 
-            // Verify that I can distribute all feeds to the user.
-            const feeds = buildFeeds(specification);
+            // Resolve distribution. When the user is not authorized for the
+            // original spec but the distribution rules can rewrite it via
+            // intersection (jinaga.js#130), accept the subscription with
+            // empty results and let the inverse engine activate it later.
+            //
+            // Even when no rule applies at all, accept the subscription:
+            // the per-query distribution check inside streamFeed /
+            // feed returns "denied" and keeps the stream alive so the
+            // client can be notified the moment the authorizing fact
+            // arrives. Failing /feeds here would force the client to
+            // re-subscribe on a poll loop.
             const userIdentity = serializeUserIdentity(user);
-            await this.authorization.verifyDistribution(userIdentity, feeds, namedStart);
+            const intersectResult = await this.authorization.verifyDistributionOrIntersect(userIdentity, specification, namedStart);
+            let branches: DistributionIntersectionBranch[];
+            let intersected: boolean;
+            if (intersectResult.type === "denied") {
+                Trace.warn(`/feeds accepting spec without applicable distribution rule: ${intersectResult.reason}`);
+                branches = [{ start, specification }];
+                intersected = false;
+            } else {
+                branches = intersectResult.branches;
+                intersected = branches.length !== 1 || branches[0].specification !== specification;
+            }
 
-            const feedHashes = this.feedCache.addFeeds(feeds, namedStart);
+            const ownerKey = subscriptionOwnerKey(userIdentity);
+            const feedHashes: string[] = [];
+            for (const branch of branches) {
+                const branchNamedStart = branch.specification.given.reduce((map, g, index) => ({
+                    ...map,
+                    [g.label.name]: branch.start[index]
+                }), {} as ReferencesByName);
+                const branchFeeds = buildFeeds(branch.specification);
+                const branchHashes = this.feedCache.addFeeds(branchFeeds, branchNamedStart);
+                feedHashes.push(...branchHashes);
+                if (intersected) {
+                    for (const hash of branchHashes) {
+                        // Bind the hash to its owner so a different
+                        // authenticated user who obtains it cannot reuse
+                        // the cached spec — which carries the original
+                        // owner's user fact in its start — to fetch
+                        // facts authorized for that owner.
+                        //
+                        // The map allows only one owner per hash, which
+                        // relies on the invariant that intersected specs
+                        // bind the requesting user's fact into start —
+                        // making the hash user-specific. If two distinct
+                        // owners ever collide on the same hash, that
+                        // invariant has broken in intersectForSubscribe;
+                        // warn so we notice instead of silently
+                        // overwriting.
+                        const existing = this.intersectedFeedOwners.get(hash);
+                        if (existing !== undefined && existing !== ownerKey) {
+                            Trace.warn(`Intersected feed hash ${hash} re-bound from owner ${existing} to ${ownerKey}; intersection invariant may be broken`);
+                        }
+                        this.intersectedFeedOwners.set(hash, ownerKey);
+                    }
+                }
+            }
 
             return {
                 feeds: feedHashes
             }
         });
+    }
+
+    private async queryFeed(
+        feedHash: string,
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<FeedResult> {
+        const cachedOwner = this.intersectedFeedOwners.get(feedHash);
+        const requesterOwner = subscriptionOwnerKey(userIdentity);
+        if (cachedOwner !== undefined && cachedOwner === requesterOwner) {
+            const feed = await this.authorization.feedPreVerified(userIdentity, specification, start, bookmark);
+            return { type: "success", feed };
+        }
+        // For everyone else (different user, anonymous mismatch, or a
+        // non-intersected hash) go through the normal distribution-checked
+        // path. A "denied" result means the streaming / polling caller
+        // serves an empty page and keeps the subscription alive.
+        return await this.authorization.feedWithDistribution(userIdentity, specification, start, bookmark);
     }
 
     private feed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<FeedResponse | null> {
@@ -590,14 +676,21 @@ export class HttpRouter {
 
             const userIdentity = serializeUserIdentity(user);
             const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
-            const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+            const result = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+            if (result.type === "denied") {
+                // The subscription has been accepted; treat poll-time
+                // distribution failures as an empty page so the client
+                // can keep polling and pick up results when an
+                // authorizing fact arrives.
+                return { references: [], bookmark } as FeedResponse;
+            }
             // Return distinct fact references from all the tuples.
-            const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
+            const references = result.feed.tuples.flatMap(t => t.facts).filter((value, index, self) =>
                 self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
             );
             const response: FeedResponse = {
                 references,
-                bookmark: results.bookmark
+                bookmark: result.feed.bookmark
             };
             return response;
         });
@@ -636,7 +729,7 @@ export class HttpRouter {
             // Continuous initial query until exhausted
             console.log(`[StreamFeed:${connectionId}] Starting initial data streaming...`);
             const initialStart = Date.now();
-            bookmark = await this.streamAllInitialResults(userIdentity, feedDefinition, start, bookmark, stream);
+            bookmark = await this.streamAllInitialResults(feedHash, userIdentity, feedDefinition, start, bookmark, stream);
             const initialDuration = Date.now() - initialStart;
             console.log(`[StreamFeed:${connectionId}] Initial data streaming complete - Duration: ${initialDuration}ms, Final bookmark: ${bookmark || 'empty'}`);
             
@@ -664,7 +757,7 @@ export class HttpRouter {
                             if (matchingResults.length != 0) {
                                 console.log(`[StreamFeed:${connectionId}] Processing matching results...`);
                                 const responseStart = Date.now();
-                                bookmark = await this.streamFeedResponse(userIdentity, feedDefinition, start, bookmark, stream, true);
+                                bookmark = await this.streamFeedResponse(feedHash, userIdentity, feedDefinition, start, bookmark, stream, true);
                                 const responseDuration = Date.now() - responseStart;
                                 console.log(`[StreamFeed:${connectionId}] Feed response sent - Duration: ${responseDuration}ms, New bookmark: ${bookmark || 'empty'}`);
                             } else {
@@ -683,11 +776,45 @@ export class HttpRouter {
             });
             
             console.log(`[StreamFeed:${connectionId}] All listeners registered - Count: ${listeners.length}`);
-            
+
+            // Anchor listeners (jinaga.js#129): the inverse-listener path
+            // above only fires when a descendant of the given arrives. If
+            // the given fact itself isn't yet in the store when the client
+            // subscribes, neither the initial query nor any later inverse
+            // can deliver results until the given is recorded — and the
+            // given fact has no descendants whose save would re-trigger the
+            // inverse with the matching givenHash. Register a listener per
+            // unique anchor that re-runs streamFeedResponse the moment a
+            // saved fact matches the anchor's (type, hash).
+            const uniqueAnchors = start.filter((s, i, arr) =>
+                arr.findIndex(other => other.type === s.type && other.hash === s.hash) === i);
+            console.log(`[StreamFeed:${connectionId}] Registering ${uniqueAnchors.length} anchor listener(s)`);
+            const anchorListeners = uniqueAnchors.map(anchor => {
+                const anchorSpec: Specification = {
+                    given: [{ label: { name: "x", type: anchor.type }, conditions: [] }],
+                    matches: [],
+                    projection: { type: "fact", label: "x" }
+                };
+                return this.factManager.addSpecificationListener(anchorSpec, async (results) => {
+                    try {
+                        const matched = results.some(pr => {
+                            const ref = pr.tuple && (pr.tuple as any).x;
+                            return ref && ref.type === anchor.type && ref.hash === anchor.hash;
+                        });
+                        if (matched) {
+                            console.log(`[StreamFeed:${connectionId}] Anchor fact arrived - Type: ${anchor.type}, Hash: ${anchor.hash.substring(0, 8)}...`);
+                            bookmark = await this.streamFeedResponse(feedHash, userIdentity, feedDefinition, start, bookmark, stream, true);
+                        }
+                    } catch (error) {
+                        console.error(`[StreamFeed:${connectionId}] ERROR in anchor listener: ${error}`);
+                    }
+                });
+            });
+
             stream.done(() => {
                 const cleanupStart = Date.now();
-                console.log(`[StreamFeed:${connectionId}] CLEANUP STARTED - Removing ${listeners.length} listeners`);
-                
+                console.log(`[StreamFeed:${connectionId}] CLEANUP STARTED - Removing ${listeners.length + anchorListeners.length} listener(s)`);
+
                 for (let i = 0; i < listeners.length; i++) {
                     try {
                         this.factManager.removeSpecificationListener(listeners[i]);
@@ -696,7 +823,14 @@ export class HttpRouter {
                         console.error(`[StreamFeed:${connectionId}] ERROR removing listener ${i + 1}: ${error}`);
                     }
                 }
-                
+                for (let i = 0; i < anchorListeners.length; i++) {
+                    try {
+                        this.factManager.removeSpecificationListener(anchorListeners[i]);
+                    } catch (error) {
+                        console.error(`[StreamFeed:${connectionId}] ERROR removing anchor listener ${i + 1}: ${error}`);
+                    }
+                }
+
                 const cleanupDuration = Date.now() - cleanupStart;
                 const totalDuration = Date.now() - startTime;
                 console.log(`[StreamFeed:${connectionId}] CLEANUP COMPLETE - Cleanup duration: ${cleanupDuration}ms, Total connection duration: ${totalDuration}ms`);
@@ -714,6 +848,7 @@ export class HttpRouter {
     }
 
     private async streamAllInitialResults(
+        feedHash: string,
         userIdentity: UserIdentity | null,
         feedDefinition: FeedObject,
         start: FactReference[],
@@ -733,10 +868,20 @@ export class HttpRouter {
         while (hasMoreResults && pageCount < maxPages) {
             const pageStart = Date.now();
             console.log(`[InitialResults:${streamId}] Fetching page ${pageCount + 1} - Bookmark: ${bookmark || 'empty'}`);
-            
-            const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+
+            const queryResult = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+            if (queryResult.type === "denied") {
+                // The subscription has already been accepted; tearing
+                // down the stream on a distribution failure would force
+                // the client to re-subscribe just to keep waiting.
+                // Treat as empty and let the listener path re-evaluate
+                // when an authorizing fact arrives.
+                console.log(`[InitialResults:${streamId}] Distribution failed (${queryResult.reason}) - serving empty and keeping stream live`);
+                return bookmark;
+            }
+            const results = queryResult.feed;
             const fetchDuration = Date.now() - pageStart;
-            
+
             console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} fetched - Tuples: ${results.tuples.length}, Duration: ${fetchDuration}ms`);
             
             // Check if we got results
@@ -803,16 +948,24 @@ export class HttpRouter {
         return bookmark;
     }
 
-    private async streamFeedResponse(userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
+    private async streamFeedResponse(feedHash: string, userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
         const responseId = Math.random().toString(36).substring(2, 6);
         const startTime = Date.now();
         
         console.log(`[FeedResponse:${responseId}] Starting feed response - Bookmark: ${bookmark || 'empty'}, Skip if empty: ${skipIfEmpty}`);
         
         const feedStart = Date.now();
-        const results = await this.authorization.feed(userIdentity, feedDefinition.feed, start, bookmark);
+        const queryResult = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+        if (queryResult.type === "denied") {
+            // The subscription stays live across distribution failures
+            // so the inverse / anchor listeners can deliver results
+            // once the authorizing fact arrives.
+            console.log(`[FeedResponse:${responseId}] Distribution failed (${queryResult.reason}) - keeping stream live`);
+            return bookmark;
+        }
+        const results = queryResult.feed;
         const feedDuration = Date.now() - feedStart;
-        
+
         console.log(`[FeedResponse:${responseId}] Authorization feed complete - Tuples: ${results.tuples.length}, Duration: ${feedDuration}ms`);
         
         // Return distinct fact references from all the tuples.
