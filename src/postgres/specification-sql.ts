@@ -140,7 +140,13 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: Exis
     }
     const tailJoins: string[] = generateJoins(schema, notExistsWhereClause.edges.slice(1), writtenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
-    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}`;
+    const inputWhereClauses = notExistsWhereClause.inputs
+        .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
+        .join("");
+    const nestedExistsWhereClauses = notExistsWhereClause.existentialConditions
+        .map(nested => ` AND ${nested.exists ? "EXISTS" : "NOT EXISTS"} (${generateNotExistsWhereClause(schema, nested, writtenFactIndexes)})`)
+        .join("");
+    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${nestedExistsWhereClauses}`;
 }
 
 function parseBookmark(bookmark: string): number[] {
