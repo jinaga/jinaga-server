@@ -620,6 +620,19 @@ export class HttpRouter {
                         // the cached spec — which carries the original
                         // owner's user fact in its start — to fetch
                         // facts authorized for that owner.
+                        //
+                        // The map allows only one owner per hash, which
+                        // relies on the invariant that intersected specs
+                        // bind the requesting user's fact into start —
+                        // making the hash user-specific. If two distinct
+                        // owners ever collide on the same hash, that
+                        // invariant has broken in intersectForSubscribe;
+                        // warn so we notice instead of silently
+                        // overwriting.
+                        const existing = this.intersectedFeedOwners.get(hash);
+                        if (existing !== undefined && existing !== ownerKey) {
+                            Trace.warn(`Intersected feed hash ${hash} re-bound from owner ${existing} to ${ownerKey}; intersection invariant may be broken`);
+                        }
                         this.intersectedFeedOwners.set(hash, ownerKey);
                     }
                 }
