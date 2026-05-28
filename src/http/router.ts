@@ -27,7 +27,6 @@ import {
     ProjectedResult,
     ReferencesByName,
     Specification,
-    SpecificationListener,
     SpecificationParser,
     Trace,
     UserIdentity,
@@ -584,9 +583,9 @@ export class HttpRouter {
             // Even when no rule applies at all, accept the subscription:
             // the per-query distribution check inside streamFeed /
             // feed catches Forbidden and keeps the stream alive so the
-            // client can be notified the moment the authorizing fact does
-            // arrive (or a matching rule is added). Failing /feeds here
-            // would force the client to re-subscribe on a poll loop.
+            // client can be notified the moment the authorizing fact
+            // arrives. Failing /feeds here would force the client to
+            // re-subscribe on a poll loop.
             const userIdentity = serializeUserIdentity(user);
             let branches: DistributionIntersectionBranch[];
             let intersected: boolean;
