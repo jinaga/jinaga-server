@@ -116,6 +116,40 @@ export class QueryDescription {
         }
     }
 
+    public withInputOnExistingFact(label: Label, factTypeId: number, factHash: string, factIndex: number, path: number[]): QueryDescription {
+        const factTypeParameter = this.parameters.length + 1;
+        const factHashParameter = factTypeParameter + 1;
+        const input: InputDescription = {
+            label: label.name,
+            type: label.type,
+            factIndex,
+            factTypeParameter,
+            factHashParameter
+        };
+        const parameters = this.parameters.concat(factTypeId, factHash);
+        if (path.length === 0) {
+            return new QueryDescription(
+                [...this.inputs, input],
+                parameters,
+                this.outputs,
+                this.facts,
+                this.edges,
+                this.existentialConditions
+            );
+        }
+        else {
+            const existentialConditions = existentialsWithInput(this.existentialConditions, input, path);
+            return new QueryDescription(
+                this.inputs,
+                parameters,
+                this.outputs,
+                this.facts,
+                this.edges,
+                existentialConditions
+            );
+        }
+    }
+
     public withFact(type: string): { query: QueryDescription; factIndex: number; } {
         const factIndex = this.facts.length + 1;
         const fact = { factIndex, type };
@@ -327,17 +361,38 @@ export class QueryDescriptionBuilder {
             if (!factTypeId) {
                 return { queryDescription: QueryDescription.unsatisfiable, knownFacts };
             }
-            const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
-                given[givenIndex],
-                factTypeId,
-                start[givenIndex].hash,
-                path
-            );
-            queryDescription = newQueryDescription;
-            knownFacts = {
-                ...knownFacts,
-                [condition.labelRight]: factDescription
-            };
+            // When this is an identity path condition (no roles on either side)
+            // and the unknown has already been allocated, unify the given with
+            // the existing fact: register the type+hash filter on the existing
+            // factIndex rather than allocating a disconnected fact node.
+            const existingUnknown = knownFacts[unknown.name];
+            const isIdentity = condition.rolesLeft.length === 0 && condition.rolesRight.length === 0;
+            if (isIdentity && existingUnknown) {
+                queryDescription = queryDescription.withInputOnExistingFact(
+                    given[givenIndex],
+                    factTypeId,
+                    start[givenIndex].hash,
+                    existingUnknown.factIndex,
+                    path
+                );
+                knownFacts = {
+                    ...knownFacts,
+                    [condition.labelRight]: existingUnknown
+                };
+            }
+            else {
+                const { queryDescription: newQueryDescription, factDescription } = queryDescription.withInputParameter(
+                    given[givenIndex],
+                    factTypeId,
+                    start[givenIndex].hash,
+                    path
+                );
+                queryDescription = newQueryDescription;
+                knownFacts = {
+                    ...knownFacts,
+                    [condition.labelRight]: factDescription
+                };
+            }
         }
 
         // Determine whether we have already written the output.

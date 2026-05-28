@@ -162,13 +162,7 @@ describe('Distribution rule with multi-given share/with', () => {
     expect(taskRefs.map(r => r.hash)).toContain(taskHash);
   });
 
-  // TODO: re-enable once the PostgresStore SQL builder handles multi-given
-  // intersected specs. Without ProjectAccess, the outsider triggers
-  // intersectForSubscribe, which produces a lifted spec whose second
-  // given is referenced in WHERE without a JOIN — Postgres rejects with
-  // "missing FROM-clause entry for f5". The authorized path (test above)
-  // works because intersection doesn't run.
-  it.skip('hides tasks from a user without ProjectAccess through the same 2-given subscription', async () => {
+  it('hides tasks from a user without ProjectAccess through the same 2-given subscription', async () => {
     const outsiderId = 'mg-outsider-' + randomSuffix();
     await asUser(withSession, outsiderId, async (j) => { /* login only */ });
 

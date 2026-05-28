@@ -123,16 +123,7 @@ describe('Subscription late-auth recovery', () => {
     expect(officeRefs).toHaveLength(0);
   });
 
-  // TODO: re-enable once the PostgresStore SQL builder handles multi-given
-  // intersected specs. Today, intersectForSubscribe produces a 2-given spec
-  // whose second given (the subscriber's user fact) is referenced in WHERE
-  // (`f4.fact_type_id = $5 AND f4.hash = $6`) without a corresponding JOIN,
-  // and Postgres rejects the query with "missing FROM-clause entry for f4".
-  // This bug is separate from PR #163 but is exposed by its intersection
-  // path. The empty-page contract (test above) still passes because the
-  // initial poll matches no tuples; the failure here is on the post-auth
-  // poll where the spec actually has rows to return.
-  it.skip('surfaces existing offices once the authorizing fact arrives', async () => {
+  it('surfaces existing offices once the authorizing fact arrives', async () => {
     let companyValue;
     let creatorFactValue;
     const creatorId = 'creator-2-' + randomSuffix();
@@ -193,11 +184,7 @@ describe('Subscription late-auth recovery', () => {
     expect(officeRefs.map(r => r.hash)).toContain(officeHash);
   });
 
-  // TODO: re-enable once the multi-given SQL builder bug is fixed (see
-  // skip note above). Same root cause — Alice's intersected hash maps to
-  // a 2-given spec whose Alice-user fact reference dangles in WHERE, so
-  // the poll throws 500 even before the per-owner check can apply.
-  it.skip('does not let a different authenticated user reuse an intersected feed hash', async () => {
+  it('does not let a different authenticated user reuse an intersected feed hash', async () => {
     let companyValue;
     const creatorId = 'creator-3-' + randomSuffix();
     const { companyHash } = await asUser(withSession, creatorId, async (creatorJ) => {
