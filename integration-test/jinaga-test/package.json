@@ -8,7 +8,8 @@
     "test:verbose": "jest --silent=false --verbose false"
   },
   "jest": {
-    "verbose": false
+    "verbose": false,
+    "testTimeout": 30000
   },
   "author": "Michael L Perry",
   "license": "MIT",
