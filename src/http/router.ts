@@ -33,7 +33,7 @@ import {
     UserIdentity,
     verifyEnvelopes
 } from "jinaga";
-import { DistributionIntersectionBranch } from "../authorization/authorization-keystore";
+import { DistributionIntersectionBranch, SubscriptionAuthorizer } from "../authorization/authorization-keystore";
 import { CsvMetadata } from "./csv-metadata";
 import { validateSpecificationForCsv } from "./csv-validator";
 import { createLineReader } from "./line-reader";
@@ -370,20 +370,6 @@ export interface RequestUser {
     profile: ProfileMessage;
 }
 
-export interface SubscriptionAuthorizer {
-    verifyDistributionOrIntersect(
-        userIdentity: UserIdentity | null,
-        specification: Specification,
-        namedStart: ReferencesByName
-    ): Promise<DistributionIntersectionBranch[]>;
-    feedPreVerified(
-        userIdentity: UserIdentity | null,
-        specification: Specification,
-        start: FactReference[],
-        bookmark: string
-    ): Promise<import("jinaga").FactFeed>;
-}
-
 export class HttpRouter {
     handler: Handler;
     // Map from feed hash → owning user key, for feeds the server cleared
@@ -398,7 +384,7 @@ export class HttpRouter {
 
     constructor(
         private factManager: FactManager,
-        private authorization: Authorization & Partial<SubscriptionAuthorizer>,
+        private authorization: Authorization & SubscriptionAuthorizer,
         private feedCache: FeedCache,
         private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
     ) {
@@ -654,9 +640,7 @@ export class HttpRouter {
     ): Promise<import("jinaga").FactFeed> {
         const cachedOwner = this.intersectedFeedOwners.get(feedHash);
         const requesterOwner = subscriptionOwnerKey(userIdentity);
-        if (cachedOwner !== undefined
-            && cachedOwner === requesterOwner
-            && this.authorization.feedPreVerified) {
+        if (cachedOwner !== undefined && cachedOwner === requesterOwner) {
             return this.authorization.feedPreVerified(userIdentity, specification, start, bookmark);
         }
         // For everyone else (different user, anonymous mismatch, or a

@@ -5,7 +5,9 @@ import {
     AuthorizationNoOp,
     AuthorizationRules,
     DistributionRules,
+    FactFeed,
     FactManager,
+    FactReference,
     FeedCache,
     FetchConnection,
     Fork,
@@ -20,6 +22,7 @@ import {
     PassThroughFork,
     PersistentFork,
     PurgeConditions,
+    ReferencesByName,
     Specification,
     Storage,
     SyncStatusNotifier,
@@ -33,7 +36,7 @@ import { Pool } from "pg";
 
 import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
-import { AuthorizationKeystore } from "./authorization/authorization-keystore";
+import { AuthorizationKeystore, DistributionIntersectionBranch, SubscriptionAuthorizer } from "./authorization/authorization-keystore";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
@@ -186,13 +189,33 @@ function createKeystore(config: JinagaServerConfig, pools: { [uri: string]: Pool
     }
 }
 
-function createAuthorization(authorizationRules: AuthorizationRules | null, distributionRules: DistributionRules | null, factManager: FactManager, store: Storage, keystore: Keystore | null): Authorization {
+class AuthorizationNoOpWithSubscriptions extends AuthorizationNoOp implements SubscriptionAuthorizer {
+    async verifyDistributionOrIntersect(
+        _userIdentity: UserIdentity | null,
+        specification: Specification,
+        namedStart: ReferencesByName
+    ): Promise<DistributionIntersectionBranch[]> {
+        const start = specification.given.map(g => namedStart[g.label.name]);
+        return [{ start, specification }];
+    }
+
+    feedPreVerified(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<FactFeed> {
+        return this.feed(userIdentity!, specification, start, bookmark);
+    }
+}
+
+function createAuthorization(authorizationRules: AuthorizationRules | null, distributionRules: DistributionRules | null, factManager: FactManager, store: Storage, keystore: Keystore | null): Authorization & SubscriptionAuthorizer {
     if (keystore) {
         const authorization = new AuthorizationKeystore(factManager, store, keystore, authorizationRules, distributionRules);
         return authorization;
     }
     else {
-        return new AuthorizationNoOp(factManager, store);
+        return new AuthorizationNoOpWithSubscriptions(factManager, store);
     }
 }
 

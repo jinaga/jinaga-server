@@ -22,10 +22,24 @@ export interface DistributionIntersectionBranch {
     specification: Specification;
 }
 
+export interface SubscriptionAuthorizer {
+    verifyDistributionOrIntersect(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        namedStart: ReferencesByName
+    ): Promise<DistributionIntersectionBranch[]>;
+    feedPreVerified(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<FactFeed>;
+}
+
 import { Keystore } from "../keystore";
 import { DistributedFactCache } from "./distributed-fact-cache";
 
-export class AuthorizationKeystore implements Authorization {
+export class AuthorizationKeystore implements Authorization, SubscriptionAuthorizer {
     private authorizationEngine: AuthorizationEngine | null;
     private distributionEngine: DistributionEngine | null;
     private distributedFacts: DistributedFactCache = new DistributedFactCache();
