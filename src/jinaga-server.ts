@@ -36,7 +36,7 @@ import { Pool } from "pg";
 
 import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
-import { AuthorizationKeystore, DistributionIntersectionBranch, SubscriptionAuthorizer } from "./authorization/authorization-keystore";
+import { AuthorizationKeystore, DistributionBranchesResult, FeedResult, SubscriptionAuthorizer } from "./authorization/authorization-keystore";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
@@ -194,9 +194,9 @@ class AuthorizationNoOpWithSubscriptions extends AuthorizationNoOp implements Su
         _userIdentity: UserIdentity | null,
         specification: Specification,
         namedStart: ReferencesByName
-    ): Promise<DistributionIntersectionBranch[]> {
+    ): Promise<DistributionBranchesResult> {
         const start = specification.given.map(g => namedStart[g.label.name]);
-        return [{ start, specification }];
+        return { type: "success", branches: [{ start, specification }] };
     }
 
     feedPreVerified(
@@ -206,6 +206,16 @@ class AuthorizationNoOpWithSubscriptions extends AuthorizationNoOp implements Su
         bookmark: string
     ): Promise<FactFeed> {
         return this.feed(userIdentity!, specification, start, bookmark);
+    }
+
+    async feedWithDistribution(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<FeedResult> {
+        const feed = await this.feed(userIdentity!, specification, start, bookmark);
+        return { type: "success", feed };
     }
 }
 

@@ -4,7 +4,6 @@ import {
     dehydrateFact,
     DistributionRules,
     FactManager,
-    hydrate,
     MemoryStore,
     NetworkNoOp,
     ObservableSource,
@@ -61,12 +60,14 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
             .find(f => f.type === Company.Type)!;
         const namedStart: ReferencesByName = { [officeSpec.given[0].label.name]: companyRef };
 
-        const branches = await setup.authorization.verifyDistributionOrIntersect(
+        const result = await setup.authorization.verifyDistributionOrIntersect(
             subscriberIdentity, officeSpec, namedStart);
 
-        expect(branches).toHaveLength(1);
-        expect(branches[0].specification).toBe(officeSpec);
-        expect(branches[0].start).toEqual([companyRef]);
+        expect(result.type).toBe("success");
+        if (result.type !== "success") return;
+        expect(result.branches).toHaveLength(1);
+        expect(result.branches[0].specification).toBe(officeSpec);
+        expect(result.branches[0].start).toEqual([companyRef]);
     });
 
     it("returns intersected branches when the user is not yet authorized", async () => {
@@ -83,23 +84,25 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
             .find(f => f.type === Company.Type)!;
         const namedStart: ReferencesByName = { [officeSpec.given[0].label.name]: companyRef };
 
-        const branches = await setup.authorization.verifyDistributionOrIntersect(
+        const result = await setup.authorization.verifyDistributionOrIntersect(
             subscriberIdentity, officeSpec, namedStart);
 
         // Intersection produced an alternate branch that lifts the rule's
         // user-spec into the subscription. The intersected spec has an
         // additional synthetic given and a different shape than the original.
-        expect(branches.length).toBeGreaterThanOrEqual(1);
-        expect(branches[0].specification).not.toBe(officeSpec);
-        expect(branches[0].specification.given.length).toBe(2);
+        expect(result.type).toBe("success");
+        if (result.type !== "success") return;
+        expect(result.branches.length).toBeGreaterThanOrEqual(1);
+        expect(result.branches[0].specification).not.toBe(officeSpec);
+        expect(result.branches[0].specification.given.length).toBe(2);
         // The synthetic given is bound to the subscriber's user fact.
-        expect(branches[0].start[1]).toEqual({
+        expect(result.branches[0].start[1]).toEqual({
             type: setup.subscriberFact.type,
             hash: setup.subscriberFact.hash
         });
     });
 
-    it("throws Forbidden when no distribution rule applies to the spec", async () => {
+    it("returns denied when no distribution rule applies to the spec", async () => {
         const setup = await givenAuthorizationWithDistribution(true, async (_subscriber, creator) => {
             const company = new Company(creator, "Acme");
             return { company };
@@ -113,10 +116,12 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
             .find(f => f.type === Company.Type)!;
         const namedStart: ReferencesByName = { [unrelatedSpec.given[0].label.name]: companyRef };
 
-        await expect(
-            setup.authorization.verifyDistributionOrIntersect(
-                subscriberIdentity, unrelatedSpec, namedStart)
-        ).rejects.toThrow();
+        const result = await setup.authorization.verifyDistributionOrIntersect(
+            subscriberIdentity, unrelatedSpec, namedStart);
+
+        expect(result.type).toBe("denied");
+        if (result.type !== "denied") return;
+        expect(result.reason).toBeTruthy();
     });
 
     it("returns a passthrough branch when there are no distribution rules at all", async () => {
@@ -132,11 +137,13 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
             .find(f => f.type === Company.Type)!;
         const namedStart: ReferencesByName = { [officeSpec.given[0].label.name]: companyRef };
 
-        const branches = await setup.authorization.verifyDistributionOrIntersect(
+        const result = await setup.authorization.verifyDistributionOrIntersect(
             subscriberIdentity, officeSpec, namedStart);
 
-        expect(branches).toHaveLength(1);
-        expect(branches[0].specification).toBe(officeSpec);
+        expect(result.type).toBe("success");
+        if (result.type !== "success") return;
+        expect(result.branches).toHaveLength(1);
+        expect(result.branches[0].specification).toBe(officeSpec);
     });
 });
 

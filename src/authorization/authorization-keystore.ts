@@ -22,18 +22,32 @@ export interface DistributionIntersectionBranch {
     specification: Specification;
 }
 
+export type DistributionBranchesResult =
+    | { type: "success"; branches: DistributionIntersectionBranch[] }
+    | { type: "denied"; reason: string };
+
+export type FeedResult =
+    | { type: "success"; feed: FactFeed }
+    | { type: "denied"; reason: string };
+
 export interface SubscriptionAuthorizer {
     verifyDistributionOrIntersect(
         userIdentity: UserIdentity | null,
         specification: Specification,
         namedStart: ReferencesByName
-    ): Promise<DistributionIntersectionBranch[]>;
+    ): Promise<DistributionBranchesResult>;
     feedPreVerified(
         userIdentity: UserIdentity | null,
         specification: Specification,
         start: FactReference[],
         bookmark: string
     ): Promise<FactFeed>;
+    feedWithDistribution(
+        userIdentity: UserIdentity | null,
+        specification: Specification,
+        start: FactReference[],
+        bookmark: string
+    ): Promise<FeedResult>;
 }
 
 import { Keystore } from "../keystore";
@@ -89,6 +103,14 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
     }
 
     async feed(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
+        const result = await this.feedWithDistribution(userIdentity, specification, start, bookmark);
+        if (result.type === "denied") {
+            throw new Forbidden(result.reason);
+        }
+        return result.feed;
+    }
+
+    async feedWithDistribution(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FeedResult> {
         if (this.distributionEngine) {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
@@ -99,18 +121,16 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
             }), {} as ReferencesByName);
             const canDistribute = await this.distributionEngine.canDistributeToAll([specification], namedStart, userReference);
             if (canDistribute.type === "failure") {
-                throw new Forbidden(canDistribute.reason);
+                return { type: "denied", reason: canDistribute.reason };
             }
             const factFeed = await this.store.feed(specification, start, bookmark);
             const factReferences = factFeed.tuples
                 .flatMap(tuple => tuple.facts)
                 .filter((value, index, self) => self.findIndex(factReferenceEquals(value)) === index);
             this.distributedFacts.add(factReferences, userReference);
-            return factFeed;
+            return { type: "success", feed: factFeed };
         }
-        else {
-            return await this.store.feed(specification, start, bookmark);
-        }
+        return { type: "success", feed: await this.store.feed(specification, start, bookmark) };
     }
 
     async feedPreVerified(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
@@ -208,10 +228,10 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
         userIdentity: UserIdentity | null,
         specification: Specification,
         namedStart: ReferencesByName
-    ): Promise<DistributionIntersectionBranch[]> {
+    ): Promise<DistributionBranchesResult> {
         const start = specification.given.map(g => namedStart[g.label.name]);
         if (!this.distributionEngine) {
-            return [{ start, specification }];
+            return { type: "success", branches: [{ start, specification }] };
         }
         const userReference: FactReference | null = userIdentity
             ? await this.keystore.getUserFact(userIdentity)
@@ -219,12 +239,12 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
         const targetFeeds = buildFeeds(specification);
         const canDistribute = await this.distributionEngine.canDistributeToAll(targetFeeds, namedStart, userReference);
         if (canDistribute.type === "success") {
-            return [{ start, specification }];
+            return { type: "success", branches: [{ start, specification }] };
         }
         const result = await this.distributionEngine.intersectForSubscribe(start, specification, userReference);
         if (!result.intersected) {
-            throw new Forbidden(canDistribute.reason);
+            return { type: "denied", reason: canDistribute.reason };
         }
-        return result.branches;
+        return { type: "success", branches: result.branches };
     }
 }
