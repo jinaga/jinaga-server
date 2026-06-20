@@ -4,6 +4,7 @@ import {
     dehydrateFact,
     DistributionRules,
     FactManager,
+    Forbidden,
     MemoryStore,
     NetworkNoOp,
     ObservableSource,
@@ -103,9 +104,11 @@ describe("AuthorizationKeystore.read with intermediate projection facts (jinaga 
 
         const eventRef = dehydrateFact(setup.event).find(f => f.type === Event.Type)!;
 
-        await expect(
-            setup.authorization.read(subscriberIdentity, [eventRef], finalistsOfEvent)
-        ).rejects.toThrow();
+        // Assert the specific authorization denial, not just any error, so a
+        // setup/engine failure can't masquerade as a passing regression guard.
+        const read = setup.authorization.read(subscriberIdentity, [eventRef], finalistsOfEvent);
+        await expect(read).rejects.toThrow(Forbidden);
+        await expect(read).rejects.toThrow(/Cannot distribute/);
     });
 });
 
