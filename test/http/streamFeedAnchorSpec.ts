@@ -102,7 +102,9 @@ describe("HttpRouter streamFeed anchor handling", () => {
         stream.next(r => { received.push(r); });
 
         await waitForMicrotasks();
-        expect(received).toEqual([]);
+        // The session catches up immediately (no tuples, empty waitlist) and
+        // emits a SYNC frame with empty references. No post has arrived yet.
+        expect(received.flatMap(r => r.references)).toEqual([]);
 
         // Save the author + a post that joins to it.
         const post = new Post(h.author, "first");

@@ -3,14 +3,12 @@ import {
     Authorization,
     buildFeeds,
     computeObjectHash,
-    computeTupleSubsetHash,
     Declaration,
     FactEnvelope,
     FactManager,
     FactRecord,
     FactReference,
     FeedCache,
-    FeedObject,
     FeedResponse,
     FeedsResponse,
     Forbidden,
@@ -18,7 +16,6 @@ import {
     GraphSerializer,
     GraphSource,
     Invalid,
-    invertSpecification,
     LoadMessage,
     LoadResponse,
     parseLoadMessage,
@@ -33,6 +30,7 @@ import {
     verifyEnvelopes
 } from "jinaga";
 import { DistributionIntersectionBranch, FeedResult, SubscriptionAuthorizer } from "../authorization/authorization-keystore";
+import { FeedStreamSession, FeedStreamSessionConfig } from "../feeds/feed-stream-session";
 import { CsvMetadata } from "./csv-metadata";
 import { validateSpecificationForCsv } from "./csv-validator";
 import { createLineReader } from "./line-reader";
@@ -385,7 +383,8 @@ export class HttpRouter {
         private factManager: FactManager,
         private authorization: Authorization & SubscriptionAuthorizer,
         private feedCache: FeedCache,
-        private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
+        private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
+        private feedStreamConfig: Partial<FeedStreamSessionConfig> = {}
     ) {
         const router = Router();
         const applyAllowOrigin = this.applyAllowOrigin.bind(this);
@@ -698,304 +697,47 @@ export class HttpRouter {
 
     private async streamFeed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<Stream<FeedResponse> | null> {
         const connectionId = Math.random().toString(36).substring(2, 10);
-        const startTime = Date.now();
-        
-        console.log(`[StreamFeed:${connectionId}] NEW CONNECTION - User: ${user?.id || 'anonymous'}, Hash: ${params["hash"]}`);
-        
+
         const feedHash = params["hash"];
         if (!feedHash) {
-            console.log(`[StreamFeed:${connectionId}] No feed hash provided`);
             return null;
         }
 
         const feedDefinition = await this.feedCache.getFeed(feedHash);
         if (!feedDefinition) {
-            console.log(`[StreamFeed:${connectionId}] Feed definition not found for hash: ${feedHash}`);
             return null;
         }
 
-        let bookmark = query["b"] as string ?? "";
-        console.log(`[StreamFeed:${connectionId}] Initial bookmark: ${bookmark || 'empty'}`);
+        const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
         const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
         const givenHash = computeObjectHash(feedDefinition.namedStart);
 
-        console.log(`[StreamFeed:${connectionId}] Feed setup - Given hash: ${givenHash.substring(0, 8)}..., Start facts: ${start.length}`);
-
         const stream = new Stream<FeedResponse>();
-        
-        try {
-            // Continuous initial query until exhausted
-            console.log(`[StreamFeed:${connectionId}] Starting initial data streaming...`);
-            const initialStart = Date.now();
-            bookmark = await this.streamAllInitialResults(feedHash, userIdentity, feedDefinition, start, bookmark, stream);
-            const initialDuration = Date.now() - initialStart;
-            console.log(`[StreamFeed:${connectionId}] Initial data streaming complete - Duration: ${initialDuration}ms, Final bookmark: ${bookmark || 'empty'}`);
-            
-            // Set up real-time listeners after initial data is complete
-            console.log(`[StreamFeed:${connectionId}] Setting up real-time listeners...`);
-            const inverses = invertSpecification(feedDefinition.feed);
-            console.log(`[StreamFeed:${connectionId}] Created ${inverses.length} inverse specifications`);
-            
-            const listeners = inverses.map((inverse, index) => {
-                console.log(`[StreamFeed:${connectionId}] Adding listener ${index + 1}/${inverses.length}`);
-                
-                return this.factManager.addSpecificationListener(
-                    inverse.inverseSpecification,
-                    async (results) => {
-                        const eventStart = Date.now();
-                        console.log(`[StreamFeed:${connectionId}] EVENT RECEIVED - Listener ${index + 1}, Results: ${results.length}`);
-                        
-                        try {
-                            // Filter out results that do not match the given.
-                            const matchingResults = results.filter(pr =>
-                                givenHash === computeTupleSubsetHash(pr.tuple, inverse.givenSubset));
-                            
-                            console.log(`[StreamFeed:${connectionId}] Filtered results - Matching: ${matchingResults.length}/${results.length}`);
-                            
-                            if (matchingResults.length != 0) {
-                                console.log(`[StreamFeed:${connectionId}] Processing matching results...`);
-                                const responseStart = Date.now();
-                                bookmark = await this.streamFeedResponse(feedHash, userIdentity, feedDefinition, start, bookmark, stream, true);
-                                const responseDuration = Date.now() - responseStart;
-                                console.log(`[StreamFeed:${connectionId}] Feed response sent - Duration: ${responseDuration}ms, New bookmark: ${bookmark || 'empty'}`);
-                            } else {
-                                console.log(`[StreamFeed:${connectionId}] No matching results - skipping response`);
-                            }
-                        } catch (error) {
-                            console.error(`[StreamFeed:${connectionId}] ERROR processing event: ${error}`);
-                        }
-                        
-                        const eventDuration = Date.now() - eventStart;
-                        if (eventDuration > 100) {
-                            console.warn(`[StreamFeed:${connectionId}] SLOW event processing - Duration: ${eventDuration}ms`);
-                        }
-                    }
-                );
-            });
-            
-            console.log(`[StreamFeed:${connectionId}] All listeners registered - Count: ${listeners.length}`);
 
-            // Anchor listeners (jinaga.js#129): the inverse-listener path
-            // above only fires when a descendant of the given arrives. If
-            // the given fact itself isn't yet in the store when the client
-            // subscribes, neither the initial query nor any later inverse
-            // can deliver results until the given is recorded — and the
-            // given fact has no descendants whose save would re-trigger the
-            // inverse with the matching givenHash. Register a listener per
-            // unique anchor that re-runs streamFeedResponse the moment a
-            // saved fact matches the anchor's (type, hash).
-            const uniqueAnchors = start.filter((s, i, arr) =>
-                arr.findIndex(other => other.type === s.type && other.hash === s.hash) === i);
-            console.log(`[StreamFeed:${connectionId}] Registering ${uniqueAnchors.length} anchor listener(s)`);
-            const anchorListeners = uniqueAnchors.map(anchor => {
-                const anchorSpec: Specification = {
-                    given: [{ label: { name: "x", type: anchor.type }, conditions: [] }],
-                    matches: [],
-                    projection: { type: "fact", label: "x" }
-                };
-                return this.factManager.addSpecificationListener(anchorSpec, async (results) => {
-                    try {
-                        const matched = results.some(pr => {
-                            const ref = pr.tuple && (pr.tuple as any).x;
-                            return ref && ref.type === anchor.type && ref.hash === anchor.hash;
-                        });
-                        if (matched) {
-                            console.log(`[StreamFeed:${connectionId}] Anchor fact arrived - Type: ${anchor.type}, Hash: ${anchor.hash.substring(0, 8)}...`);
-                            bookmark = await this.streamFeedResponse(feedHash, userIdentity, feedDefinition, start, bookmark, stream, true);
-                        }
-                    } catch (error) {
-                        console.error(`[StreamFeed:${connectionId}] ERROR in anchor listener: ${error}`);
-                    }
-                });
-            });
-
-            stream.done(() => {
-                const cleanupStart = Date.now();
-                console.log(`[StreamFeed:${connectionId}] CLEANUP STARTED - Removing ${listeners.length + anchorListeners.length} listener(s)`);
-
-                for (let i = 0; i < listeners.length; i++) {
-                    try {
-                        this.factManager.removeSpecificationListener(listeners[i]);
-                        console.log(`[StreamFeed:${connectionId}] Removed listener ${i + 1}/${listeners.length}`);
-                    } catch (error) {
-                        console.error(`[StreamFeed:${connectionId}] ERROR removing listener ${i + 1}: ${error}`);
-                    }
-                }
-                for (let i = 0; i < anchorListeners.length; i++) {
-                    try {
-                        this.factManager.removeSpecificationListener(anchorListeners[i]);
-                    } catch (error) {
-                        console.error(`[StreamFeed:${connectionId}] ERROR removing anchor listener ${i + 1}: ${error}`);
-                    }
-                }
-
-                const cleanupDuration = Date.now() - cleanupStart;
-                const totalDuration = Date.now() - startTime;
-                console.log(`[StreamFeed:${connectionId}] CLEANUP COMPLETE - Cleanup duration: ${cleanupDuration}ms, Total connection duration: ${totalDuration}ms`);
-            });
-            
-            const setupDuration = Date.now() - startTime;
-            console.log(`[StreamFeed:${connectionId}] Stream setup complete - Duration: ${setupDuration}ms`);
-            
-            return stream;
-            
-        } catch (error) {
-            console.error(`[StreamFeed:${connectionId}] ERROR during setup: ${error}`);
-            throw error;
-        }
-    }
-
-    private async streamAllInitialResults(
-        feedHash: string,
-        userIdentity: UserIdentity | null,
-        feedDefinition: FeedObject,
-        start: FactReference[],
-        initialBookmark: string,
-        stream: Stream<FeedResponse>
-    ): Promise<string> {
-        const streamId = Math.random().toString(36).substring(2, 8);
-        console.log(`[InitialResults:${streamId}] Starting initial data fetch - Bookmark: ${initialBookmark || 'empty'}`);
-        
-        let bookmark = initialBookmark;
-        let hasMoreResults = true;
-        let pageCount = 0;
-        let totalReferences = 0;
-        const maxPages = 1000; // Safety limit to prevent infinite loops
-        const startTime = Date.now();
-        
-        while (hasMoreResults && pageCount < maxPages) {
-            const pageStart = Date.now();
-            console.log(`[InitialResults:${streamId}] Fetching page ${pageCount + 1} - Bookmark: ${bookmark || 'empty'}`);
-
-            const queryResult = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
-            if (queryResult.type === "denied") {
-                // The subscription has already been accepted; tearing
-                // down the stream on a distribution failure would force
-                // the client to re-subscribe just to keep waiting.
-                // Treat as empty and let the listener path re-evaluate
-                // when an authorizing fact arrives.
-                console.log(`[InitialResults:${streamId}] Distribution failed (${queryResult.reason}) - serving empty and keeping stream live`);
-                return bookmark;
-            }
-            const results = queryResult.feed;
-            const fetchDuration = Date.now() - pageStart;
-
-            console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} fetched - Tuples: ${results.tuples.length}, Duration: ${fetchDuration}ms`);
-            
-            // Check if we got results
-            if (results.tuples.length === 0) {
-                console.log(`[InitialResults:${streamId}] No more results - ending pagination`);
-                hasMoreResults = false;
-                break;
-            }
-            
-            // Process and send results
-            const processStart = Date.now();
-            const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
-                self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
-            );
-            const processDuration = Date.now() - processStart;
-            
-            console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} processed - References: ${references.length}, Process duration: ${processDuration}ms`);
-            
-            if (references.length > 0) {
-                const response: FeedResponse = {
-                    references,
-                    bookmark: results.bookmark
-                };
-                
-                const feedStart = Date.now();
-                stream.feed(response);
-                const feedDuration = Date.now() - feedStart;
-                
-                totalReferences += references.length;
-                console.log(`[InitialResults:${streamId}] Page ${pageCount + 1} sent to stream - Feed duration: ${feedDuration}ms`);
-            }
-            
-            // Update bookmark for next iteration
-            const newBookmark = results.bookmark;
-            if (newBookmark === bookmark) {
-                console.log(`[InitialResults:${streamId}] Bookmark unchanged - ending pagination`);
-                hasMoreResults = false;
-            } else {
-                bookmark = newBookmark;
-            }
-            
-            // Check if we got fewer results than the page size (indicates end)
-            if (results.tuples.length < 100) {
-                console.log(`[InitialResults:${streamId}] Partial page received (${results.tuples.length} < 100) - ending pagination`);
-                hasMoreResults = false;
-            }
-            
-            pageCount++;
-            
-            // Add small delay to prevent overwhelming the database
-            if (hasMoreResults && pageCount % 10 === 0) {
-                console.log(`[InitialResults:${streamId}] Adding delay after ${pageCount} pages`);
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-        }
-        
-        const totalDuration = Date.now() - startTime;
-        console.log(`[InitialResults:${streamId}] Initial data streaming complete - Pages: ${pageCount}, Total references: ${totalReferences}, Duration: ${totalDuration}ms, Final bookmark: ${bookmark || 'empty'}`);
-        
-        if (pageCount >= maxPages) {
-            console.warn(`[InitialResults:${streamId}] Hit maximum page limit (${maxPages}) - possible infinite loop`);
-        }
-        
-        return bookmark;
-    }
-
-    private async streamFeedResponse(feedHash: string, userIdentity: UserIdentity | null, feedDefinition: FeedObject, start: FactReference[], bookmark: string, stream: Stream<FeedResponse>, skipIfEmpty = false): Promise<string> {
-        const responseId = Math.random().toString(36).substring(2, 6);
-        const startTime = Date.now();
-        
-        console.log(`[FeedResponse:${responseId}] Starting feed response - Bookmark: ${bookmark || 'empty'}, Skip if empty: ${skipIfEmpty}`);
-        
-        const feedStart = Date.now();
-        const queryResult = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
-        if (queryResult.type === "denied") {
-            // The subscription stays live across distribution failures
-            // so the inverse / anchor listeners can deliver results
-            // once the authorizing fact arrives.
-            console.log(`[FeedResponse:${responseId}] Distribution failed (${queryResult.reason}) - keeping stream live`);
-            return bookmark;
-        }
-        const results = queryResult.feed;
-        const feedDuration = Date.now() - feedStart;
-
-        console.log(`[FeedResponse:${responseId}] Authorization feed complete - Tuples: ${results.tuples.length}, Duration: ${feedDuration}ms`);
-        
-        // Return distinct fact references from all the tuples.
-        const processStart = Date.now();
-        const references = results.tuples.flatMap(t => t.facts).filter((value, index, self) =>
-            self.findIndex(f => f.hash === value.hash && f.type === value.type) === index
+        // The session serializes every fetch and stream operation through a
+        // single bookmark-driven query cycle. Inverse and anchor observers
+        // only enqueue references onto a waitlist and wake the cycle; they
+        // never fetch or stream directly. This removes the race between
+        // listener callbacks and bookmark mutation, guarantees tuple
+        // completeness, and ensures no update is lost between pages.
+        const session = new FeedStreamSession(
+            (b: string) => this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, b),
+            this.factManager,
+            feedDefinition,
+            start,
+            givenHash,
+            stream,
+            bookmark,
+            connectionId,
+            this.feedStreamConfig
         );
-        const processDuration = Date.now() - processStart;
-        
-        console.log(`[FeedResponse:${responseId}] References processed - Count: ${references.length}, Duration: ${processDuration}ms`);
-        
-        if (!skipIfEmpty || references.length > 0) {
-            const response: FeedResponse = {
-                references,
-                bookmark: results.bookmark
-            };
-            
-            const streamStart = Date.now();
-            stream.feed(response);
-            const streamDuration = Date.now() - streamStart;
-            
-            console.log(`[FeedResponse:${responseId}] Response sent to stream - Duration: ${streamDuration}ms`);
-        } else {
-            console.log(`[FeedResponse:${responseId}] Skipping empty response`);
-        }
-        
-        const totalDuration = Date.now() - startTime;
-        console.log(`[FeedResponse:${responseId}] Feed response complete - New bookmark: ${results.bookmark || 'empty'}, Total duration: ${totalDuration}ms`);
-        
-        return results.bookmark;
+
+        stream.done(() => session.dispose());
+        session.start();
+
+        return stream;
     }
 
     private async getKnownFacts(user: RequestUser | null): Promise<Declaration> {

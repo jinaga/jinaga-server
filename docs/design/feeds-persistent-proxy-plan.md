@@ -1,7 +1,17 @@
 # Feeds: Persistent Client Proxy with Waitlist
 Author: @michaellperry  
-Status: Draft  
+Status: Implemented  
 Scope: `/feeds/:hash` streaming path (`Accept: application/x-jinaga-feed-stream`)
+
+> **Implementation note.** The session described here lives in
+> `src/feeds/feed-stream-session.ts` (`FeedStreamSession`) and is wired into
+> the `/feeds/:hash` streaming handler in `src/http/router.ts`. Limits are
+> configurable through `JinagaServerConfig.feedStream`
+> (`FeedStreamSessionConfig`). Note that stores which return the full result
+> set with a non-advancing bookmark (e.g. the in-memory store) are treated as
+> exhausted after the first page, at which point the session emits SYNC.
+> Coverage: `test/feeds/feedStreamSessionSpec.ts` (unit) and
+> `test/http/feedStreamSessionIntegrationSpec.ts` (integration).
 
 ## Summary
 
