@@ -52,8 +52,16 @@ function referenceKey(reference: FactReference): string {
 }
 
 function dedupeReferences(references: FactReference[]): FactReference[] {
-    return references.filter((value, index, self) =>
-        self.findIndex(other => other.hash === value.hash && other.type === value.type) === index);
+    const seen = new Set<string>();
+    const result: FactReference[] = [];
+    for (const reference of references) {
+        const key = referenceKey(reference);
+        if (!seen.has(key)) {
+            seen.add(key);
+            result.push(reference);
+        }
+    }
+    return result;
 }
 
 /**
@@ -144,7 +152,11 @@ export class FeedStreamSession {
             }
         }
         this.listeners = [];
-        Trace.metric(`Feed stream session ${this.connectionId} closed`, {
+        // Use a stable metric name so a metrics backend does not see
+        // unbounded cardinality from per-connection IDs. The connection ID
+        // is logged separately for correlation.
+        Trace.info(`Feed stream session ${this.connectionId} closed`);
+        Trace.metric("Feed stream session closed", {
             initialPages: this.telemetry.initialPages,
             referencesStreamed: this.telemetry.referencesStreamed,
             cycles: this.telemetry.cycles,
