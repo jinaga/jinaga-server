@@ -125,6 +125,19 @@ describe("late-auth subscription recovery", () => {
         expect(feedsResponse.feeds.length).toBeGreaterThan(0);
         const feedHash: string = feedsResponse.feeds[0];
 
+        // S1: the response reports a per-feed decision. This is the reactive
+        // (authorized-via-intersection) case — denied for the subscriber now,
+        // self-heals when the Administrator fact arrives — reported without
+        // any change to registration or keep-alive behavior.
+        expect(feedsResponse.decisions).toHaveLength(feedsResponse.feeds.length);
+        expect(feedsResponse.decisions.map((d: any) => d.feed).sort())
+            .toEqual([...feedsResponse.feeds].sort());
+        for (const d of feedsResponse.decisions) {
+            expect(d.decision).toBe("reactive");
+            expect(d.code).toBe("principal-excluded");
+            expect(d.reason).toBeTruthy();
+        }
+
         const stream: Stream<FeedResponse> = await (h.router as any).streamFeed(
             h.requestUser, { hash: feedHash }, {});
         expect(stream).not.toBeNull();
@@ -151,6 +164,38 @@ describe("late-auth subscription recovery", () => {
             .filter(r => r.type === Office.Type);
         expect(officesAfterAuth.map(r => r.hash))
             .toContain(dehydrateFact(existingOffice).find(f => f.type === Office.Type)!.hash);
+    });
+
+    it("reports an authorized pass-through decision when the user is already permitted", async () => {
+        const h = await makeHarness();
+        const company = new Company(h.creator, "Acme");
+        const companyRef = dehydrateFact(company).find(f => f.type === Company.Type)!;
+        await h.factManager.save(dehydrateFact(company).map(f => ({ fact: f, signatures: [] })));
+
+        // Grant the subscriber the Administrator role *before* subscribing, so
+        // the distribution rule authorizes the spec as-is — pass-through, no
+        // intersection.
+        const admin = new Administrator(company, h.subscriber, new Date("2026-05-27"));
+        await h.factManager.save(dehydrateFact(admin).map(f => ({ fact: f, signatures: [] })));
+
+        const input =
+            `let p1: ${Company.Type} = #${companyRef.hash}\n` +
+            `(p1: ${Company.Type}) {\n` +
+            `    o: ${Office.Type} [\n` +
+            `        o->company: ${Company.Type} = p1\n` +
+            `    ]\n` +
+            `} => o`;
+
+        const feedsResponse = await (h.router as any).feeds(h.requestUser, input);
+        expect(feedsResponse.feeds.length).toBeGreaterThan(0);
+
+        // S1: authorized decisions carry no denial code.
+        expect(feedsResponse.decisions).toHaveLength(feedsResponse.feeds.length);
+        for (const d of feedsResponse.decisions) {
+            expect(d.decision).toBe("authorized");
+            expect(d.code).toBeUndefined();
+            expect(d.reason).toBeTruthy();
+        }
     });
 
     it("does not let another authenticated user reuse an intersected feed hash", async () => {
@@ -235,6 +280,16 @@ describe("late-auth subscription recovery", () => {
 
         const feedsResponse = await (h.router as any).feeds(h.requestUser, input);
         expect(feedsResponse.feeds.length).toBeGreaterThan(0);
+
+        // S1: no rule covers this spec, so the decision is `denied` with the
+        // structured `no-matching-rule` code. The feed is still registered and
+        // served (empty), exactly as before — this only reports the decision.
+        expect(feedsResponse.decisions).toHaveLength(feedsResponse.feeds.length);
+        for (const d of feedsResponse.decisions) {
+            expect(d.decision).toBe("denied");
+            expect(d.code).toBe("no-matching-rule");
+            expect(d.reason).toBeTruthy();
+        }
 
         // Polling the cached feed must also stay live (empty page, not 403).
         const feedHash: string = feedsResponse.feeds[0];

@@ -2,6 +2,7 @@ import {
     Authorization,
     AuthorizationEngine,
     AuthorizationRules,
+    DistributionDenialCode,
     DistributionEngine,
     DistributionRules,
     FactEnvelope,
@@ -22,9 +23,20 @@ export interface DistributionIntersectionBranch {
     specification: Specification;
 }
 
+// The engine failure that made a subscription reactive (authorized via
+// intersection) or denied. Carried so POST /feeds can report the structured
+// per-feed decision (issue #168 S1) without recomputing distribution.
+export interface DistributionDenial {
+    reason: string;
+    code: DistributionDenialCode;
+}
+
 export type DistributionBranchesResult =
-    | { type: "success"; branches: DistributionIntersectionBranch[] }
-    | { type: "denied"; reason: string };
+    // Pass-through authorized when `denial` is absent; authorized-via-
+    // intersection (reactive) when `denial` carries the engine failure that
+    // triggered the intersection.
+    | { type: "success"; branches: DistributionIntersectionBranch[]; denial?: DistributionDenial }
+    | { type: "denied"; reason: string; code: DistributionDenialCode };
 
 export type FeedResult =
     | { type: "success"; feed: FactFeed }
@@ -241,10 +253,17 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
         if (canDistribute.type === "success") {
             return { type: "success", branches: [{ start, specification }] };
         }
+        // Preserve the structured engine failure so the caller can classify
+        // the feed (issue #168 S1). `canDistribute` is narrowed to a failure
+        // here, so `code`/`reason` are available.
+        const denial: DistributionDenial = { reason: canDistribute.reason, code: canDistribute.code };
         const result = await this.distributionEngine.intersectForSubscribe(start, specification, userReference);
         if (!result.intersected) {
-            return { type: "denied", reason: canDistribute.reason };
+            return { type: "denied", reason: denial.reason, code: denial.code };
         }
-        return { type: "success", branches: result.branches };
+        // Authorized via intersection: the spec is denied for this user right
+        // now (denial carries why) but self-heals once the authorizing fact
+        // arrives. The router reports this as `reactive`.
+        return { type: "success", branches: result.branches, denial };
     }
 }

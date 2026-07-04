@@ -4,11 +4,13 @@ import {
     buildFeeds,
     computeObjectHash,
     Declaration,
+    DistributionDenialCode,
     FactEnvelope,
     FactManager,
     FactRecord,
     FactReference,
     FeedCache,
+    FeedDecision,
     FeedResponse,
     FeedsResponse,
     Forbidden,
@@ -598,8 +600,33 @@ export class HttpRouter {
                 intersected = branches.length !== 1 || branches[0].specification !== specification;
             }
 
+            // Classify the spec's distribution decision once; it applies to
+            // every feed hash the spec produces (issue #168 S1). Registration
+            // and keep-alive are unchanged — reactive and denied feeds are
+            // still accepted and served exactly as before; this only reports
+            // the decision. `reactive` is authorized-via-intersection: denied
+            // now, self-heals when the authorizing fact arrives.
+            let decision: FeedDecision["decision"];
+            let decisionCode: DistributionDenialCode | undefined;
+            let decisionReason: string;
+            if (intersectResult.type === "denied") {
+                decision = "denied";
+                decisionCode = intersectResult.code;
+                decisionReason = intersectResult.reason;
+            } else if (intersected) {
+                decision = "reactive";
+                decisionCode = intersectResult.denial?.code;
+                decisionReason = intersectResult.denial?.reason
+                    ?? "Authorized via intersection; awaiting the authorizing fact.";
+            } else {
+                decision = "authorized";
+                decisionCode = undefined;
+                decisionReason = "Distribution authorized.";
+            }
+
             const ownerKey = subscriptionOwnerKey(userIdentity);
             const feedHashes: string[] = [];
+            const decisions: FeedDecision[] = [];
             for (const branch of branches) {
                 const branchNamedStart = branch.specification.given.reduce((map, g, index) => ({
                     ...map,
@@ -608,6 +635,14 @@ export class HttpRouter {
                 const branchFeeds = buildFeeds(branch.specification);
                 const branchHashes = this.feedCache.addFeeds(branchFeeds, branchNamedStart);
                 feedHashes.push(...branchHashes);
+                for (const hash of branchHashes) {
+                    decisions.push({
+                        feed: hash,
+                        decision,
+                        ...(decisionCode !== undefined ? { code: decisionCode } : {}),
+                        reason: decisionReason
+                    });
+                }
                 if (intersected) {
                     for (const hash of branchHashes) {
                         // Bind the hash to its owner so a different
@@ -634,7 +669,8 @@ export class HttpRouter {
             }
 
             return {
-                feeds: feedHashes
+                feeds: feedHashes,
+                decisions
             }
         });
     }
