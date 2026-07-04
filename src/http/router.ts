@@ -592,7 +592,17 @@ export class HttpRouter {
             let branches: DistributionIntersectionBranch[];
             let intersected: boolean;
             if (intersectResult.type === "denied") {
-                Trace.warn(`/feeds accepting spec without applicable distribution rule: ${intersectResult.reason}`);
+                // Structured, dashboard-observable signal that a feed was
+                // registered without an applicable distribution rule (issue
+                // #168 S3). The metric name is stable so a backend sees
+                // bounded cardinality; the denial code (a fixed 4-value enum)
+                // is the measurement dimension, so authoring errors
+                // (no-matching-rule / spec-more-restrictive-than-rule) are
+                // distinguishable from auth states (principal-excluded /
+                // not-authenticated) in CI and dashboards without grepping
+                // logs. The human-readable line is retained for correlation.
+                Trace.metric("distribution.unmatched", { [intersectResult.code]: 1 });
+                Trace.warn(`/feeds accepting spec without applicable distribution rule (${intersectResult.code}): ${intersectResult.reason}`);
                 branches = [{ start, specification }];
                 intersected = false;
             } else {
@@ -606,6 +616,17 @@ export class HttpRouter {
             // still accepted and served exactly as before; this only reports
             // the decision. `reactive` is authorized-via-intersection: denied
             // now, self-heals when the authorizing fact arrives.
+            //
+            // S2: the decision is recomputed from verifyDistributionOrIntersect
+            // on every POST /feeds — it is NOT cached by feed hash — so a
+            // repeated request always returns the correct *per-user* decision.
+            // This matters because a non-intersected feed hash is shared across
+            // users (it excludes the requester's identity): the same hash is
+            // `authorized` for a permitted user and `denied` for another, and
+            // a `reactive` decision becomes `authorized` once the authorizing
+            // fact arrives. Caching the FeedDecision by hash would leak one
+            // user's decision to another. addFeeds stays idempotent on the
+            // hash; only the classification is per-request.
             let decision: FeedDecision["decision"];
             let decisionCode: DistributionDenialCode | undefined;
             let decisionReason: string;
@@ -699,12 +720,16 @@ export class HttpRouter {
         return Trace.dependency("feed", params["hash"], async () => {
             const feedHash = params["hash"];
             if (!feedHash) {
+                // No hash in the route at all — a wrong URL, not a feed lookup.
                 return null;
             }
 
             const feedDefinition = await this.feedCache.getFeed(feedHash);
             if (!feedDefinition) {
-                return null;
+                // Known route, but the feed hash is unknown or expired. Signal
+                // this distinctly (issue #168 S4) so the client can re-register
+                // via POST /feeds instead of treating it as a routing error.
+                throw new FeedNotFound(feedHash);
             }
 
             const bookmark = query["b"] as string ?? "";
@@ -736,12 +761,16 @@ export class HttpRouter {
 
         const feedHash = params["hash"];
         if (!feedHash) {
+            // No hash in the route at all — a wrong URL, not a feed lookup.
             return null;
         }
 
         const feedDefinition = await this.feedCache.getFeed(feedHash);
         if (!feedDefinition) {
-            return null;
+            // Known route, but the feed hash is unknown or expired. Signal
+            // this distinctly (issue #168 S4) so the client can re-register
+            // via POST /feeds instead of treating it as a routing error.
+            throw new FeedNotFound(feedHash);
         }
 
         const bookmark = query["b"] as string ?? "";
@@ -936,9 +965,24 @@ function extractResults(obj: any): { result: any, count: number } {
     }
 }
 
+// A known/expired feed hash missed the feed cache. Distinct from a route
+// miss (wrong URL) so clients can tell "unknown/expired feed hash" — which is
+// recoverable by re-registering via POST /feeds — from "wrong URL" (issue
+// #168 S4). handleError maps this to a 404 with a machine-readable body.
+export class FeedNotFound extends Error {
+    constructor(public readonly feedHash: string) {
+        super(`Feed not found: ${feedHash}`);
+        this.name = "FeedNotFound";
+    }
+}
+
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {
     const requestPath = req.path;
-    if (error instanceof Forbidden) {
+    if (error instanceof FeedNotFound) {
+        Trace.warn(`Feed not found: ${error.feedHash} (Path: ${requestPath})`);
+        res.type("text");
+        res.status(404).send("feed_not_found");
+    } else if (error instanceof Forbidden) {
         Trace.warn(`Forbidden: ${error.message} (Path: ${requestPath})`);
         res.type("text");
         res.status(403).send(error.message);

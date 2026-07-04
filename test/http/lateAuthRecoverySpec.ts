@@ -8,13 +8,16 @@ import {
     FeedResponse,
     MemoryStore,
     NetworkNoOp,
+    NoOpTracer,
     ObservableSource,
     PassThroughFork,
+    Trace,
+    Tracer,
     User
 } from "jinaga";
 
 import { AuthorizationKeystore } from "../../src/authorization/authorization-keystore";
-import { HttpRouter, RequestUser } from "../../src/http/router";
+import { FeedNotFound, HttpRouter, RequestUser } from "../../src/http/router";
 import { Stream } from "../../src/http/stream";
 import { MemoryKeystore } from "../../src/memory/memory-keystore";
 
@@ -96,6 +99,25 @@ async function makeHarness() {
 async function drainMicrotasks() {
     for (let i = 0; i < 8; i++) {
         await new Promise<void>(resolve => setImmediate(resolve));
+    }
+}
+
+// Records Trace.metric calls so tests can assert the structured distribution
+// signal (issue #168 S3) without grepping logs. Everything else is a no-op,
+// and dependency() still runs its operation so feeds() works unchanged.
+class CapturingTracer extends NoOpTracer implements Tracer {
+    public readonly metrics: { message: string; measurements: { [key: string]: number } }[] = [];
+    metric(message: string, measurements: { [key: string]: number }): void {
+        this.metrics.push({ message, measurements });
+    }
+}
+
+async function withTracer<T>(tracer: Tracer, action: () => Promise<T>): Promise<T> {
+    Trace.configure(tracer);
+    try {
+        return await action();
+    } finally {
+        Trace.configure(new NoOpTracer());
     }
 }
 
@@ -296,5 +318,118 @@ describe("late-auth subscription recovery", () => {
         const page = await (h.router as any).feed(h.requestUser, { hash: feedHash }, {});
         expect(page).not.toBeNull();
         expect(page.references).toEqual([]);
+    });
+
+    it("S2: recomputes the per-user decision on a repeated POST /feeds", async () => {
+        const h = await makeHarness();
+        const company = new Company(h.creator, "Acme");
+        const companyRef = dehydrateFact(company).find(f => f.type === Company.Type)!;
+        const office = new Office(company, "HQ");
+        await h.factManager.save(dehydrateFact(office).map(f => ({ fact: f, signatures: [] })));
+
+        const input =
+            `let p1: ${Company.Type} = #${companyRef.hash}\n` +
+            `(p1: ${Company.Type}) {\n` +
+            `    o: ${Office.Type} [\n` +
+            `        o->company: ${Company.Type} = p1\n` +
+            `    ]\n` +
+            `} => o`;
+
+        // First registration: subscriber is not yet an Administrator, so the
+        // decision is reactive (authorized via intersection).
+        const first = await (h.router as any).feeds(h.requestUser, input);
+        expect(first.decisions.every((d: any) => d.decision === "reactive")).toBe(true);
+
+        // The authorizing fact arrives.
+        const admin = new Administrator(company, h.subscriber, new Date("2026-05-27"));
+        await h.factManager.save(dehydrateFact(admin).map(f => ({ fact: f, signatures: [] })));
+
+        // A repeated POST /feeds for the same spec now returns `authorized` —
+        // the decision self-healed rather than returning a stale cached value.
+        const second = await (h.router as any).feeds(h.requestUser, input);
+        expect(second.decisions.length).toBeGreaterThan(0);
+        for (const d of second.decisions) {
+            expect(d.decision).toBe("authorized");
+            expect(d.code).toBeUndefined();
+        }
+    });
+
+    it("S2: returns different per-user decisions for the same spec", async () => {
+        const h = await makeHarness();
+        const company = new Company(h.creator, "Acme");
+        const companyRef = dehydrateFact(company).find(f => f.type === Company.Type)!;
+        await h.factManager.save(dehydrateFact(company).map(f => ({ fact: f, signatures: [] })));
+
+        // Authorize the subscriber but not Mallory.
+        const admin = new Administrator(company, h.subscriber, new Date("2026-05-27"));
+        await h.factManager.save(dehydrateFact(admin).map(f => ({ fact: f, signatures: [] })));
+
+        const input =
+            `let p1: ${Company.Type} = #${companyRef.hash}\n` +
+            `(p1: ${Company.Type}) {\n` +
+            `    o: ${Office.Type} [\n` +
+            `        o->company: ${Company.Type} = p1\n` +
+            `    ]\n` +
+            `} => o`;
+
+        const subscriberResponse = await (h.router as any).feeds(h.requestUser, input);
+        expect(subscriberResponse.decisions.every((d: any) => d.decision === "authorized")).toBe(true);
+
+        // Mallory is a different authenticated user with no Administrator fact.
+        const malloryRequest: RequestUser = {
+            provider: "mock", id: "mallory", profile: {} as any
+        };
+        await (h.router as any).login(malloryRequest);
+        const malloryResponse = await (h.router as any).feeds(malloryRequest, input);
+
+        // Same spec, different user: the decision is computed for Mallory, not
+        // reused from the subscriber. Mallory is not authorized, so the spec is
+        // rewritten via intersection into a reactive, user-specific feed.
+        expect(malloryResponse.decisions.every((d: any) => d.decision === "reactive")).toBe(true);
+        // The reactive rewrite yields a distinct, owner-bound hash — never the
+        // subscriber's authorized pass-through hash.
+        expect(malloryResponse.feeds).not.toEqual(subscriberResponse.feeds);
+    });
+
+    it("S3: emits a structured distribution.unmatched metric tagged by code on denial", async () => {
+        const h = await makeHarness();
+        const company = new Company(h.creator, "Acme");
+        const companyRef = dehydrateFact(company).find(f => f.type === Company.Type)!;
+        await h.factManager.save(dehydrateFact(company).map(f => ({ fact: f, signatures: [] })));
+
+        // A spec no distribution rule covers → denied · no-matching-rule.
+        const input =
+            `let p1: ${Company.Type} = #${companyRef.hash}\n` +
+            `(p1: ${Company.Type}) {\n` +
+            `    a: ${Administrator.Type} [\n` +
+            `        a->company: ${Company.Type} = p1\n` +
+            `    ]\n` +
+            `} => a`;
+
+        const tracer = new CapturingTracer();
+        await withTracer(tracer, () => (h.router as any).feeds(h.requestUser, input));
+
+        const unmatched = tracer.metrics.filter(m => m.message === "distribution.unmatched");
+        expect(unmatched).toHaveLength(1);
+        // Stable metric name, denial code as the (bounded) measurement key.
+        expect(unmatched[0].measurements).toEqual({ "no-matching-rule": 1 });
+    });
+
+    it("S4: throws FeedNotFound for an unknown feed hash, but not for a missing hash", async () => {
+        const h = await makeHarness();
+
+        // A known route with an unknown/expired hash is a distinct condition
+        // from a route miss: the method throws FeedNotFound (handleError maps
+        // it to a 404 with a `feed_not_found` body), rather than returning the
+        // generic null → "Not Found".
+        await expect((h.router as any).feed(h.requestUser, { hash: "deadbeef" }, {}))
+            .rejects.toBeInstanceOf(FeedNotFound);
+        await expect((h.router as any).streamFeed(h.requestUser, { hash: "deadbeef" }, {}))
+            .rejects.toBeInstanceOf(FeedNotFound);
+
+        // A missing hash param (wrong URL) still collapses to the generic 404
+        // path — the method returns null, unchanged.
+        const missing = await (h.router as any).feed(h.requestUser, {}, {});
+        expect(missing).toBeNull();
     });
 });
