@@ -68,6 +68,8 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
         expect(result.branches).toHaveLength(1);
         expect(result.branches[0].specification).toBe(officeSpec);
         expect(result.branches[0].start).toEqual([companyRef]);
+        // Pass-through authorized: no engine denial is carried.
+        expect(result.denial).toBeUndefined();
     });
 
     it("returns intersected branches when the user is not yet authorized", async () => {
@@ -100,6 +102,12 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
             type: setup.subscriberFact.type,
             hash: setup.subscriberFact.hash
         });
+        // Authorized-via-intersection (reactive) carries the engine failure
+        // that triggered it: the authenticated subscriber is excluded until
+        // the authorizing Administrator fact arrives.
+        expect(result.denial).toBeDefined();
+        expect(result.denial?.code).toBe("principal-excluded");
+        expect(result.denial?.reason).toBeTruthy();
     });
 
     it("returns denied when no distribution rule applies to the spec", async () => {
@@ -122,6 +130,8 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
         expect(result.type).toBe("denied");
         if (result.type !== "denied") return;
         expect(result.reason).toBeTruthy();
+        // No rule covers this spec at all.
+        expect(result.code).toBe("no-matching-rule");
     });
 
     it("returns a passthrough branch when there are no distribution rules at all", async () => {
@@ -144,6 +154,8 @@ describe("AuthorizationKeystore.verifyDistributionOrIntersect", () => {
         if (result.type !== "success") return;
         expect(result.branches).toHaveLength(1);
         expect(result.branches[0].specification).toBe(officeSpec);
+        // No distribution engine, so nothing is denied — pure pass-through.
+        expect(result.denial).toBeUndefined();
     });
 });
 
