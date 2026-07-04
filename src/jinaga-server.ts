@@ -37,6 +37,7 @@ import { Pool } from "pg";
 import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
 import { AuthorizationKeystore, DistributionBranchesResult, FeedResult, SubscriptionAuthorizer } from "./authorization/authorization-keystore";
+import { FeedStreamSessionConfig } from "./feeds/feed-stream-session";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
@@ -56,7 +57,13 @@ export type JinagaServerConfig = {
     authorization?: (a: AuthorizationRules) => AuthorizationRules,
     distribution?: (d: DistributionRules) => DistributionRules,
     purgeConditions?: (p: PurgeConditions) => PurgeConditions,
-    origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void)
+    origin?: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
+    /**
+     * Tuning for the per-connection feed streaming session
+     * (/feeds/:hash with Accept: application/x-jinaga-feed-stream).
+     * See FeedStreamSessionConfig for the available limits and defaults.
+     */
+    feedStream?: Partial<FeedStreamSessionConfig>
 };
 
 export type JinagaServerInstance = {
@@ -91,7 +98,7 @@ export class JinagaServer {
         const purgeConditions = createPurgeConditions(config);
         const factManager = new FactManager(fork, source, store, network, purgeConditions);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
-        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*');
+        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*', config.feedStream || {});
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {
