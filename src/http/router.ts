@@ -469,12 +469,24 @@ export class HttpRouter {
     private save(user: RequestUser | null, graphSource: GraphSource): Promise<void> {
         return Trace.dependency("save", "", async () => {
             const userIdentity = serializeUserIdentity(user);
+            // Signatures are verified per flush as they stream in, but the
+            // envelopes are accumulated and authorized as a single batch.
+            // Otherwise, a graph body that flushes in chunks (GraphDeserializer
+            // flushes every 20 facts) would authorize each chunk independently,
+            // and a fact whose rule needs a predecessor from an earlier chunk
+            // would fail with "The fact <type>:<hash> is not defined." (issue #175).
+            const allEnvelopes: FactEnvelope[] = [];
             await graphSource.read(async (envelopes) => {
                 if (!verifyEnvelopes(envelopes)) {
                     throw new Forbidden("The signatures on the facts are invalid.");
                 }
-                await this.authorization.save(userIdentity, envelopes);
+                allEnvelopes.push(...envelopes);
             });
+            try {
+                await this.authorization.save(userIdentity, allEnvelopes);
+            } catch (error) {
+                throw toSaveAuthorizationError(error, allEnvelopes);
+            }
         });
     }
 
@@ -974,6 +986,32 @@ export class FeedNotFound extends Error {
         super(`Feed not found: ${feedHash}`);
         this.name = "FeedNotFound";
     }
+}
+
+// Authorization rule evaluation reports a missing predecessor as a plain
+// Error of this shape (see authorizationRules.ts / specification-runner.ts
+// in jinaga). It surfaces when the client's save request didn't include the
+// full closure of facts a rule needs to walk. Map it to a diagnosable 4xx
+// instead of an opaque 500 (issue #175).
+const FACT_NOT_DEFINED_PATTERN = /^The fact (\S+):(\S+) is not defined\.$/;
+
+function toSaveAuthorizationError(error: any, envelopes: FactEnvelope[]): any {
+    if (error instanceof Error) {
+        const match = FACT_NOT_DEFINED_PATTERN.exec(error.message);
+        if (match) {
+            const [, factType, factHash] = match;
+            const factTypesInBatch = Array.from(new Set(envelopes.map(e => e.fact.type))).join(", ");
+            Trace.warn(
+                `Save authorization could not resolve predecessor ${factType}:${factHash} ` +
+                `among ${envelopes.length} fact(s) in the request (types: ${factTypesInBatch}).`
+            );
+            return new Invalid(
+                `The fact ${factType}:${factHash} is required to authorize this save but was not included in the request. ` +
+                `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
+            );
+        }
+    }
+    return error;
 }
 
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {

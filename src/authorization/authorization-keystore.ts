@@ -65,6 +65,10 @@ export interface SubscriptionAuthorizer {
 import { Keystore } from "../keystore";
 import { DistributedFactCache } from "./distributed-fact-cache";
 
+function factKey(reference: FactReference): string {
+    return `${reference.type}:${reference.hash}`;
+}
+
 export class AuthorizationKeystore implements Authorization, SubscriptionAuthorizer {
     private authorizationEngine: AuthorizationEngine | null;
     private distributionEngine: DistributionEngine | null;
@@ -188,14 +192,17 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
             const signedFacts = (userIdentity && factsToSign.length > 0)
                 ? await this.keystore.signFacts(userIdentity, factsToSign)
                 : [];
+            const envelopeByFact = new Map<string, FactEnvelope>(
+                envelopes.map(e => [factKey(e.fact), e]));
+            const signedFactByFact = new Map<string, FactEnvelope>(
+                signedFacts.map(f => [factKey(f.fact), f]));
             const authorizedEnvelopes: FactEnvelope[] = results.map(r => {
-                const isFact = factReferenceEquals(r.fact);
-                const envelope = envelopes.find(e => isFact(e.fact));
+                const envelope = envelopeByFact.get(factKey(r.fact));
                 if (!envelope) {
                     throw new Error("Fact not found in envelopes.");
                 }
                 if (r.verdict === "Accept") {
-                    const signedFact = signedFacts.find(f => isFact(f.fact));
+                    const signedFact = signedFactByFact.get(factKey(r.fact));
                     const userSignatures = signedFact
                         ? signedFact.signatures
                         : [];
