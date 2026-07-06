@@ -474,7 +474,7 @@ export class HttpRouter {
             // Otherwise, a graph body that flushes in chunks (GraphDeserializer
             // flushes every 20 facts) would authorize each chunk independently,
             // and a fact whose rule needs a predecessor from an earlier chunk
-            // would fail with "The fact : is not defined." (issue #175).
+            // would fail with "The fact <type>:<hash> is not defined." (issue #175).
             const allEnvelopes: FactEnvelope[] = [];
             await graphSource.read(async (envelopes) => {
                 if (!verifyEnvelopes(envelopes)) {

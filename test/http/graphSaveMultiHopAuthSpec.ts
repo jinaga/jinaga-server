@@ -61,7 +61,7 @@ function createReadLine(input: string) {
 // a graph body that split across flush boundaries (every 20 facts)
 // authorized each flush independently. A fact whose rule needs a multi-hop
 // predecessor chain landing in an earlier flush then failed with
-// "The fact : is not defined." (surfaced to clients as a 500). This drives
+// "The fact <type>:<hash> is not defined." (surfaced to clients as a 500). This drives
 // the real application/x-jinaga-graph-v1 code path end to end.
 describe("POST /save with a multi-flush graph body", () => {
     it("authorizes a fact whose multi-hop predecessors landed in a prior flush batch", async () => {
