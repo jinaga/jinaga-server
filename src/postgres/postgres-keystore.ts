@@ -114,9 +114,21 @@ export class PostgresKeystore implements Keystore {
 
     private async generateKeyPair(connection: PoolClient, userIdentity: UserIdentity): Promise<KeyPair> {
         const keyPair = generateKeyPair();
-        await connection.query(`INSERT INTO ${this.schema}.user (provider, user_identifier, private_key, public_key) VALUES ($1, $2, $3, $4)`,
+        const { rows } = await connection.query(
+            `INSERT INTO ${this.schema}.user (provider, user_identifier, private_key, public_key)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_identifier, provider) DO NOTHING
+             RETURNING public_key, private_key`,
             [userIdentity.provider, userIdentity.id, keyPair.privatePem, keyPair.publicPem]);
-        return keyPair;
+        if (rows.length === 1) {
+            return keyPair;
+        }
+        // Lost the race: a concurrent request inserted this user's key pair
+        // between our SELECT and INSERT. The ON CONFLICT clause suppressed the
+        // unique-violation (23505) on ux_user, so read back the winner's key
+        // pair instead of surfacing a duplicate-key error. selectOrInsertKeyPair
+        // will now find exactly one row.
+        return this.selectOrInsertKeyPair(connection, userIdentity);
     }
 }
 
