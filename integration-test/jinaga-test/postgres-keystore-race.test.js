@@ -16,7 +16,7 @@ describe('PostgresKeystore concurrency race', () => {
     beforeEach(async () => {
         // Ensure no row exists yet for the test identities so the
         // select-then-insert path is exercised from a clean state.
-        await pool.query(`DELETE FROM public."user" WHERE provider = 'test-provider'`);
+        await pool.query(`DELETE FROM public."user" WHERE provider = $1`, ['test-provider']);
     });
 
     it('should not fail when two concurrent requests create the same user key pair', async () => {

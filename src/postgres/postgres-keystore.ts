@@ -118,7 +118,7 @@ export class PostgresKeystore implements Keystore {
             `INSERT INTO ${this.schema}.user (provider, user_identifier, private_key, public_key)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_identifier, provider) DO NOTHING
-             RETURNING public_key, private_key`,
+             RETURNING 1`,
             [userIdentity.provider, userIdentity.id, keyPair.privatePem, keyPair.publicPem]);
         if (rows.length === 1) {
             return keyPair;
