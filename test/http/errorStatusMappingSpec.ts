@@ -10,12 +10,14 @@ import {
     DistributionRules,
     FactEnvelope,
     FactManager,
+    FactReference,
     FeedCache,
     Invalid,
     MemoryStore,
     NetworkNoOp,
     ObservableSource,
     PassThroughFork,
+    PredecessorNotResolvedError,
     User
 } from "jinaga";
 
@@ -116,43 +118,49 @@ async function captureError(action: () => Promise<unknown>): Promise<any> {
     throw new Error("Expected the operation to fail, but it succeeded.");
 }
 
-// Issue #182 findings 1 and 2. The translation in router.ts matches jinaga's
-// exact English wording, so these cases drive the real AuthorizationEngine
-// rather than a hand-written message: if upstream rewords the error, the
-// pattern stops matching and these tests fail instead of the classification
-// silently regressing to a 500 in production. Replace with instanceof checks
-// once jinaga.js#234 lands a typed error.
+// Issue #182 findings 1 and 2. These drive the real AuthorizationEngine rather
+// than a hand-written message, so the classification is pinned to what jinaga
+// actually throws. That mattered concretely: the original version of this
+// translation matched the engine's prose, and 6.11.3 reworded it one release
+// later — these tests failed rather than letting the 400 regress to a 500 in
+// production. The unresolved-predecessor path is now an instanceof check on
+// the typed error jinaga.js#234 introduced.
 describe("save authorization error translation", () => {
-    it("reports an unresolved predecessor from the real engine as a plain Error", async () => {
+    it("reports an unresolved predecessor from the real engine as a typed error", async () => {
         const { authorization, owner } = await createHarness();
 
         const error = await captureError(() =>
             authorization.save(ownerIdentity, unclosedBatch(owner)));
 
-        // Establishes the untranslated baseline: jinaga signals this client
-        // data problem with a bare Error, which handleError would map to 500.
-        expect(error).toBeInstanceOf(Error);
+        // The untranslated baseline: still not an Invalid, so handleError alone
+        // would map it to 500 — but now it carries the structured detail the
+        // translation reads instead of parsing prose.
+        expect(error).toBeInstanceOf(PredecessorNotResolvedError);
         expect(error).not.toBeInstanceOf(Invalid);
-        expect(error.message).toContain("one or more predecessors could not be resolved");
+        expect(error.missingPredecessors.map((r: FactReference) => r.type)).toContain(Workspace.Type);
+        expect(error.unresolvedFacts.map((r: FactReference) => r.type)).toContain(Application.Type);
     });
 
-    it("translates the unresolved-predecessor shape to Invalid on /save", async () => {
+    it("translates the unresolved predecessor to Invalid on /save", async () => {
         const { router, owner } = await createHarness();
 
         const error = await captureError(() =>
             (router as any).save(requestUser, graphSourceOf(unclosedBatch(owner))));
 
         expect(error).toBeInstanceOf(Invalid);
-        expect(error.message).toContain(Application.Type);
-        expect(error.message).toContain("were not found in storage and were not included in the request");
+        // Names the predecessor that is actually missing — the structured
+        // fields make this possible, where the prose match could only report
+        // the successors that failed to sort.
+        expect(error.message).toContain(Workspace.Type);
+        expect(error.message).toContain("was not found in storage and was not included in the request");
     });
 
-    it("translates the unresolved-predecessor shape to Invalid on /write", async () => {
+    it("translates the unresolved predecessor to Invalid on /write", async () => {
         // The declaration grammar /write accepts cannot express a dangling
         // predecessor, so the engine error is captured from the reachable
         // /save path and replayed here. The route still needs the translation:
         // it makes the same authorization call, and this keeps both routes
-        // tracking one upstream wording.
+        // reading one upstream error type.
         const { authorization, owner } = await createHarness();
         const engineError = await captureError(() =>
             authorization.save(ownerIdentity, unclosedBatch(owner)));
@@ -165,7 +173,7 @@ describe("save authorization error translation", () => {
         const error = await captureError(() => (router as any).write(requestUser, declaration));
 
         expect(error).toBeInstanceOf(Invalid);
-        expect(error.message).toContain("were not found in storage and were not included in the request");
+        expect(error.message).toContain("was not found in storage and was not included in the request");
     });
 
     it("still translates the authorization-rule shape fixed by issue #175", async () => {

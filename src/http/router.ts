@@ -22,6 +22,7 @@ import {
     LoadResponse,
     parseLoadMessage,
     parseSaveMessage,
+    PredecessorNotResolvedError,
     ProfileMessage,
     ProjectedResult,
     ReferencesByName,
@@ -1005,22 +1006,18 @@ export class FeedNotFound extends Error {
 // missing predecessor as a plain Error. That is fragile: an upstream wording
 // change silently turns these back into 500s (issue #182 finding 5). The
 // end-to-end cases in test/http/errorStatusMappingSpec.ts drive the real
-// AuthorizationEngine so that drift fails the build. Replace the patterns
-// with instanceof checks once jinaga.js#234 lands a typed error.
+// AuthorizationEngine so that drift fails the build.
+//
+// jinaga 6.11.3 landed the typed errors of jinaga.js#234, so the topological
+// sort's failure is now an instanceof check below. One prose pattern remains:
+// specification-runner still reports its missing fact as a plain Error.
 
 // Authorization rule evaluation reports a missing predecessor as a plain
-// Error of this shape (see authorizationRules.ts / specification-runner.ts
-// in jinaga). It surfaces when the client's save request didn't include the
-// full closure of facts a rule needs to walk. Map it to a diagnosable 4xx
-// instead of an opaque 500 (issue #175).
+// Error of this shape (specification-runner.ts in jinaga, still untyped as of
+// 6.11.3). It surfaces when the client's save request didn't include the full
+// closure of facts a rule needs to walk. Map it to a diagnosable 4xx instead
+// of an opaque 500 (issue #175).
 const FACT_NOT_DEFINED_PATTERN = /^The fact (\S+):(\S+) is not defined\.$/;
-
-// The topological sort in jinaga's AuthorizationEngine.authorizeFacts reports
-// the same underlying condition — a predecessor present in neither the batch
-// nor storage — with different wording, and names the successors it could not
-// sort rather than the predecessor it could not find. It never matched the
-// pattern above, so it fell through to a bare 500 (issue #182 finding 1).
-const UNRESOLVED_PREDECESSOR_PATTERN = /^Cannot authorize (\d+ facts?) of type (.+?): one or more predecessors could not be resolved\./;
 
 function toSaveAuthorizationError(error: any, envelopes: FactEnvelope[]): any {
     if (!(error instanceof Error)) {
@@ -1032,6 +1029,36 @@ function toSaveAuthorizationError(error: any, envelopes: FactEnvelope[]): any {
         return `${envelopes.length} fact(s) in the request (types: ${factTypesInBatch})`;
     };
 
+    // The batch named a predecessor that is in neither the batch nor storage,
+    // so the topological sort could never reach the facts that depend on it.
+    // A client data problem, not a server fault (issue #182 finding 1).
+    if (error instanceof PredecessorNotResolvedError) {
+        const missing = error.missingPredecessors.map(r => `${r.type}:${r.hash}`);
+        const unresolved = error.unresolvedFacts.map(r => `${r.type}:${r.hash}`);
+        Trace.warn(
+            `Save authorization could not resolve ${missing.length} predecessor(s) [${missing.join(", ")}] ` +
+            `needed by ${unresolved.length} fact(s) [${unresolved.join(", ")}] among ${describeBatch()}.`
+        );
+        const advice = `Send the full closure of predecessors together, or commit the predecessors first.`;
+        if (missing.length === 1) {
+            return new Invalid(
+                `The fact ${missing[0]} is named as a predecessor, but it was not found in storage ` +
+                `and was not included in the request. ${advice}`
+            );
+        }
+        if (missing.length > 1) {
+            return new Invalid(
+                `${missing.length} facts are named as predecessors, but they were not found in storage ` +
+                `and were not included in the request: ${missing.join(", ")}. ${advice}`
+            );
+        }
+        // The engine could not attribute the failure to specific references.
+        return new Invalid(
+            `${unresolved.length} fact(s) could not be authorized because one or more predecessors ` +
+            `were not found in storage and were not included in the request. ${advice}`
+        );
+    }
+
     const notDefined = FACT_NOT_DEFINED_PATTERN.exec(error.message);
     if (notDefined) {
         const [, factType, factHash] = notDefined;
@@ -1041,20 +1068,6 @@ function toSaveAuthorizationError(error: any, envelopes: FactEnvelope[]): any {
         );
         return new Invalid(
             `The fact ${factType}:${factHash} is required to authorize this save but was not included in the request. ` +
-            `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
-        );
-    }
-
-    const unresolved = UNRESOLVED_PREDECESSOR_PATTERN.exec(error.message);
-    if (unresolved) {
-        const [, count, unresolvedTypes] = unresolved;
-        Trace.warn(
-            `Save authorization could not resolve the predecessors of ${count} of type ${unresolvedTypes} ` +
-            `among ${describeBatch()}.`
-        );
-        return new Invalid(
-            `${count} of type ${unresolvedTypes} could not be authorized because one or more predecessors ` +
-            `were not found in storage and were not included in the request. ` +
             `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
         );
     }
