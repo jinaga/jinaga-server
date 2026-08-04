@@ -237,6 +237,37 @@ describe("HTTP status mapping", () => {
 
             expect(await response.text()).toContain("express.text()");
         });
+
+        // Saying what arrived tells the caller which end is misconfigured.
+        it("names the Content-Type that was received", async () => {
+            const response = await fetch(`${baseUrl}/write`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}"
+            });
+
+            expect(await response.text()).toContain("Received Content-Type: application/json");
+        });
+
+        it("says so when no Content-Type was received", async () => {
+            const response = await fetch(`${baseUrl}/write`, {
+                method: "POST",
+                body: new Blob(["anything"])
+            });
+
+            expect(await response.text()).toContain("No Content-Type header was received");
+        });
+
+        it("marks error responses nosniff", async () => {
+            const response = await fetch(`${baseUrl}/write`, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: "anything"
+            });
+
+            expect(response.status).toBe(400);
+            expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        });
     });
 
     it("answers 500 without echoing the internal error message", async () => {
@@ -264,6 +295,9 @@ describe("HTTP status mapping", () => {
         expect(response.status).toBe(500);
         expect(body).toBe("Internal server error");
         expect(body).not.toContain("internal-host");
+        // A plain-text body labelled text/html invites a browser to render it.
+        expect(response.headers.get("content-type")).toContain("text/plain");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     });
 
     it("answers 404 with a distinguishable body for a feed route miss", async () => {

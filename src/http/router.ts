@@ -205,7 +205,7 @@ function post<T, U>(
         }
         const message = parsed.value;
         if (!message) {
-            handleError(new Invalid(MISSING_BODY), req, res, next);
+            handleError(new Invalid(`${MISSING_BODY} ${describeContentType(req)}`), req, res, next);
             return;
         }
         method(user, message, req.params)
@@ -361,7 +361,9 @@ function outputReadResults(
         .catch(error => {
             console.error('Error in outputReadResults:', error);
             if (!res.headersSent) {
-                res.status(500).send('Internal server error');
+                // Without an explicit type, res.send of a string makes Express
+                // infer text/html and label an error body as markup.
+                res.type("text").status(500).send('Internal server error');
             }
         });
 }
@@ -1087,9 +1089,18 @@ function toInvalidInput(error: any): Invalid {
 function parseTextBody(req: Request): string {
     const body = req.body;
     if (typeof body !== 'string' || !body) {
-        throw new Invalid(MISSING_TEXT_BODY);
+        throw new Invalid(`${MISSING_TEXT_BODY} ${describeContentType(req)}`);
     }
     return body;
+}
+
+// Naming what arrived turns "check your setup" into something the caller can
+// act on without guessing which end is misconfigured.
+function describeContentType(req: Request): string {
+    const contentType = req.get('Content-Type');
+    return contentType
+        ? `Received Content-Type: ${contentType}.`
+        : `No Content-Type header was received.`;
 }
 
 function parseRequestInput<T>(
@@ -1117,6 +1128,9 @@ function sendRouteMiss(res: Response) {
 
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {
     const requestPath = req.path;
+    // Error bodies are plain text built partly from client-supplied input, so
+    // stop a browser from sniffing one as markup.
+    res.set("X-Content-Type-Options", "nosniff");
     if (error instanceof FeedNotFound) {
         Trace.warn(`Feed not found: ${error.feedHash} (Path: ${requestPath})`);
         res.type("text");
