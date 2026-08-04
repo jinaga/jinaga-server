@@ -22,6 +22,7 @@ import {
     LoadResponse,
     parseLoadMessage,
     parseSaveMessage,
+    PredecessorNotResolvedError,
     ProfileMessage,
     ProjectedResult,
     ReferencesByName,
@@ -58,7 +59,7 @@ function getOrStream<U>(
                 .then(response => {
                     if (!response) {
                         console.log(`[HttpConnection:${connectionId}] Stream method returned null - sending 404`);
-                        res.sendStatus(404);
+                        sendRouteMiss(res);
                         next();
                     }
                     else {
@@ -156,7 +157,7 @@ function getOrStream<U>(
                 .then(response => {
                     if (!response) {
                         console.log(`[HttpConnection:${connectionId}] Get method returned null - sending 404`);
-                        res.sendStatus(404);
+                        sendRouteMiss(res);
                         next();
                     }
                     else {
@@ -199,9 +200,14 @@ function post<T, U>(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const message = parse(req.body);
+        const parsed = parseRequestInput(() => parse(req.body), req, res, next);
+        if (!parsed.ok) {
+            return;
+        }
+        const message = parsed.value;
         if (!message) {
-            throw new Error('Ensure that you have called app.use(express.json()).');
+            handleError(new Invalid(`${MISSING_BODY} ${describeContentType(req)}`), req, res, next);
+            return;
         }
         method(user, message, req.params)
             .then(response => {
@@ -224,8 +230,11 @@ function postCreate<T>(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const message = parse(req);
-        method(user, message)
+        const parsed = parseRequestInput(() => parse(req), req, res, next);
+        if (!parsed.ok) {
+            return;
+        }
+        method(user, parsed.value)
             .then(_ => {
                 res.sendStatus(201);
                 next();
@@ -237,19 +246,16 @@ function postCreate<T>(
 function postStringCreate(method: (user: RequestUser, message: string) => Promise<void>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
+        const parsed = parseRequestInput(() => parseTextBody(req), req, res, next);
+        if (!parsed.ok) {
+            return;
         }
-        else {
-            method(user, input)
-                .then(_ => {
-                    res.sendStatus(201);
-                    next();
-                })
-                .catch(error => handleError(error, req, res, next));
-        }
+        method(user, parsed.value)
+            .then(_ => {
+                res.sendStatus(201);
+                next();
+            })
+            .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -261,29 +267,27 @@ function postReadWithStreaming(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
+        const parsed = parseRequestInput(() => parseTextBody(req), req, res, next);
+        if (!parsed.ok) {
+            return;
         }
-        else {
-            // Check if Accept header explicitly prefers a specific format
-            const acceptHeader = req.get('Accept');
-            let acceptType: string = 'text/plain'; // Default for backward compatibility
 
-            if (acceptHeader && acceptHeader !== '*/*') {
-                // Only use req.accepts() when there's a specific preference
-                const preferredType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']);
-                acceptType = preferredType ? String(preferredType) : 'text/plain';
-            }
-            
-            method(user, input, acceptType)
-                .then(({resultStream, csvMetadata}) => {
-                    outputReadResults(resultStream, res, acceptType, csvMetadata);
-                    next();
-                })
-                .catch(error => handleError(error, req, res, next));
+        // Check if Accept header explicitly prefers a specific format
+        const acceptHeader = req.get('Accept');
+        let acceptType: string = 'text/plain'; // Default for backward compatibility
+
+        if (acceptHeader && acceptHeader !== '*/*') {
+            // Only use req.accepts() when there's a specific preference
+            const preferredType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']);
+            acceptType = preferredType ? String(preferredType) : 'text/plain';
         }
+
+        method(user, parsed.value, acceptType)
+            .then(({resultStream, csvMetadata}) => {
+                outputReadResults(resultStream, res, acceptType, csvMetadata);
+                next();
+            })
+            .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -313,7 +317,7 @@ function inputSaveMessage(req: Request): GraphSource {
             read: async (onEnvelopes) => {
                 const message = parseSaveMessage(req.body);
                 if (!message) {
-                    throw new Error('Ensure that you have called app.use(express.json()).');
+                    throw new Invalid(MISSING_JSON_BODY);
                 }
                 await onEnvelopes(message.facts.map(fact => ({
                     fact: fact,
@@ -358,7 +362,9 @@ function outputReadResults(
         .catch(error => {
             console.error('Error in outputReadResults:', error);
             if (!res.headersSent) {
-                res.status(500).send('Internal server error');
+                // Without an explicit type, res.send of a string makes Express
+                // infer text/html and label an error body as markup.
+                res.type("text").status(500).send('Internal server error');
             }
         });
 }
@@ -550,11 +556,19 @@ export class HttpRouter {
             }
 
             const userIdentity = serializeUserIdentity(user);
-            await this.authorization.save(userIdentity, factRecords
+            const envelopes: FactEnvelope[] = factRecords
                 .map(fact => ({
                     fact: fact,
                     signatures: []
-                })));
+                }));
+            try {
+                await this.authorization.save(userIdentity, envelopes);
+            } catch (error) {
+                // /write reaches the same authorization path as /save, so it
+                // needs the same translation of predecessor-resolution
+                // failures into a diagnosable 4xx (issue #182 finding 2).
+                throw toSaveAuthorizationError(error, envelopes);
+            }
         });
     }
 
@@ -988,34 +1002,174 @@ export class FeedNotFound extends Error {
     }
 }
 
+// Both message shapes below are matched by prose, because jinaga reports a
+// missing predecessor as a plain Error. That is fragile: an upstream wording
+// change silently turns these back into 500s (issue #182 finding 5). The
+// end-to-end cases in test/http/errorStatusMappingSpec.ts drive the real
+// AuthorizationEngine so that drift fails the build.
+//
+// jinaga 6.11.3 landed the typed errors of jinaga.js#234, so the topological
+// sort's failure is now an instanceof check below. One prose pattern remains:
+// specification-runner still reports its missing fact as a plain Error.
+
 // Authorization rule evaluation reports a missing predecessor as a plain
-// Error of this shape (see authorizationRules.ts / specification-runner.ts
-// in jinaga). It surfaces when the client's save request didn't include the
-// full closure of facts a rule needs to walk. Map it to a diagnosable 4xx
-// instead of an opaque 500 (issue #175).
+// Error of this shape (specification-runner.ts in jinaga, still untyped as of
+// 6.11.3). It surfaces when the client's save request didn't include the full
+// closure of facts a rule needs to walk. Map it to a diagnosable 4xx instead
+// of an opaque 500 (issue #175).
 const FACT_NOT_DEFINED_PATTERN = /^The fact (\S+):(\S+) is not defined\.$/;
 
 function toSaveAuthorizationError(error: any, envelopes: FactEnvelope[]): any {
-    if (error instanceof Error) {
-        const match = FACT_NOT_DEFINED_PATTERN.exec(error.message);
-        if (match) {
-            const [, factType, factHash] = match;
-            const factTypesInBatch = Array.from(new Set(envelopes.map(e => e.fact.type))).join(", ");
-            Trace.warn(
-                `Save authorization could not resolve predecessor ${factType}:${factHash} ` +
-                `among ${envelopes.length} fact(s) in the request (types: ${factTypesInBatch}).`
-            );
+    if (!(error instanceof Error)) {
+        return error;
+    }
+
+    const describeBatch = () => {
+        const factTypesInBatch = Array.from(new Set(envelopes.map(e => e.fact.type))).join(", ");
+        return `${envelopes.length} fact(s) in the request (types: ${factTypesInBatch})`;
+    };
+
+    // The batch named a predecessor that is in neither the batch nor storage,
+    // so the topological sort could never reach the facts that depend on it.
+    // A client data problem, not a server fault (issue #182 finding 1).
+    if (error instanceof PredecessorNotResolvedError) {
+        const missing = error.missingPredecessors.map(r => `${r.type}:${r.hash}`);
+        const unresolved = error.unresolvedFacts.map(r => `${r.type}:${r.hash}`);
+        Trace.warn(
+            `Save authorization could not resolve ${missing.length} predecessor(s) [${missing.join(", ")}] ` +
+            `needed by ${unresolved.length} fact(s) [${unresolved.join(", ")}] among ${describeBatch()}.`
+        );
+        const advice = `Send the full closure of predecessors together, or commit the predecessors first.`;
+        if (missing.length === 1) {
             return new Invalid(
-                `The fact ${factType}:${factHash} is required to authorize this save but was not included in the request. ` +
-                `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
+                `The fact ${missing[0]} is named as a predecessor, but it was not found in storage ` +
+                `and was not included in the request. ${advice}`
             );
         }
+        if (missing.length > 1) {
+            return new Invalid(
+                `${missing.length} facts are named as predecessors, but they were not found in storage ` +
+                `and were not included in the request: ${missing.join(", ")}. ${advice}`
+            );
+        }
+        // The engine could not attribute the failure to specific references.
+        return new Invalid(
+            `${unresolved.length} fact(s) could not be authorized because one or more predecessors ` +
+            `were not found in storage and were not included in the request. ${advice}`
+        );
     }
+
+    const notDefined = FACT_NOT_DEFINED_PATTERN.exec(error.message);
+    if (notDefined) {
+        const [, factType, factHash] = notDefined;
+        Trace.warn(
+            `Save authorization could not resolve predecessor ${factType}:${factHash} ` +
+            `among ${describeBatch()}.`
+        );
+        return new Invalid(
+            `The fact ${factType}:${factHash} is required to authorize this save but was not included in the request. ` +
+            `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
+        );
+    }
+
     return error;
+}
+
+// post() serves both a JSON route (/load) and a text route (/feeds), so its
+// message names no particular parser; the single-content-type entry points
+// keep the specific hint they have always given.
+const MISSING_BODY = 'The request body is empty or could not be read. Ensure that the body parser for this Content-Type is registered.';
+const MISSING_JSON_BODY = 'Ensure that you have called app.use(express.json()).';
+const MISSING_TEXT_BODY = 'Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).';
+
+// A request body that fails to parse is a client error. Both this module's
+// parseString and jinaga's message parsers signal that by throwing
+// synchronously from the handler, where Express hands it to its default error
+// handler and reports 500. Classify parse failures as Invalid so handleError
+// renders a 400 (issue #182 finding 3).
+function toInvalidInput(error: any): Invalid {
+    if (error instanceof Invalid) {
+        return error;
+    }
+    return new Invalid(error instanceof Error ? error.message : String(error));
+}
+
+// /read and /write accept text/plain only, so every unreadable body there has
+// the same cause and deserves the same actionable hint. Checking req.body here
+// rather than deferring to parseString keeps a missing body parser — the common
+// misconfiguration — from being reported with parseString's generic
+// content-type message.
+function parseTextBody(req: Request): string {
+    const body = req.body;
+    if (typeof body !== 'string' || !body) {
+        throw new Invalid(`${MISSING_TEXT_BODY} ${describeContentType(req)}`);
+    }
+    return body;
+}
+
+// Naming what arrived turns "check your setup" into something the caller can
+// act on without guessing which end is misconfigured. The value is echoed from
+// the request, so cap it: a real content type is short, and the body should
+// not grow with whatever the caller chose to send.
+const MAX_ECHOED_CONTENT_TYPE = 80;
+
+function describeContentType(req: Request): string {
+    const contentType = req.get('Content-Type');
+    if (!contentType) {
+        return `No Content-Type header was received.`;
+    }
+    const echoed = contentType.length > MAX_ECHOED_CONTENT_TYPE
+        ? `${contentType.substring(0, MAX_ECHOED_CONTENT_TYPE)}…`
+        : contentType;
+    return `Received Content-Type: ${echoed}.`;
+}
+
+function parseRequestInput<T>(
+    parse: () => T,
+    req: Request,
+    res: Response,
+    next: NextFunction
+): { ok: true, value: T } | { ok: false } {
+    try {
+        return { ok: true, value: parse() };
+    } catch (error) {
+        handleError(toInvalidInput(error), req, res, next);
+        return { ok: false };
+    }
+}
+
+// A route miss (no :hash in the URL) is a 404 just like a feed-cache miss,
+// but for a different reason. Send a machine-readable body so a client can
+// always tell "wrong URL" from "re-subscribe via POST /feeds" (issue #182
+// finding 6); handleError sends "feed_not_found" for the latter.
+function sendRouteMiss(res: Response) {
+    res.type("text");
+    res.status(404).send("not_found");
+}
+
+// These bodies are diagnostics, not markup, but they quote client-supplied
+// text: a Content-Type header, a fact type named in a parse failure. The
+// response is text/plain and marked nosniff, yet that is the content type
+// saying so — neutralize the characters that could start markup here, at the
+// one place every error body is written, so the guarantee does not rest on a
+// header a proxy or a later edit could change. Quotes are left alone: they
+// only matter inside a tag, which escaping '<' already prevents, and messages
+// quote identifiers routinely.
+const HTML_META_CHARACTERS: { [character: string]: string } = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;"
+};
+
+function sanitizeErrorBody(message: string): string {
+    return message.replace(/[&<>]/g, character => HTML_META_CHARACTERS[character]);
 }
 
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {
     const requestPath = req.path;
+    // Error bodies are plain text built partly from client-supplied input, so
+    // stop a browser from sniffing one as markup.
+    res.set("X-Content-Type-Options", "nosniff");
     if (error instanceof FeedNotFound) {
         Trace.warn(`Feed not found: ${error.feedHash} (Path: ${requestPath})`);
         res.type("text");
@@ -1023,15 +1177,19 @@ function handleError(error: any, req: Request, res: Response, next: NextFunction
     } else if (error instanceof Forbidden) {
         Trace.warn(`Forbidden: ${error.message} (Path: ${requestPath})`);
         res.type("text");
-        res.status(403).send(error.message);
+        res.status(403).send(sanitizeErrorBody(error.message));
     } else if (error instanceof Invalid) {
         Trace.warn(`Invalid: ${error.message} (Path: ${requestPath})`);
         res.type("text");
-        res.status(400).send(error.message);
+        res.status(400).send(sanitizeErrorBody(error.message));
     } else {
+        // Classification above is an allow-list, so anything reaching here is
+        // unclassified — including genuine internal failures whose message can
+        // name internal hosts or credentials. Keep the detail in the trace and
+        // send a generic body to the caller (issue #182 finding 4).
         Trace.error(`Error: ${error.message} (Path: ${requestPath})`);
         res.type("text");
-        res.status(500).send(error.message);
+        res.status(500).send("Internal server error");
     }
     next();
 }
