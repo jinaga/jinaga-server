@@ -1095,12 +1095,20 @@ function parseTextBody(req: Request): string {
 }
 
 // Naming what arrived turns "check your setup" into something the caller can
-// act on without guessing which end is misconfigured.
+// act on without guessing which end is misconfigured. The value is echoed from
+// the request, so cap it: a real content type is short, and the body should
+// not grow with whatever the caller chose to send.
+const MAX_ECHOED_CONTENT_TYPE = 80;
+
 function describeContentType(req: Request): string {
     const contentType = req.get('Content-Type');
-    return contentType
-        ? `Received Content-Type: ${contentType}.`
-        : `No Content-Type header was received.`;
+    if (!contentType) {
+        return `No Content-Type header was received.`;
+    }
+    const echoed = contentType.length > MAX_ECHOED_CONTENT_TYPE
+        ? `${contentType.substring(0, MAX_ECHOED_CONTENT_TYPE)}…`
+        : contentType;
+    return `Received Content-Type: ${echoed}.`;
 }
 
 function parseRequestInput<T>(
@@ -1126,6 +1134,24 @@ function sendRouteMiss(res: Response) {
     res.status(404).send("not_found");
 }
 
+// These bodies are diagnostics, not markup, but they quote client-supplied
+// text: a Content-Type header, a fact type named in a parse failure. The
+// response is text/plain and marked nosniff, yet that is the content type
+// saying so — neutralize the characters that could start markup here, at the
+// one place every error body is written, so the guarantee does not rest on a
+// header a proxy or a later edit could change. Quotes are left alone: they
+// only matter inside a tag, which escaping '<' already prevents, and messages
+// quote identifiers routinely.
+const HTML_META_CHARACTERS: { [character: string]: string } = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;"
+};
+
+function sanitizeErrorBody(message: string): string {
+    return message.replace(/[&<>]/g, character => HTML_META_CHARACTERS[character]);
+}
+
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {
     const requestPath = req.path;
     // Error bodies are plain text built partly from client-supplied input, so
@@ -1138,11 +1164,11 @@ function handleError(error: any, req: Request, res: Response, next: NextFunction
     } else if (error instanceof Forbidden) {
         Trace.warn(`Forbidden: ${error.message} (Path: ${requestPath})`);
         res.type("text");
-        res.status(403).send(error.message);
+        res.status(403).send(sanitizeErrorBody(error.message));
     } else if (error instanceof Invalid) {
         Trace.warn(`Invalid: ${error.message} (Path: ${requestPath})`);
         res.type("text");
-        res.status(400).send(error.message);
+        res.status(400).send(sanitizeErrorBody(error.message));
     } else {
         // Classification above is an allow-list, so anything reaching here is
         // unclassified — including genuine internal failures whose message can

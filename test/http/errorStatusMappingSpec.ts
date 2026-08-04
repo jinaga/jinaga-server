@@ -258,6 +258,34 @@ describe("HTTP status mapping", () => {
             expect(await response.text()).toContain("No Content-Type header was received");
         });
 
+        // The echoed Content-Type is client-supplied, so it must not be able to
+        // carry markup into the body.
+        it("neutralizes markup in the echoed Content-Type", async () => {
+            const response = await fetch(`${baseUrl}/write`, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain<script>alert(1)</script>" },
+                body: "anything"
+            });
+            const body = await response.text();
+
+            expect(response.status).toBe(400);
+            expect(body).not.toContain("<script>");
+            expect(body).toContain("&lt;script&gt;");
+        });
+
+        it("caps the length of the echoed Content-Type", async () => {
+            const response = await fetch(`${baseUrl}/write`, {
+                method: "POST",
+                headers: { "Content-Type": `text/plain;padding=${"x".repeat(500)}` },
+                body: "anything"
+            });
+            const body = await response.text();
+
+            expect(response.status).toBe(400);
+            expect(body).toContain("…");
+            expect(body.length).toBeLessThan(300);
+        });
+
         it("marks error responses nosniff", async () => {
             const response = await fetch(`${baseUrl}/write`, {
                 method: "POST",
