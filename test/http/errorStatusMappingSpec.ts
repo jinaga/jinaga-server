@@ -224,6 +224,19 @@ describe("HTTP status mapping", () => {
 
             expect(response.status).toBe(400);
         });
+
+        // The text/plain-only routes name the parser the caller is missing,
+        // rather than falling back to parseString's generic content-type
+        // message.
+        it.each(["/write", "/read"])("names express.text() in the 400 body for %s", async (path) => {
+            const response = await fetch(`${baseUrl}${path}`, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: "anything"
+            });
+
+            expect(await response.text()).toContain("express.text()");
+        });
     });
 
     it("answers 500 without echoing the internal error message", async () => {

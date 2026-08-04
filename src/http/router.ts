@@ -245,22 +245,16 @@ function postCreate<T>(
 function postStringCreate(method: (user: RequestUser, message: string) => Promise<void>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const parsed = parseRequestInput(() => parseString(req.body), req, res, next);
+        const parsed = parseRequestInput(() => parseTextBody(req), req, res, next);
         if (!parsed.ok) {
             return;
         }
-        const input = parsed.value;
-        if (!input) {
-            handleError(new Invalid(MISSING_TEXT_BODY), req, res, next);
-        }
-        else {
-            method(user, input)
-                .then(_ => {
-                    res.sendStatus(201);
-                    next();
-                })
-                .catch(error => handleError(error, req, res, next));
-        }
+        method(user, parsed.value)
+            .then(_ => {
+                res.sendStatus(201);
+                next();
+            })
+            .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -272,32 +266,27 @@ function postReadWithStreaming(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const parsed = parseRequestInput(() => parseString(req.body), req, res, next);
+        const parsed = parseRequestInput(() => parseTextBody(req), req, res, next);
         if (!parsed.ok) {
             return;
         }
-        const input = parsed.value;
-        if (!input) {
-            handleError(new Invalid(MISSING_TEXT_BODY), req, res, next);
-        }
-        else {
-            // Check if Accept header explicitly prefers a specific format
-            const acceptHeader = req.get('Accept');
-            let acceptType: string = 'text/plain'; // Default for backward compatibility
 
-            if (acceptHeader && acceptHeader !== '*/*') {
-                // Only use req.accepts() when there's a specific preference
-                const preferredType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']);
-                acceptType = preferredType ? String(preferredType) : 'text/plain';
-            }
-            
-            method(user, input, acceptType)
-                .then(({resultStream, csvMetadata}) => {
-                    outputReadResults(resultStream, res, acceptType, csvMetadata);
-                    next();
-                })
-                .catch(error => handleError(error, req, res, next));
+        // Check if Accept header explicitly prefers a specific format
+        const acceptHeader = req.get('Accept');
+        let acceptType: string = 'text/plain'; // Default for backward compatibility
+
+        if (acceptHeader && acceptHeader !== '*/*') {
+            // Only use req.accepts() when there's a specific preference
+            const preferredType = req.accepts(['text/csv', 'application/x-ndjson', 'application/json', 'text/plain']);
+            acceptType = preferredType ? String(preferredType) : 'text/plain';
         }
+
+        method(user, parsed.value, acceptType)
+            .then(({resultStream, csvMetadata}) => {
+                outputReadResults(resultStream, res, acceptType, csvMetadata);
+                next();
+            })
+            .catch(error => handleError(error, req, res, next));
     };
 }
 
@@ -1088,6 +1077,19 @@ function toInvalidInput(error: any): Invalid {
         return error;
     }
     return new Invalid(error instanceof Error ? error.message : String(error));
+}
+
+// /read and /write accept text/plain only, so every unreadable body there has
+// the same cause and deserves the same actionable hint. Checking req.body here
+// rather than deferring to parseString keeps a missing body parser — the common
+// misconfiguration — from being reported with parseString's generic
+// content-type message.
+function parseTextBody(req: Request): string {
+    const body = req.body;
+    if (typeof body !== 'string' || !body) {
+        throw new Invalid(MISSING_TEXT_BODY);
+    }
+    return body;
 }
 
 function parseRequestInput<T>(
