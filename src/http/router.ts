@@ -58,7 +58,7 @@ function getOrStream<U>(
                 .then(response => {
                     if (!response) {
                         console.log(`[HttpConnection:${connectionId}] Stream method returned null - sending 404`);
-                        res.sendStatus(404);
+                        sendRouteMiss(res);
                         next();
                     }
                     else {
@@ -156,7 +156,7 @@ function getOrStream<U>(
                 .then(response => {
                     if (!response) {
                         console.log(`[HttpConnection:${connectionId}] Get method returned null - sending 404`);
-                        res.sendStatus(404);
+                        sendRouteMiss(res);
                         next();
                     }
                     else {
@@ -199,9 +199,14 @@ function post<T, U>(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const message = parse(req.body);
+        const parsed = parseRequestInput(() => parse(req.body), req, res, next);
+        if (!parsed.ok) {
+            return;
+        }
+        const message = parsed.value;
         if (!message) {
-            throw new Error('Ensure that you have called app.use(express.json()).');
+            handleError(new Invalid(MISSING_BODY), req, res, next);
+            return;
         }
         method(user, message, req.params)
             .then(response => {
@@ -224,8 +229,11 @@ function postCreate<T>(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const message = parse(req);
-        method(user, message)
+        const parsed = parseRequestInput(() => parse(req), req, res, next);
+        if (!parsed.ok) {
+            return;
+        }
+        method(user, parsed.value)
             .then(_ => {
                 res.sendStatus(201);
                 next();
@@ -237,10 +245,13 @@ function postCreate<T>(
 function postStringCreate(method: (user: RequestUser, message: string) => Promise<void>): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
+        const parsed = parseRequestInput(() => parseString(req.body), req, res, next);
+        if (!parsed.ok) {
+            return;
+        }
+        const input = parsed.value;
+        if (!input) {
+            handleError(new Invalid(MISSING_TEXT_BODY), req, res, next);
         }
         else {
             method(user, input)
@@ -261,10 +272,13 @@ function postReadWithStreaming(
 ): Handler {
     return (req, res, next) => {
         const user = <RequestUser>(req as any).user;
-        const input = parseString(req.body);
-        if (!input || typeof (input) !== 'string') {
-            res.type("text");
-            res.status(500).send('Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).');
+        const parsed = parseRequestInput(() => parseString(req.body), req, res, next);
+        if (!parsed.ok) {
+            return;
+        }
+        const input = parsed.value;
+        if (!input) {
+            handleError(new Invalid(MISSING_TEXT_BODY), req, res, next);
         }
         else {
             // Check if Accept header explicitly prefers a specific format
@@ -313,7 +327,7 @@ function inputSaveMessage(req: Request): GraphSource {
             read: async (onEnvelopes) => {
                 const message = parseSaveMessage(req.body);
                 if (!message) {
-                    throw new Error('Ensure that you have called app.use(express.json()).');
+                    throw new Invalid(MISSING_JSON_BODY);
                 }
                 await onEnvelopes(message.facts.map(fact => ({
                     fact: fact,
@@ -550,11 +564,19 @@ export class HttpRouter {
             }
 
             const userIdentity = serializeUserIdentity(user);
-            await this.authorization.save(userIdentity, factRecords
+            const envelopes: FactEnvelope[] = factRecords
                 .map(fact => ({
                     fact: fact,
                     signatures: []
-                })));
+                }));
+            try {
+                await this.authorization.save(userIdentity, envelopes);
+            } catch (error) {
+                // /write reaches the same authorization path as /save, so it
+                // needs the same translation of predecessor-resolution
+                // failures into a diagnosable 4xx (issue #182 finding 2).
+                throw toSaveAuthorizationError(error, envelopes);
+            }
         });
     }
 
@@ -988,6 +1010,13 @@ export class FeedNotFound extends Error {
     }
 }
 
+// Both message shapes below are matched by prose, because jinaga reports a
+// missing predecessor as a plain Error. That is fragile: an upstream wording
+// change silently turns these back into 500s (issue #182 finding 5). The
+// end-to-end cases in test/http/errorStatusMappingSpec.ts drive the real
+// AuthorizationEngine so that drift fails the build. Replace the patterns
+// with instanceof checks once jinaga.js#234 lands a typed error.
+
 // Authorization rule evaluation reports a missing predecessor as a plain
 // Error of this shape (see authorizationRules.ts / specification-runner.ts
 // in jinaga). It surfaces when the client's save request didn't include the
@@ -995,23 +1024,93 @@ export class FeedNotFound extends Error {
 // instead of an opaque 500 (issue #175).
 const FACT_NOT_DEFINED_PATTERN = /^The fact (\S+):(\S+) is not defined\.$/;
 
+// The topological sort in jinaga's AuthorizationEngine.authorizeFacts reports
+// the same underlying condition — a predecessor present in neither the batch
+// nor storage — with different wording, and names the successors it could not
+// sort rather than the predecessor it could not find. It never matched the
+// pattern above, so it fell through to a bare 500 (issue #182 finding 1).
+const UNRESOLVED_PREDECESSOR_PATTERN = /^Cannot authorize (\d+ facts?) of type (.+?): one or more predecessors could not be resolved\./;
+
 function toSaveAuthorizationError(error: any, envelopes: FactEnvelope[]): any {
-    if (error instanceof Error) {
-        const match = FACT_NOT_DEFINED_PATTERN.exec(error.message);
-        if (match) {
-            const [, factType, factHash] = match;
-            const factTypesInBatch = Array.from(new Set(envelopes.map(e => e.fact.type))).join(", ");
-            Trace.warn(
-                `Save authorization could not resolve predecessor ${factType}:${factHash} ` +
-                `among ${envelopes.length} fact(s) in the request (types: ${factTypesInBatch}).`
-            );
-            return new Invalid(
-                `The fact ${factType}:${factHash} is required to authorize this save but was not included in the request. ` +
-                `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
-            );
-        }
+    if (!(error instanceof Error)) {
+        return error;
     }
+
+    const describeBatch = () => {
+        const factTypesInBatch = Array.from(new Set(envelopes.map(e => e.fact.type))).join(", ");
+        return `${envelopes.length} fact(s) in the request (types: ${factTypesInBatch})`;
+    };
+
+    const notDefined = FACT_NOT_DEFINED_PATTERN.exec(error.message);
+    if (notDefined) {
+        const [, factType, factHash] = notDefined;
+        Trace.warn(
+            `Save authorization could not resolve predecessor ${factType}:${factHash} ` +
+            `among ${describeBatch()}.`
+        );
+        return new Invalid(
+            `The fact ${factType}:${factHash} is required to authorize this save but was not included in the request. ` +
+            `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
+        );
+    }
+
+    const unresolved = UNRESOLVED_PREDECESSOR_PATTERN.exec(error.message);
+    if (unresolved) {
+        const [, count, unresolvedTypes] = unresolved;
+        Trace.warn(
+            `Save authorization could not resolve the predecessors of ${count} of type ${unresolvedTypes} ` +
+            `among ${describeBatch()}.`
+        );
+        return new Invalid(
+            `${count} of type ${unresolvedTypes} could not be authorized because one or more predecessors ` +
+            `were not found in storage and were not included in the request. ` +
+            `Ensure the full closure of predecessors needed by your authorization rules is sent together.`
+        );
+    }
+
     return error;
+}
+
+// post() serves both a JSON route (/load) and a text route (/feeds), so its
+// message names no particular parser; the single-content-type entry points
+// keep the specific hint they have always given.
+const MISSING_BODY = 'The request body is empty or could not be read. Ensure that the body parser for this Content-Type is registered.';
+const MISSING_JSON_BODY = 'Ensure that you have called app.use(express.json()).';
+const MISSING_TEXT_BODY = 'Expected Content-Type text/plain. Ensure that you have called app.use(express.text()).';
+
+// A request body that fails to parse is a client error. Both this module's
+// parseString and jinaga's message parsers signal that by throwing
+// synchronously from the handler, where Express hands it to its default error
+// handler and reports 500. Classify parse failures as Invalid so handleError
+// renders a 400 (issue #182 finding 3).
+function toInvalidInput(error: any): Invalid {
+    if (error instanceof Invalid) {
+        return error;
+    }
+    return new Invalid(error instanceof Error ? error.message : String(error));
+}
+
+function parseRequestInput<T>(
+    parse: () => T,
+    req: Request,
+    res: Response,
+    next: NextFunction
+): { ok: true, value: T } | { ok: false } {
+    try {
+        return { ok: true, value: parse() };
+    } catch (error) {
+        handleError(toInvalidInput(error), req, res, next);
+        return { ok: false };
+    }
+}
+
+// A route miss (no :hash in the URL) is a 404 just like a feed-cache miss,
+// but for a different reason. Send a machine-readable body so a client can
+// always tell "wrong URL" from "re-subscribe via POST /feeds" (issue #182
+// finding 6); handleError sends "feed_not_found" for the latter.
+function sendRouteMiss(res: Response) {
+    res.type("text");
+    res.status(404).send("not_found");
 }
 
 function handleError(error: any, req: Request, res: Response, next: NextFunction) {
@@ -1029,9 +1128,13 @@ function handleError(error: any, req: Request, res: Response, next: NextFunction
         res.type("text");
         res.status(400).send(error.message);
     } else {
+        // Classification above is an allow-list, so anything reaching here is
+        // unclassified — including genuine internal failures whose message can
+        // name internal hosts or credentials. Keep the detail in the trace and
+        // send a generic body to the caller (issue #182 finding 4).
         Trace.error(`Error: ${error.message} (Path: ${requestPath})`);
         res.type("text");
-        res.status(500).send(error.message);
+        res.status(500).send("Internal server error");
     }
     next();
 }
