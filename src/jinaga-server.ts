@@ -253,13 +253,59 @@ function getPool(uriOrPool: string | Pool, pools: { [uri: string]: Pool; }): Poo
     }
 }
 
+type PoolSettingDeclaration = {
+    variable: string,
+    defaultValue: number,
+    minimum: number
+};
+
+// The settings of a pool that this server builds for itself, each named by the
+// environment variable that sets it. A pool the caller supplies is used as
+// given, so none of these applies to it.
+const poolSettingDeclarations = {
+    // A pool of zero connections can serve nothing, so one is the minimum.
+    max: { variable: "POSTGRES_POOL_MAX", defaultValue: 10, minimum: 1 },
+    idleTimeoutMillis: { variable: "POSTGRES_IDLE_TIMEOUT_MILLIS", defaultValue: 30000, minimum: 0 },
+    // Zero means wait forever for a connection to come free.
+    connectionTimeoutMillis: { variable: "POSTGRES_CONNECTION_TIMEOUT_MILLIS", defaultValue: 0, minimum: 0 }
+} satisfies { [setting: string]: PoolSettingDeclaration };
+
+type PoolSettings = {
+    [setting in keyof typeof poolSettingDeclarations]: number
+};
+
+// The one rule by which every pool setting is read from the environment. An
+// absent or empty variable takes the default; anything that is not an integer
+// at or above the setting's minimum is refused rather than resolved, so the
+// environment either names a pool that can be built or no pool at all.
+function readPoolSetting({ variable, defaultValue, minimum }: PoolSettingDeclaration): number {
+    const value = process.env[variable];
+    if (value === undefined || value.trim() === '') {
+        return defaultValue;
+    }
+    const parsed = /^\d+$/.test(value.trim()) ? parseInt(value.trim(), 10) : NaN;
+    if (isNaN(parsed) || parsed < minimum) {
+        throw new Error(`The environment variable ${variable} is set to ${JSON.stringify(value)}, which is not an integer of at least ${minimum}.`);
+    }
+    return parsed;
+}
+
+function readPoolSettings(): PoolSettings {
+    return {
+        max: readPoolSetting(poolSettingDeclarations.max),
+        idleTimeoutMillis: readPoolSetting(poolSettingDeclarations.idleTimeoutMillis),
+        connectionTimeoutMillis: readPoolSetting(poolSettingDeclarations.connectionTimeoutMillis)
+    };
+}
+
 function createPool(postgresUri: string): Pool {
+    const settings = readPoolSettings();
     const postgresPool = new Pool({
         connectionString: postgresUri,
-        idleTimeoutMillis: process.env.POSTGRES_IDLE_TIMEOUT_MILLIS ?
-            parseInt(process.env.POSTGRES_IDLE_TIMEOUT_MILLIS) :
-            30000,
+        ...settings
     });
+
+    Trace.info(`Postgres pool created with max ${settings.max}, idleTimeoutMillis ${settings.idleTimeoutMillis}, connectionTimeoutMillis ${settings.connectionTimeoutMillis}`);
 
     tracePool(postgresPool);
 
