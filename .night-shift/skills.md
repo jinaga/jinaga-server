@@ -9,6 +9,7 @@ whatever hour the run wakes.
 |---|---|---|
 | `night-shift-worker` | `factoryengineering/skills` | `2fb85d8297c0a3059365bd809b8242f5657f2740` |
 | `refining-issues` | `factoryengineering/skills` | `2fb85d8297c0a3059365bd809b8242f5657f2740` |
+| `degrees-of-freedom` | `michaellperry/skills` | `3722c778facbfccc609a928d25ffb22e1ba461e6` |
 | `night-shift-setup` | `factoryengineering/skills` | `2fb85d8297c0a3059365bd809b8242f5657f2740` |
 
 To take an upstream change, re-copy the skill directory from its source, update

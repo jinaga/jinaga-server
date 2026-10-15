@@ -21,10 +21,14 @@ private, so never carry its contents into an issue or pull request in this one.
 
 - `CLAUDE.md` — commands, layers, storage implementations, and where the
   Specification-to-SQL translation lives.
+- The documents under `## Authority`, at the articles the issue cites.
 
 ## Authority
 
-`none`
+- `.claude/skills/degrees-of-freedom/degrees-of-freedom-constitution.md` — the
+  principles a design answers to. An issue's **Conformance** section cites the
+  article each criterion answers to. An amendment to it is the maintainer's
+  decision and never lands in an implementation slice.
 
 ## Before you fix
 
@@ -57,12 +61,9 @@ exports. `npm test` type-checks and runs Jest without a database.
 
 `main.yml`
 
-Read runs for this file; it is the merge gate. **It triggers on `pull_request`
-with a `branches: [ main ]` filter**, so only a pull request whose base is
-`main` gets check runs from its own pull request event. An upper layer of a
-stack, whose base is the layer below, gets none. Treat that the way the skill
-treats a layer with no run: dispatch the workflow on that branch and report it
-as a finding.
+Read runs for this file; it is the merge gate. It runs on a bare
+`pull_request:` with no `branches:` filter, so every layer of a stack gets
+check runs from its own pull request event.
 
 `publish.yml` and `upgrade-jinaga.yml` do not gate a pull request. Address the
 workflow by this file name rather than by its display name, `CI`.
