@@ -103,6 +103,23 @@ These variables apply only to a pool that Jinaga server builds from a
 connection string. If you pass your own `pg` `Pool` as `pgStore` or
 `pgKeystore`, it is used exactly as you configured it.
 
+## Setting the log level
+
+`LOG_LEVEL` sets how much Jinaga server logs. It takes one of `debug`, `info`,
+`warn` or `error`, in lowercase, and each level includes the ones after it.
+`debug` adds per-item detail, such as one line per listener notified, which is
+useful during an incident and too much for every day.
+
+When `LOG_LEVEL` is unset or empty, the level is left as it was: `info`, unless
+your own code called `Trace.setLevel` before `JinagaServer.create`. Any other
+value makes `JinagaServer.create` throw, naming the value it received and the
+accepted ones, so a misspelled level stops the server from starting rather
+than being ignored.
+
+`LOG_LEVEL` governs output that goes through Jinaga's `Trace`. Some of the
+server's own HTTP streaming messages are still written directly to the console,
+and are not affected by it.
+
 ## Migrating from version 2
 
 If you are already running a Jinaga database, whether in a container or on your own PostgreSQL server, you will need to upgrade to get it to work with version 3.

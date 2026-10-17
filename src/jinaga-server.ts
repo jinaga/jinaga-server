@@ -27,6 +27,7 @@ import {
     Storage,
     SyncStatusNotifier,
     Trace,
+    TraceLevel,
     TransientFork,
     UserIdentity,
     validatePurgeSpecification,
@@ -81,6 +82,7 @@ const localDeviceIdentity = {
 
 export class JinagaServer {
     static create(config: JinagaServerConfig): JinagaServerInstance {
+        applyLogLevel();
         const syncStatusNotifier = new SyncStatusNotifier();
         const pools: { [uri: string]: Pool } = {};
         const pool = makePool(config, pools);
@@ -274,20 +276,57 @@ type PoolSettings = {
     [setting in keyof typeof poolSettingDeclarations]: number
 };
 
+// The one rule for what counts as set. A variable that is absent or empty is
+// unset: a container that declares a variable without a value supplies an
+// empty string. Surrounding whitespace is not part of the value.
+function readEnvironmentVariable(variable: string): string | undefined {
+    const value = process.env[variable]?.trim();
+    return value === undefined || value === '' ? undefined : value;
+}
+
 // The one rule by which every pool setting is read from the environment. An
-// absent or empty variable takes the default; anything that is not an integer
-// at or above the setting's minimum is refused rather than resolved, so the
+// unset variable takes the default; anything that is not an integer at or
+// above the setting's minimum is refused rather than resolved, so the
 // environment either names a pool that can be built or no pool at all.
 function readPoolSetting({ variable, defaultValue, minimum }: PoolSettingDeclaration): number {
-    const value = process.env[variable];
-    if (value === undefined || value.trim() === '') {
+    const value = readEnvironmentVariable(variable);
+    if (value === undefined) {
         return defaultValue;
     }
-    const parsed = /^\d+$/.test(value.trim()) ? parseInt(value.trim(), 10) : NaN;
+    const parsed = /^\d+$/.test(value) ? parseInt(value, 10) : NaN;
     if (isNaN(parsed) || parsed < minimum) {
-        throw new Error(`The environment variable ${variable} is set to ${JSON.stringify(value)}, which is not an integer of at least ${minimum}.`);
+        throw new Error(`The environment variable ${variable} is set to ${JSON.stringify(process.env[variable])}, which is not an integer of at least ${minimum}.`);
     }
     return parsed;
+}
+
+// Every level Trace accepts, keyed by jinaga's own TraceLevel. A level that a
+// later jinaga adds or removes fails the type check here until this follows.
+const traceLevels: Record<TraceLevel, true> = {
+    debug: true,
+    info: true,
+    warn: true,
+    error: true
+};
+
+function isTraceLevel(value: string): value is TraceLevel {
+    return Object.prototype.hasOwnProperty.call(traceLevels, value);
+}
+
+// LOG_LEVEL sets the trace threshold. Unset leaves the threshold alone rather
+// than resetting it to info, so a caller that set a level in code before
+// calling create keeps it. Each level has one spelling; any other value is
+// refused, so the environment names a level or no server at all.
+function applyLogLevel() {
+    const value = readEnvironmentVariable("LOG_LEVEL");
+    if (value === undefined) {
+        return;
+    }
+    if (!isTraceLevel(value)) {
+        const accepted = Object.keys(traceLevels).join(", ");
+        throw new Error(`The environment variable LOG_LEVEL is set to ${JSON.stringify(process.env.LOG_LEVEL)}, which is not one of ${accepted}.`);
+    }
+    Trace.setLevel(value);
 }
 
 function readPoolSettings(): PoolSettings {
