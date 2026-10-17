@@ -41,6 +41,13 @@ import { outputReadResultsStreaming } from "./output-formatters";
 import { arrayToResultStream, ResultStream } from "./result-stream";
 import { Stream } from "./stream";
 
+// A streaming response reports itself twice: one line when the stream opens
+// and one when it ends, carrying the messages sent, how long it lasted, and
+// what ended it. Issue #192: the per-message and per-lifecycle-step lines this
+// replaces made the log grow with traffic rather than with the number of events
+// worth knowing about, and `STREAM DONE`'s message count already said what the
+// per-message lines said one at a time. A plain GET says nothing at all, since
+// Trace.dependency already records it. Failures still log.
 function getOrStream<U>(
     getMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<U | null>),
     streamMethod: ((req: RequestUser, params: { [key: string]: string }, query: qs.ParsedQs) => Promise<Stream<U> | null>)
@@ -49,75 +56,68 @@ function getOrStream<U>(
         const connectionId = Math.random().toString(36).substring(2, 10);
         const user = <RequestUser>(req as any).user;
         const accept = req.headers["accept"];
-        
-        console.log(`[HttpConnection:${connectionId}] New request - User: ${user?.id || 'anonymous'}, Accept: ${accept}, URL: ${req.url}`);
-        
+
         if (accept && accept.indexOf("application/x-jinaga-feed-stream") >= 0) {
-            console.log(`[HttpConnection:${connectionId}] STREAMING request detected`);
-            
             streamMethod(user, req.params, req.query)
                 .then(response => {
                     if (!response) {
-                        console.log(`[HttpConnection:${connectionId}] Stream method returned null - sending 404`);
                         sendRouteMiss(res);
                         next();
                     }
                     else {
-                        console.log(`[HttpConnection:${connectionId}] Setting up streaming response`);
-                        
                         res.type("application/x-jinaga-feed-stream");
                         res.set("Connection", "keep-alive");
                         res.set("Cache-Control", "no-cache");
                         res.set("Access-Control-Allow-Origin", "*");
                         res.flushHeaders();
-                        
-                        console.log(`[HttpConnection:${connectionId}] Headers flushed - setting up event handlers`);
-                        
+
+                        const openedAt = Date.now();
+                        console.log(`[HttpConnection:${connectionId}] Stream opened - User: ${user?.id || 'anonymous'}, URL: ${req.url}`);
+
                         let clientDisconnected = false;
-                        let timeoutTriggered = false;
                         let streamClosed = false;
-                        
+                        // What closed the stream from outside, where something
+                        // other than the feed itself closed it. One value
+                        // rather than a flag per cause, because a stream ends
+                        // exactly once and only the first cause is the reason.
+                        let closedBy: "client disconnect" | "timeout" | null = null;
+
                         // Client disconnect handler
                         req.on("close", () => {
-                            console.log(`[HttpConnection:${connectionId}] CLIENT DISCONNECTED`);
                             clientDisconnected = true;
                             if (!streamClosed) {
-                                console.log(`[HttpConnection:${connectionId}] Closing stream due to client disconnect`);
-                                response.close();
+                                closedBy = "client disconnect";
                                 streamClosed = true;
+                                response.close();
                             }
                         });
-                        
+
                         // Timeout handler
                         const timeout = setTimeout(() => {
-                            console.log(`[HttpConnection:${connectionId}] TIMEOUT TRIGGERED (5 minutes)`);
-                            timeoutTriggered = true;
                             if (!streamClosed) {
-                                console.log(`[HttpConnection:${connectionId}] Closing stream due to timeout`);
-                                response.close();
+                                closedBy = "timeout";
                                 streamClosed = true;
+                                response.close();
                             }
                         }, 5 * 60 * 1000);
-                        
+
                         let messageCount = 0;
-                        
+
                         response
                             .next(data => {
                                 messageCount++;
                                 const writeStart = Date.now();
-                                
+
                                 if (clientDisconnected) {
                                     console.warn(`[HttpConnection:${connectionId}] Attempted to write to disconnected client - Message #${messageCount}`);
                                     return;
                                 }
-                                
+
                                 try {
                                     const jsonData = JSON.stringify(data) + "\n\n";
                                     res.write(jsonData);
                                     const writeDuration = Date.now() - writeStart;
-                                    
-                                    console.log(`[HttpConnection:${connectionId}] Message #${messageCount} sent - Size: ${jsonData.length} bytes, Duration: ${writeDuration}ms`);
-                                    
+
                                     if (writeDuration > 50) {
                                         console.warn(`[HttpConnection:${connectionId}] SLOW write operation - Duration: ${writeDuration}ms`);
                                     }
@@ -126,24 +126,19 @@ function getOrStream<U>(
                                 }
                             })
                             .done(() => {
-                                console.log(`[HttpConnection:${connectionId}] STREAM DONE - Messages sent: ${messageCount}, Client disconnected: ${clientDisconnected}, Timeout triggered: ${timeoutTriggered}`);
-                                
                                 clearTimeout(timeout);
                                 streamClosed = true;
-                                
+
+                                console.log(`[HttpConnection:${connectionId}] Stream ended - Messages sent: ${messageCount}, Duration: ${Date.now() - openedAt}ms, Reason: ${closedBy ?? "done"}`);
+
                                 try {
                                     if (!clientDisconnected) {
-                                        console.log(`[HttpConnection:${connectionId}] Ending socket connection`);
                                         res.socket?.end();
-                                    } else {
-                                        console.log(`[HttpConnection:${connectionId}] Client already disconnected - skipping socket end`);
                                     }
                                 } catch (error) {
                                     console.error(`[HttpConnection:${connectionId}] ERROR ending socket: ${error}`);
                                 }
                             });
-                        
-                        console.log(`[HttpConnection:${connectionId}] Stream handlers configured`);
                     }
                 })
                 .catch(error => {
@@ -152,16 +147,13 @@ function getOrStream<U>(
                 });
         }
         else {
-            console.log(`[HttpConnection:${connectionId}] Regular GET request`);
             getMethod(user, req.params, req.query)
                 .then(response => {
                     if (!response) {
-                        console.log(`[HttpConnection:${connectionId}] Get method returned null - sending 404`);
                         sendRouteMiss(res);
                         next();
                     }
                     else {
-                        console.log(`[HttpConnection:${connectionId}] Sending JSON response`);
                         res.type("json");
                         res.send(JSON.stringify(response));
                         next();
