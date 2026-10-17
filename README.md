@@ -82,6 +82,27 @@ Or if you are running from the installed package, run the script from `node_modu
 ./node_modules/jinaga-server/setup.sh
 ```
 
+## Configuring the connection pool
+
+When you give Jinaga server a connection string, it builds the connection pool
+for you, and these environment variables set it up. Each one defaults to the
+value below when it is unset or empty, so a deployment that sets none of them
+behaves exactly as it did before they existed.
+
+| Variable | Units | Default | Meaning |
+| --- | --- | --- | --- |
+| `POSTGRES_POOL_MAX` | connections | `10` | The most connections the pool will open. Must be at least 1. |
+| `POSTGRES_IDLE_TIMEOUT_MILLIS` | milliseconds | `30000` | How long an idle connection stays in the pool before it is closed. `0` keeps idle connections forever. |
+| `POSTGRES_CONNECTION_TIMEOUT_MILLIS` | milliseconds | `0` | How long a query waits for a connection to come free before it fails. `0` waits forever. |
+
+Each must be a whole number of its own unit. A value that is not makes
+`JinagaServer.create` throw, naming the variable and the value it received,
+rather than starting a server configured with something nobody chose.
+
+These variables apply only to a pool that Jinaga server builds from a
+connection string. If you pass your own `pg` `Pool` as `pgStore` or
+`pgKeystore`, it is used exactly as you configured it.
+
 ## Migrating from version 2
 
 If you are already running a Jinaga database, whether in a container or on your own PostgreSQL server, you will need to upgrade to get it to work with version 3.
