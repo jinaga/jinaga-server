@@ -312,9 +312,23 @@ function createPool(postgresUri: string): Pool {
     return postgresPool;
 }
 
+const poolWindowMilliseconds = 10000;
+
 export function tracePool(postgresPool: Pool) {
+    // Pool pressure is reported once per window of time rather than once per
+    // checkout, so the output rate no longer follows the acquire rate and no
+    // longer peaks when the pool is saturated. The window carries the largest
+    // waiting count it saw, so a spike that comes and goes inside one window
+    // still appears in the log.
+    let acquiredInWindow = false;
+    let peakWaiting = 0;
+
     postgresPool.on('acquire', (client) => {
-        Trace.metric('Postgres acquired', poolMetrics());
+        acquiredInWindow = true;
+        observeWaiting();
+    });
+    postgresPool.on('release', (err, client) => {
+        observeWaiting();
     });
     postgresPool.on('connect', (client) => {
         Trace.metric('Postgres connected', poolMetrics());
@@ -325,6 +339,34 @@ export function tracePool(postgresPool: Pool) {
     postgresPool.on('error', (err, client) => {
         Trace.error(err);
     });
+
+    // The window closes on a timer so that a storm which stops in the middle
+    // of a window still reports its peak. The timer is unreferenced, so it
+    // does not hold the process open, and it stops once the pool has ended.
+    const windowTimer = setInterval(closeWindow, poolWindowMilliseconds);
+    windowTimer.unref?.();
+
+    function observeWaiting() {
+        if (postgresPool.waitingCount > peakWaiting) {
+            peakWaiting = postgresPool.waitingCount;
+        }
+    }
+
+    function closeWindow() {
+        if (postgresPool.ended) {
+            clearInterval(windowTimer);
+            return;
+        }
+        if (acquiredInWindow) {
+            const metrics = poolMetrics();
+            Trace.metric('Postgres pool', { ...metrics, peakWaiting });
+            if (peakWaiting > 0) {
+                Trace.warn(`Postgres pool saturated: ${peakWaiting} waiting at peak, ${metrics.waiting} waiting of ${metrics.total} at window close.`);
+            }
+        }
+        acquiredInWindow = false;
+        peakWaiting = 0;
+    }
 
     function poolMetrics() {
         return {
