@@ -44,7 +44,7 @@ import {
 } from "./maps";
 import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification, SqlQueryTree } from "./specification-result-sql";
 import { sqlFromFeed } from "./specification-sql";
-import { purgeDescendantsSql, purgeSqlFromSpecification } from "./purge-sql";
+import { purgeDescendantsSql, purgeSqlFromSpecifications } from "./purge-sql";
 
 interface PostgresFactRecord extends FactRecord {
     timestamp: Date;  // Maps to date_learned column
@@ -451,12 +451,26 @@ export class PostgresStore implements Storage {
     }
 
     async purge(purgeConditions: Specification[]): Promise<number> {
-        let count = 0;
+        // Purge all conditions on one root type in a single statement,
+        // so that no condition deletes the triggers of another.
+        const conditionsByGivenType = new Map<string, Specification[]>();
         for (const specification of purgeConditions) {
-            const factTypes = await this.loadFactTypesFromSpecification(specification);
-            const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
+            const givenType = specification.given[0].label.type;
+            const group = conditionsByGivenType.get(givenType) ?? [];
+            group.push(specification);
+            conditionsByGivenType.set(givenType, group);
+        }
 
-            const purgeCommand = purgeSqlFromSpecification(specification, factTypes, roleMap, this.schema);
+        let count = 0;
+        for (const specifications of conditionsByGivenType.values()) {
+            let factTypes = this.factTypeMap;
+            let roleMap = this.roleMap;
+            for (const specification of specifications) {
+                factTypes = await this.loadFactTypesFromSpecification(specification);
+                roleMap = await this.loadRolesFromSpecification(specification, factTypes);
+            }
+
+            const purgeCommand = purgeSqlFromSpecifications(specifications, factTypes, roleMap, this.schema);
             if (!purgeCommand) {
                 continue;
             }
