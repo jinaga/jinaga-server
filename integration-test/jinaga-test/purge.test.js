@@ -1,5 +1,5 @@
 const { JinagaServer } = require("./jinaga-server");
-const { createModel, Item, Order, OrderCancelled, OrderCancelledReason, Product, Store } = require("./orderModel");
+const { createModel, Item, Order, OrderCancelled, OrderCancelledReason, OrderShipped, Product, Store } = require("./orderModel");
 
 const host = "db";
 // const host = "localhost";
@@ -77,6 +77,57 @@ describe("After-the-fact purge", () => {
         await jPurge.purge();
         const cancels = await jPurge.query(cancelOfOrder, order);
         expect(cancels).toEqual([orderCancelled]);
+    });
+
+    describe("with two conditions on one root type", () => {
+        let jPurgeBoth;
+        let closePurgeBoth;
+
+        beforeEach(() => {
+            ({ j: jPurgeBoth, close: closePurgeBoth } = JinagaServer.create({
+                pgKeystore: connectionString,
+                pgStore:    connectionString,
+                purgeConditions: p => p
+                    .whenExists(model.given(Order).match((order, facts) => facts.ofType(OrderCancelled)
+                        .join(orderCancelled => orderCancelled.order, order)
+                    ))
+                    .whenExists(model.given(Order).match((order, facts) => facts.ofType(OrderShipped)
+                        .join(orderShipped => orderShipped.order, order)
+                    ))
+            }));
+        });
+
+        afterEach(async () => {
+            await closePurgeBoth();
+        });
+
+        it("Should keep the triggers of both conditions", async () => {
+            const store = await jInit.fact(new Store("storeId"));
+            const order = await jInit.fact(new Order(store, new Date()));
+            await jInit.fact(new Item(order, new Product(store, "product1"), 1));
+            await jInit.fact(new Item(order, new Product(store, "product2"), 1));
+            const orderCancelled = await jInit.fact(new OrderCancelled(order, new Date()));
+            const orderShipped = await jInit.fact(new OrderShipped(order, new Date()));
+
+            const cancelOfOrder = model.given(Order).match(order =>
+                order.successors(OrderCancelled, cancelled => cancelled.order)
+            );
+            const shipmentOfOrder = model.given(Order).match(order =>
+                order.successors(OrderShipped, shipped => shipped.order)
+            );
+            const itemsInOrder = model.given(Order).match(order =>
+                order.successors(Item, item => item.order)
+            );
+
+            await jPurgeBoth.purge();
+
+            const cancels = await jPurgeBoth.query(cancelOfOrder, order);
+            expect(cancels).toEqual([orderCancelled]);
+            const shipments = await jPurgeBoth.query(shipmentOfOrder, order);
+            expect(shipments).toEqual([orderShipped]);
+            const items = await jPurgeBoth.query(itemsInOrder, order);
+            expect(items).toEqual([]);
+        });
     });
 });
 

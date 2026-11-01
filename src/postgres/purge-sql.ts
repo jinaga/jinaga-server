@@ -43,6 +43,29 @@ export function purgeDescendantsSql(triggerCount: number, schema: string): strin
 
 export function purgeSqlFromSpecification(specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string):
     { sql: string, parameters: (string | number)[] } | null {
+    return purgeSqlFromSpecifications([specification], factTypes, roleMap, schema);
+}
+
+/**
+ * Generate one statement that purges under every given purge condition at once.
+ * The conditions must share a given type. Every trigger of every condition,
+ * and every ancestor of those triggers, is spared. Running the conditions one
+ * statement at a time would let one condition delete another's triggers.
+ */
+export function purgeSqlFromSpecifications(specifications: Specification[], factTypes: FactTypeMap, roleMap: RoleMap, schema: string):
+    { sql: string, parameters: (string | number)[] } | null {
+    const queryDescriptions = specifications
+        .map(specification => purgeQueryDescription(specification, factTypes, roleMap))
+        .filter((queryDescription): queryDescription is QueryDescription => queryDescription !== null);
+
+    if (queryDescriptions.length === 0) {
+        return null;
+    }
+
+    return generatePurgeSqlQuery(queryDescriptions, schema);
+}
+
+function purgeQueryDescription(specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap): QueryDescription | null {
     const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
 
     let queryDescription = QueryDescription.unsatisfiable;
@@ -71,17 +94,71 @@ export function purgeSqlFromSpecification(specification: Specification, factType
         return null;
     }
 
-    const query = generatePurgeSqlQuery(queryDescription, schema);
-    return query;
-}
-
-
-function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: string):
-    { sql: string, parameters: (string | number)[] } {
     if (queryDescription.existentialConditions.length > 0) {
         throw new Error("Purge conditions should not have existential conditions");
     }
 
+    return queryDescription;
+}
+
+function generatePurgeSqlQuery(queryDescriptions: QueryDescription[], schema: string):
+    { sql: string, parameters: (string | number)[] } {
+    const parameters: (string | number)[] = [];
+    const candidateCtes: string[] = [];
+    const rootSelects: string[] = [];
+    const triggerSelects: string[] = [];
+
+    queryDescriptions.forEach((queryDescription, conditionIndex) => {
+        const name = `candidates${conditionIndex + 1}`;
+        const offset = parameters.length;
+        candidateCtes.push(`${name} AS (\n${generateCandidates(queryDescription, offset, schema)})`);
+        // Remove parameter 2, which is the hash of the first fact
+        parameters.push(
+            queryDescription.parameters[0],
+            ...queryDescription.parameters.slice(2)
+        );
+        rootSelects.push(`    SELECT purge_root FROM ${name}\n`);
+        queryDescription.outputs.forEach((label, index) => {
+            triggerSelects.push(`    SELECT trigger${index + 1} AS fact_id FROM ${name}\n`);
+        });
+    });
+
+    const sql =
+        `WITH ${candidateCtes.join(", ")}, roots AS (\n` +
+        rootSelects.join(`    UNION\n`) +
+        `), triggers AS (\n` +
+        triggerSelects.join(`    UNION\n`) +
+        `), targets AS (\n` +
+        `    SELECT a.fact_id\n` +
+        `    FROM ${schema}.ancestor a\n` +
+        `    JOIN roots r ON r.purge_root = a.ancestor_fact_id\n` +
+        `    WHERE NOT EXISTS (\n` +
+        `        SELECT 1\n` +
+        `        FROM triggers t\n` +
+        `        WHERE a.fact_id = t.fact_id\n` +
+        `    )\n` +
+        `    AND NOT EXISTS (\n` +
+        `        SELECT 1\n` +
+        `        FROM triggers t\n` +
+        `        JOIN ${schema}.ancestor a2\n` +
+        `            ON a2.fact_id = t.fact_id\n` +
+        `        WHERE a.fact_id = a2.ancestor_fact_id\n` +
+        `    )\n` +
+        `), facts AS (\n` +
+        `    DELETE\n` +
+        `    FROM ${schema}.fact f\n` +
+        `    USING targets t WHERE t.fact_id = f.fact_id\n` +
+        `    RETURNING f.fact_id\n` +
+        `)\n` +
+        `SELECT fact_id FROM facts\n`;
+
+    return {
+        sql,
+        parameters
+    };
+}
+
+function generateCandidates(queryDescription: QueryDescription, offset: number, schema: string): string {
     const columns = queryDescription.outputs
         .map((label, index) => `f${label.factIndex}.fact_id as trigger${index + 1}`)
         .join(",\n        ");
@@ -90,64 +167,21 @@ function generatePurgeSqlQuery(queryDescription: QueryDescription, schema: strin
     const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-    const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema);
+    const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, offset, schema);
     const inputWhereClauses = queryDescription.inputs
-        .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter}`)
+        .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter + offset}`)
         .join(" AND ");
-    const triggerWhereClauses = queryDescription.outputs
-        .map((label, index) => `a.fact_id = c2.trigger${index + 1}`)
-        .join("\n            OR ");
-    const triggerAncestorClauses = queryDescription.outputs
-        .map((label, index) =>
-            `    AND NOT EXISTS (\n` +
-            `        SELECT 1\n` +
-            `        FROM candidates c2\n` +
-            `        JOIN ${schema}.ancestor a2\n` +
-            `            ON a2.fact_id = c2.trigger${index + 1}\n` +
-            `        WHERE a.fact_id = a2.ancestor_fact_id\n` +
-            `    )\n`
-        )
-        .join("");
 
-    const sql =
-        `WITH candidates AS (\n` +
+    return (
         `    SELECT\n` +
         `        f${firstFactIndex}.fact_id as purge_root,\n` +
         `        ${columns}\n` +
         `    FROM ${schema}.fact f${firstFactIndex}\n${joins.join("")}` +
-        `    WHERE ${inputWhereClauses}\n` +
-        `), targets AS (\n` +
-        `    SELECT a.fact_id\n` +
-        `    FROM ${schema}.ancestor a\n` +
-        `    JOIN candidates c ON c.purge_root = a.ancestor_fact_id\n` +
-        `    WHERE NOT EXISTS (\n` +
-        `        SELECT 1\n` +
-        `        FROM candidates c2\n` +
-        `        WHERE ${triggerWhereClauses}\n` +
-        `    )\n` +
-        triggerAncestorClauses +
-        `), facts AS (\n` +
-        `    DELETE\n` +
-        `    FROM ${schema}.fact f\n` +
-        `    USING targets t WHERE t.fact_id = f.fact_id\n` +
-        `    RETURNING f.fact_id\n` +
-        `)\n` +
-        `SELECT fact_id FROM facts\n`;
-    
-    // Remove parameter 1, which is the hash of the first fact
-    const parameters = [
-        queryDescription.parameters[0],
-        ...queryDescription.parameters.slice(2)
-    ];
-        
-
-    return {
-        sql,
-        parameters: parameters
-    };
+        `    WHERE ${inputWhereClauses}\n`
+    );
 }
 
-function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string) {
+function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, offset: number, schema: string) {
     const joins: string[] = [];
     edges.forEach(edge => {
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
@@ -156,14 +190,14 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
                     `    JOIN ${schema}.edge e${edge.edgeIndex}\n` +
                     `        ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id\n` +
                     `        AND e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id\n` +
-                    `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter - 1}\n`
+                    `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter - 1 + offset}\n`
                 );
             }
             else {
                 joins.push(
                     `    JOIN ${schema}.edge e${edge.edgeIndex}\n` +
                     `        ON e${edge.edgeIndex}.predecessor_fact_id = f${edge.predecessorFactIndex}.fact_id\n` +
-                    `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter - 1}\n`
+                    `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter - 1 + offset}\n`
                 );
                 joins.push(
                     `    JOIN ${schema}.fact f${edge.successorFactIndex}\n` +
@@ -176,7 +210,7 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
             joins.push(
                 `    JOIN ${schema}.edge e${edge.edgeIndex}\n` +
                 `        ON e${edge.edgeIndex}.successor_fact_id = f${edge.successorFactIndex}.fact_id\n` +
-                `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter - 1}\n`
+                `        AND e${edge.edgeIndex}.role_id = $${edge.roleParameter - 1 + offset}\n`
             );
             joins.push(
                 `    JOIN ${schema}.fact f${edge.predecessorFactIndex}\n` +
