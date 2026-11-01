@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { Pool } = require('pg');
 const { PostgresKeystore } = require('jinaga-server');
 
@@ -13,14 +14,15 @@ describe('PostgresKeystore concurrency race', () => {
         await pool.end();
     });
 
-    beforeEach(async () => {
-        // Ensure no row exists yet for the test identities so the
-        // select-then-insert path is exercised from a clean state.
-        await pool.query(`DELETE FROM public."user" WHERE provider = $1`, ['test-provider']);
-    });
+    // Each test uses a fresh identity, so no row exists yet and the
+    // select-then-insert path starts clean. The app role cannot delete
+    // from the user table, so the test cannot clear rows itself.
+    function uniqueIdentity(prefix) {
+        return { provider: 'test-provider', id: `${prefix}-${randomUUID()}` };
+    }
 
     it('should not fail when two concurrent requests create the same user key pair', async () => {
-        const userIdentity = { provider: 'test-provider', id: 'race-user-1' };
+        const userIdentity = uniqueIdentity('race-user-1');
 
         // Two separate keystore instances model two concurrent requests that
         // each build a fresh runtime (empty in-process cache), as described in
@@ -48,7 +50,7 @@ describe('PostgresKeystore concurrency race', () => {
     });
 
     it('should tolerate many concurrent creations of the same identity', async () => {
-        const userIdentity = { provider: 'test-provider', id: 'race-user-2' };
+        const userIdentity = uniqueIdentity('race-user-2');
 
         // A larger fan-out of fresh runtimes all racing on the same identity.
         const keystores = Array.from({ length: 8 }, () => new PostgresKeystore(pool, 'public'));
