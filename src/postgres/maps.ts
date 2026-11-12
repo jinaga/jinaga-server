@@ -38,6 +38,17 @@ export function copyRoleMap(map: RoleMap) {
     return new Map<number, Map<string, number>>(map);
 }
 
+// addRole mutates the inner map it finds, so a shallow copy still shares
+// every fact type's role map with the original. A caller that must leave the
+// original untouched needs the inner maps copied too.
+export function deepCopyRoleMap(map: RoleMap) {
+    const copy = new Map<number, Map<string, number>>();
+    for (const [defining_fact_type_id, roles] of map) {
+        copy.set(defining_fact_type_id, new Map<string, number>(roles));
+    }
+    return copy;
+}
+
 export function addRole(map: RoleMap, defining_fact_type_id: number, name: string, role_id: number) {
     const factTypeRoles = map.get(defining_fact_type_id) || new Map<string, number>();
     const modifiedFactTypeRoles = factTypeRoles.set(name, role_id);
