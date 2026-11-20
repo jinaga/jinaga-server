@@ -22,7 +22,41 @@ import {
 import { FactTypeMap, RoleMap } from "./maps";
 import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
-function generateResultSqlQuery(queryDescription: QueryDescription, schema: string): SpecificationSqlQuery {
+/**
+ * The facts a read must not find beneath a negative existential condition.
+ *
+ * `readAsIfSaved` writes the staged facts into a transaction that it rolls
+ * back. Beneath a negative existential condition, at any depth, a successor
+ * walk reads only the facts the store held before the batch, so each fact such
+ * a walk joins excludes the staged ids. A predecessor walk does not: it reads a
+ * staged fact's own predecessors, so a condition that joins through the fact a
+ * match found still reaches the witnesses saved beneath it. A saved fact never
+ * has a staged predecessor, so that withdraws no witness the store holds.
+ */
+interface StagedExclusion {
+    parameter: number;
+    used: boolean;
+}
+
+function excludeStaged(factIndex: number, exclusion: StagedExclusion | undefined): string {
+    if (!exclusion) {
+        return "";
+    }
+    exclusion.used = true;
+    return ` AND f${factIndex}.fact_id <> ALL($${exclusion.parameter}::integer[])`;
+}
+
+// The exclusion that applies inside a condition: none until the first
+// negative condition, and from there down, at every depth, the staged ids.
+function exclusionWithin(exists: boolean, outer: StagedExclusion | undefined, staged: StagedExclusion | undefined) {
+    return outer ?? (exists ? undefined : staged);
+}
+
+function generateResultSqlQuery(queryDescription: QueryDescription, schema: string, stagedFactIds: number[]): SpecificationSqlQuery {
+    const parameters: (string | number | number[])[] = [ ...queryDescription.parameters ];
+    const staged: StagedExclusion | undefined = stagedFactIds.length > 0
+        ? { parameter: parameters.length + 1, used: false }
+        : undefined;
     const allLabels = [ ...queryDescription.inputs, ...queryDescription.outputs ];
     const columns = allLabels
         .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}, f${label.factIndex}.date_learned as timestamp${label.factIndex}`)
@@ -32,22 +66,27 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-    const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema);
+    const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema, undefined);
     // Add all input fact indexes to writtenFactIndexes since they're available in the FROM clause
     queryDescription.inputs.forEach(input => writtenFactIndexes.add(input.factIndex));
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join(" AND ");
     const existentialWhereClauses = queryDescription.existentialConditions
-        .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema)})`)
+        .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema, staged, exclusionWithin(existentialCondition.exists, undefined, staged))})`)
         .join("");
     const orderByClause = queryDescription.outputs
         .map(output => `f${output.factIndex}.fact_id ASC`)
         .join(", ");
     const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+    // Bind the staged ids only if a negative condition refers to them: an
+    // unreferenced parameter is an error in Postgres.
+    if (staged && staged.used) {
+        parameters.push(stagedFactIds);
+    }
     return {
         sql,
-        parameters: queryDescription.parameters,
+        parameters,
         labels: allLabels.map(label => ({
             name: label.label,
             type: label.type,
@@ -57,7 +96,7 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     };
 }
 
-function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string) {
+function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string, exclusion: StagedExclusion | undefined) {
     const joins: string[] = [];
     edges.forEach(edge => {
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
@@ -77,7 +116,8 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
                 );
                 joins.push(
                     ` JOIN ${schema}.fact f${edge.successorFactIndex}` +
-                    ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
+                    ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id` +
+                    excludeStaged(edge.successorFactIndex, exclusion)
                 );
                 writtenFactIndexes.add(edge.successorFactIndex);
             }
@@ -101,7 +141,7 @@ function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>
     return joins;
 }
 
-function generateExistentialWhereClause(existentialCondition: ExistentialConditionDescription, outerFactIndexes: Set<number>, schema: string): string {
+function generateExistentialWhereClause(existentialCondition: ExistentialConditionDescription, outerFactIndexes: Set<number>, schema: string, staged: StagedExclusion | undefined, exclusion: StagedExclusion | undefined): string {
     const firstEdge = existentialCondition.edges[0];
     const writtenFactIndexes = new Set<number>(outerFactIndexes);
     const firstJoin: string[] = [];
@@ -117,7 +157,8 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
             );
             firstJoin.push(
                 ` JOIN ${schema}.fact f${firstEdge.successorFactIndex}` +
-                ` ON f${firstEdge.successorFactIndex}.fact_id = e${firstEdge.edgeIndex}.successor_fact_id`
+                ` ON f${firstEdge.successorFactIndex}.fact_id = e${firstEdge.edgeIndex}.successor_fact_id` +
+                excludeStaged(firstEdge.successorFactIndex, exclusion)
             );
             writtenFactIndexes.add(firstEdge.successorFactIndex);
         }
@@ -136,13 +177,13 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes, schema);
+    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes, schema, exclusion);
     const joins = firstJoin.concat(tailJoins);
     const inputWhereClauses = existentialCondition.inputs
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join("");
     const existentialWhereClauses = existentialCondition.existentialConditions
-        .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes, schema)})`)
+        .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes, schema, staged, exclusionWithin(e.exists, exclusion, staged))})`)
         .join("");
     return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${existentialWhereClauses}`;
 }
@@ -608,7 +649,13 @@ function idsEqual(a: number[], b: number[]) {
     return a.every((value, index) => value === b[index]);
 }
 
-export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string): ResultComposer | null {
+/**
+ * @param stagedFactIds The ids of facts that exist only in the caller's
+ * uncommitted transaction. Beneath a negative existential condition a
+ * successor walk does not see them. Empty for `read`, which generates exactly
+ * the SQL it always has.
+ */
+export function resultSqlFromSpecification(start: FactReference[], specification: Specification, factTypes: FactTypeMap, roleMap: RoleMap, schema: string, stagedFactIds: number[] = []): ResultComposer | null {
     const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
     const descriptionBuilder = new ResultDescriptionBuilder(queryDescriptionBuilder);
     const description = descriptionBuilder.buildDescription(start, specification);
@@ -616,17 +663,17 @@ export function resultSqlFromSpecification(start: FactReference[], specification
     if (!description.queryDescription.isSatisfiable()) {
         return null;
     }
-    return createResultComposer(description, start.length, schema);
+    return createResultComposer(description, start.length, schema, stagedFactIds);
 }
 
-function createResultComposer(description: ResultDescription, parentFactIdLength: number, schema: string): ResultComposer {
-    const sqlQuery = generateResultSqlQuery(description.queryDescription, schema);
+function createResultComposer(description: ResultDescription, parentFactIdLength: number, schema: string, stagedFactIds: number[]): ResultComposer {
+    const sqlQuery = generateResultSqlQuery(description.queryDescription, schema, stagedFactIds);
     const resultProjection = description.resultProjection;
     const childResultComposers = description.childResultDescriptions
         .filter(child => child.queryDescription.isSatisfiable())
         .map(child => ({
             name: child.name,
-            resultComposer: createResultComposer(child, description.queryDescription.outputLength(), schema)
+            resultComposer: createResultComposer(child, description.queryDescription.outputLength(), schema, stagedFactIds)
         }));
     return new ResultComposer(sqlQuery, resultProjection, parentFactIdLength, description.givenTuple, childResultComposers);
 }

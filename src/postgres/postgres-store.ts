@@ -256,12 +256,22 @@ export class PostgresStore implements Storage {
             try {
                 let factTypes = await storeFactTypes(facts, copyFactTypeMap(this.factTypeMap), connection, this.schema);
                 let roleMap = deepCopyRoleMap(this.roleMap);
+                // Only the facts this call inserts are staged. One the store
+                // already held keeps its id, and stays visible everywhere.
+                let stagedFactIds: number[] = [];
                 if (facts.length > 0) {
                     const existingFacts = await findExistingFacts(facts, factTypes, connection, this.schema);
                     const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
                     if (newFacts.length > 0) {
                         roleMap = await storeRoles(newFacts, factTypes, roleMap, connection, this.schema);
-                        await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roleMap, this.schema);
+                        const allFacts = await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roleMap, this.schema);
+                        stagedFactIds = newFacts.map(f => {
+                            const factId = getFactId(allFacts, f.hash, ensureGetFactTypeId(factTypes, f.type));
+                            if (factId === undefined) {
+                                throw new Error(`Staged fact ${f.type} ${f.hash} was not inserted.`);
+                            }
+                            return factId;
+                        });
                     }
                 }
 
@@ -273,7 +283,7 @@ export class PostgresStore implements Storage {
                     return [];
                 }
 
-                const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap, this.schema);
+                const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap, this.schema, stagedFactIds);
                 if (composer === null) {
                     return [];
                 }

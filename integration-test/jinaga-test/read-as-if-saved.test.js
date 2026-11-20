@@ -1,5 +1,5 @@
 const { Pool } = require('pg');
-const { buildModel, dehydrateFact, User } = require('jinaga');
+const { buildModel, dehydrateFact, SpecificationParser, User } = require('jinaga');
 const { PostgresStore } = require('./jinaga-server');
 
 const host = "db";
@@ -107,6 +107,10 @@ function snapshotCaches(store) {
 
 const linkedType = `RAIS${suffix}.Linked`;
 
+afterAll(async () => {
+    await pool.end();
+});
+
 describe('PostgresStore.readAsIfSaved', () => {
     let store;
     let tenantReference;
@@ -141,10 +145,6 @@ describe('PostgresStore.readAsIfSaved', () => {
 
         answerEnvelopes = envelopesOf(answer);
         answerReference = referenceOf(answerEnvelopes, answerType);
-    });
-
-    afterAll(async () => {
-        await pool.end();
     });
 
     it('reads a staged fact that read does not see', async () => {
@@ -269,5 +269,190 @@ describe('PostgresStore.readAsIfSaved', () => {
 
         expect(read.map(r => r.result.text)).toEqual(['committed']);
         expect(readAsIfSaved).toEqual(read);
+    });
+});
+
+// Criterion 6. Beneath a negative existential condition, at any depth, a
+// successor walk reads the store as it was before the batch, so a staged fact
+// is no witness there. Outside every negation it is visible.
+describe('PostgresStore.readAsIfSaved beneath a negative condition', () => {
+    const retractionType = `RAIS${suffix}.Retraction`;
+    const restorationType = `RAIS${suffix}.Restoration`;
+    let store;
+
+    beforeAll(() => {
+        store = new PostgresStore(pool, 'public');
+    });
+
+    function parse(text) {
+        const parser = new SpecificationParser(text);
+        parser.skipWhitespace();
+        return parser.parseSpecification();
+    }
+
+    function envelope(fact) {
+        return { fact, signatures: [] };
+    }
+
+    function ref(fact) {
+        return { type: fact.type, hash: fact.hash };
+    }
+
+    // A tenant of this test's own, so committed rows of one case are not
+    // witnesses in another.
+    async function committedTenant(name) {
+        const tenant = new Tenant(new User(`---RAIS ${suffix}---`), `${name}-${suffix}`);
+        const envelopes = envelopesOf(tenant);
+        await store.save(envelopes);
+        return referenceOf(envelopes, tenantType);
+    }
+
+    const unretracted = () => `
+        (tenant: ${tenantType}) {
+            answer: ${answerType} [
+                answer->tenant: ${tenantType} = tenant
+                !E {
+                    retraction: ${retractionType} [
+                        retraction->answer: ${answerType} = answer
+                    ]
+                }
+            ]
+        } => answer.text
+    `;
+
+    it('reads a negative condition only a staged fact would satisfy as though that fact were absent', async () => {
+        const tenant = await committedTenant('negative');
+        const answer = { type: answerType, hash: `answer-negative-${suffix}`, fields: { text: 'kept' }, predecessors: { tenant } };
+        await store.save([envelope(answer)]);
+        const retraction = { type: retractionType, hash: `retraction-negative-${suffix}`, fields: {}, predecessors: { answer: ref(answer) } };
+
+        const spec = parse(unretracted());
+        expect((await store.readAsIfSaved([], [tenant], spec)).map(r => r.result)).toEqual(['kept']);
+
+        const staged = await store.readAsIfSaved([envelope(retraction)], [tenant], spec);
+        expect(staged.map(r => r.result)).toEqual(['kept']);
+
+        // The same retraction, once saved, does withdraw the row: the
+        // exclusion is of staged facts, not of the condition.
+        await store.save([envelope(retraction)]);
+        expect(await store.read([tenant], spec)).toEqual([]);
+    });
+
+    it('lets a staged fact match outside the negation while it stays invisible beneath it', async () => {
+        const tenant = await committedTenant('match');
+        const answer = { type: answerType, hash: `answer-match-${suffix}`, fields: { text: 'staged' }, predecessors: { tenant } };
+        const retraction = { type: retractionType, hash: `retraction-match-${suffix}`, fields: {}, predecessors: { answer: ref(answer) } };
+
+        // The staged answer is matched, and its staged retraction is no
+        // witness beneath the negation.
+        const results = await store.readAsIfSaved(
+            [envelope(answer), envelope(retraction)], [tenant], parse(unretracted()));
+        expect(results.map(r => r.result)).toEqual(['staged']);
+    });
+
+    it('lets a staged fact satisfy a positive condition outside the negation, and not the negation itself', async () => {
+        const tenant = await committedTenant('both');
+        const answer = { type: answerType, hash: `answer-both-${suffix}`, fields: { text: 'both' }, predecessors: { tenant } };
+        await store.save([envelope(answer)]);
+        const retraction = { type: retractionType, hash: `retraction-both-${suffix}`, fields: {}, predecessors: { answer: ref(answer) } };
+
+        // The same condition twice, once positive and once negative. Only a
+        // reader that sees the staged retraction in the first and not in the
+        // second returns the row.
+        const spec = parse(`
+            (tenant: ${tenantType}) {
+                answer: ${answerType} [
+                    answer->tenant: ${tenantType} = tenant
+                    E {
+                        seen: ${retractionType} [
+                            seen->answer: ${answerType} = answer
+                        ]
+                    }
+                    !E {
+                        unseen: ${retractionType} [
+                            unseen->answer: ${answerType} = answer
+                        ]
+                    }
+                ]
+            } => answer.text
+        `);
+        expect(await store.readAsIfSaved([], [tenant], spec)).toEqual([]);
+
+        const staged = await store.readAsIfSaved([envelope(retraction)], [tenant], spec);
+        expect(staged.map(r => r.result)).toEqual(['both']);
+    });
+
+    it('keeps a staged fact out of a negative condition nested inside a positive one', async () => {
+        const tenant = await committedTenant('nested-negative');
+        const answer = { type: answerType, hash: `answer-nn-${suffix}`, fields: { text: 'retracted' }, predecessors: { tenant } };
+        await store.save([envelope(answer)]);
+        const retraction = { type: retractionType, hash: `retraction-nn-${suffix}`, fields: {}, predecessors: { answer: ref(answer) } };
+        const restoration = { type: restorationType, hash: `restoration-nn-${suffix}`, fields: {}, predecessors: { retraction: ref(retraction) } };
+
+        // "Answers with a retraction that has not been restored."
+        const spec = parse(`
+            (tenant: ${tenantType}) {
+                answer: ${answerType} [
+                    answer->tenant: ${tenantType} = tenant
+                    E {
+                        retraction: ${retractionType} [
+                            retraction->answer: ${answerType} = answer
+                            !E {
+                                restoration: ${restorationType} [
+                                    restoration->retraction: ${retractionType} = retraction
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            } => answer.text
+        `);
+
+        // The staged retraction is visible to the positive condition, and the
+        // staged restoration is not visible to the negative one inside it.
+        const staged = await store.readAsIfSaved(
+            [envelope(retraction), envelope(restoration)], [tenant], spec);
+        expect(staged.map(r => r.result)).toEqual(['retracted']);
+    });
+
+    it('keeps a staged fact out of a positive condition nested inside a negative one', async () => {
+        const tenant = await committedTenant('nested-positive');
+        const answer = { type: answerType, hash: `answer-np-${suffix}`, fields: { text: 'unrestored' }, predecessors: { tenant } };
+        const retraction = { type: retractionType, hash: `retraction-np-${suffix}`, fields: {}, predecessors: { answer: ref(answer) } };
+        await store.save([envelope(answer), envelope(retraction)]);
+        const restoration = { type: restorationType, hash: `restoration-np-${suffix}`, fields: {}, predecessors: { retraction: ref(retraction) } };
+
+        // Commit a restoration of another tenant's retraction, so the type and
+        // role exist. `read` answers a specification naming a type the
+        // database has never held with no rows at all, which would hide the
+        // row this case is about.
+        const otherTenant = await committedTenant('nested-positive-other');
+        const otherAnswer = { type: answerType, hash: `answer-np-other-${suffix}`, fields: { text: 'other' }, predecessors: { tenant: otherTenant } };
+        const otherRetraction = { type: retractionType, hash: `retraction-np-other-${suffix}`, fields: {}, predecessors: { answer: ref(otherAnswer) } };
+        const otherRestoration = { type: restorationType, hash: `restoration-np-other-${suffix}`, fields: {}, predecessors: { retraction: ref(otherRetraction) } };
+        await store.save([envelope(otherAnswer), envelope(otherRetraction), envelope(otherRestoration)]);
+
+        // "Answers with no restored retraction."
+        const spec = parse(`
+            (tenant: ${tenantType}) {
+                answer: ${answerType} [
+                    answer->tenant: ${tenantType} = tenant
+                    !E {
+                        retraction: ${retractionType} [
+                            retraction->answer: ${answerType} = answer
+                            E {
+                                restoration: ${restorationType} [
+                                    restoration->retraction: ${retractionType} = retraction
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            } => answer.text
+        `);
+        expect((await store.read([tenant], spec)).map(r => r.result)).toEqual(['unrestored']);
+
+        const staged = await store.readAsIfSaved([envelope(restoration)], [tenant], spec);
+        expect(staged.map(r => r.result)).toEqual(['unrestored']);
     });
 });
