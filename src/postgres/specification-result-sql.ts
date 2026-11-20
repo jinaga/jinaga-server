@@ -61,12 +61,9 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     const columns = allLabels
         .map(label => `f${label.factIndex}.hash as hash${label.factIndex}, f${label.factIndex}.fact_id as id${label.factIndex}, f${label.factIndex}.data as data${label.factIndex}, f${label.factIndex}.date_learned as timestamp${label.factIndex}`)
         .join(", ");
-    const firstEdge = queryDescription.edges[0];
-    const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
-    const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
-    const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
-    const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-    const joins: string[] = generateJoins(queryDescription.edges, writtenFactIndexes, schema, undefined);
+    const { firstFactIndex, joins, writtenFactIndexes } = queryDescription.edges.length > 0
+        ? joinEdges(queryDescription, schema)
+        : joinGivens(queryDescription, schema);
     // Add all input fact indexes to writtenFactIndexes since they're available in the FROM clause
     queryDescription.inputs.forEach(input => writtenFactIndexes.add(input.factIndex));
     const inputWhereClauses = queryDescription.inputs
@@ -75,10 +72,14 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     const existentialWhereClauses = queryDescription.existentialConditions
         .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema, staged, exclusionWithin(existentialCondition.exists, undefined, staged))})`)
         .join("");
-    const orderByClause = queryDescription.outputs
-        .map(output => `f${output.factIndex}.fact_id ASC`)
-        .join(", ");
-    const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses} ORDER BY ${orderByClause}`;
+    // With no outputs, every column is a given: the givens are fixed by type
+    // and hash, so the query returns at most one row and has nothing to order.
+    const orderByClause = queryDescription.outputs.length > 0
+        ? " ORDER BY " + queryDescription.outputs
+            .map(output => `f${output.factIndex}.fact_id ASC`)
+            .join(", ")
+        : "";
+    const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses}${orderByClause}`;
     // Bind the staged ids only if a negative condition refers to them: an
     // unreferenced parameter is an error in Postgres.
     if (staged && staged.used) {
@@ -94,6 +95,28 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
         })),
         bookmark: "[]"
     };
+}
+
+// Start from the input that the first edge touches, and join the rest of the
+// facts along the edges.
+function joinEdges(queryDescription: QueryDescription, schema: string) {
+    const firstEdge = queryDescription.edges[0];
+    const predecessorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.predecessorFactIndex);
+    const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
+    const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
+    const writtenFactIndexes = new Set<number>().add(firstFactIndex);
+    const joins = generateJoins(queryDescription.edges, writtenFactIndexes, schema, undefined);
+    return { firstFactIndex, joins, writtenFactIndexes };
+}
+
+// A specification with no matches has no edges. Each given is its own fact,
+// selected by type and hash in the WHERE clause, so the givens are joined to
+// one another without a condition.
+function joinGivens(queryDescription: QueryDescription, schema: string) {
+    const [ first, ...rest ] = queryDescription.inputs;
+    const joins = rest.map(input => ` CROSS JOIN ${schema}.fact f${input.factIndex}`);
+    const writtenFactIndexes = new Set<number>(queryDescription.inputs.map(input => input.factIndex));
+    return { firstFactIndex: first.factIndex, joins, writtenFactIndexes };
 }
 
 function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string, exclusion: StagedExclusion | undefined) {
@@ -546,7 +569,15 @@ class ResultDescriptionBuilder {
         const labels = specification.given.map(g => g.label);
         let queryDescription = QueryDescription.unsatisfiable;
         let knownFacts: FactByLabel = {};
-        
+
+        // A path condition in a match is what allocates a given as an input.
+        // With no matches, nothing would, and the query would stay
+        // unsatisfiable. Select every given by type and hash instead, so that
+        // the conditions on the givens have facts to apply to.
+        if (specification.matches.length === 0) {
+            ({ queryDescription, knownFacts } = this.givensAsInputs(specification.given, start));
+        }
+
         // First process main matches to build the result description
         const resultDescription = this.createResultDescription(queryDescription, specification.given, start, specification.matches, specification.projection, knownFacts, []);
         
@@ -575,6 +606,16 @@ class ResultDescriptionBuilder {
                         if (queryDescriptionConditional.isSatisfiable()) {
                             queryDescription = queryDescriptionConditional;
                         }
+                        else if (condition.exists) {
+                            // A condition that no fact in the store can
+                            // satisfy is false when it is positive, so no
+                            // tuple matches. When it is negative it is true,
+                            // and is dropped.
+                            return {
+                                ...resultDescription,
+                                queryDescription: QueryDescription.unsatisfiable
+                            };
+                        }
                     }
                 }
             }
@@ -587,6 +628,28 @@ class ResultDescriptionBuilder {
         }
         
         return resultDescription;
+    }
+
+    private givensAsInputs(given: SpecificationGiven[], start: FactReference[]): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
+        let queryDescription = QueryDescription.unsatisfiable;
+        let knownFacts: FactByLabel = {};
+        for (const [index, givenItem] of given.entries()) {
+            const factTypeId = this.queryDescriptionBuilder.factTypeId(start[index].type);
+            if (!factTypeId) {
+                // A given of a type the store has never seen is not a fact it
+                // holds, so no tuple can match.
+                return { queryDescription: QueryDescription.unsatisfiable, knownFacts: {} };
+            }
+            const { queryDescription: withInput, factDescription } = queryDescription.withInputParameter(
+                givenItem.label,
+                factTypeId,
+                start[index].hash,
+                []
+            );
+            queryDescription = withInput;
+            knownFacts = { ...knownFacts, [givenItem.label.name]: factDescription };
+        }
+        return { queryDescription, knownFacts };
     }
 
     private createResultDescription(queryDescription: QueryDescription, given: SpecificationGiven[], start: FactReference[], matches: Match[], projection: Projection, knownFacts: FactByLabel, path: number[]): ResultDescription {

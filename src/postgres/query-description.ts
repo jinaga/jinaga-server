@@ -316,6 +316,10 @@ export class QueryDescriptionBuilder {
         private roleMap: RoleMap
     ) { }
 
+    public factTypeId(type: string): number | undefined {
+        return getFactTypeId(this.factTypes, type);
+    }
+
     public addEdges(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
         for (const match of matches) {
             for (const condition of match.conditions) {
