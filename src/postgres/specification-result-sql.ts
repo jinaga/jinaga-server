@@ -20,7 +20,7 @@ import {
 } from "jinaga";
 
 import { FactTypeMap, RoleMap } from "./maps";
-import { EdgeDescription, ExistentialConditionDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
+import { EdgeDescription, ExistentialConditionDescription, FactByLabel, FactEqualityDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 /**
  * The facts a read must not find beneath a negative existential condition.
@@ -52,6 +52,16 @@ function exclusionWithin(exists: boolean, outer: StagedExclusion | undefined, st
     return outer ?? (exists ? undefined : staged);
 }
 
+// An identity condition between two labels that are both already bound
+// compares the two facts in the scope where the condition appears. Both fact
+// indexes are written by the joins of that scope, or of one enclosing it,
+// before the WHERE clause is evaluated.
+function factEqualityClauses(factEqualities: FactEqualityDescription[]): string {
+    return factEqualities
+        .map(equality => ` AND f${equality.leftFactIndex}.fact_id = f${equality.rightFactIndex}.fact_id`)
+        .join("");
+}
+
 function generateResultSqlQuery(queryDescription: QueryDescription, schema: string, stagedFactIds: number[]): SpecificationSqlQuery {
     const parameters: (string | number | number[])[] = [ ...queryDescription.parameters ];
     const staged: StagedExclusion | undefined = stagedFactIds.length > 0
@@ -69,6 +79,7 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join(" AND ");
+    const factEqualityWhereClauses = factEqualityClauses(queryDescription.factEqualities);
     const existentialWhereClauses = queryDescription.existentialConditions
         .map(existentialCondition => ` AND ${existentialCondition.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(existentialCondition, writtenFactIndexes, schema, staged, exclusionWithin(existentialCondition.exists, undefined, staged))})`)
         .join("");
@@ -79,7 +90,7 @@ function generateResultSqlQuery(queryDescription: QueryDescription, schema: stri
             .map(output => `f${output.factIndex}.fact_id ASC`)
             .join(", ")
         : "";
-    const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${existentialWhereClauses}${orderByClause}`;
+    const sql = `SELECT ${columns} FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${factEqualityWhereClauses}${existentialWhereClauses}${orderByClause}`;
     // Bind the staged ids only if a negative condition refers to them: an
     // unreferenced parameter is an error in Postgres.
     if (staged && staged.used) {
@@ -171,7 +182,15 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     const whereClause: string[] = [];
     if (writtenFactIndexes.has(firstEdge.predecessorFactIndex)) {
         if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
-            throw new Error("Not yet implemented");
+            // An identity condition can bind the condition's own unknown to a
+            // fact the enclosing scope has already written, which leaves the
+            // first edge joining two written facts. Correlate on both and join
+            // no new fact, as generateJoins does for a later edge.
+            whereClause.push(
+                `e${firstEdge.edgeIndex}.predecessor_fact_id = f${firstEdge.predecessorFactIndex}.fact_id` +
+                ` AND e${firstEdge.edgeIndex}.successor_fact_id = f${firstEdge.successorFactIndex}.fact_id` +
+                ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
+            );
         }
         else {
             whereClause.push(
@@ -205,10 +224,11 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     const inputWhereClauses = existentialCondition.inputs
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join("");
+    const factEqualityWhereClauses = factEqualityClauses(existentialCondition.factEqualities);
     const existentialWhereClauses = existentialCondition.existentialConditions
         .map(e => ` AND ${e.exists ? "EXISTS" : "NOT EXISTS"} (${generateExistentialWhereClause(e, writtenFactIndexes, schema, staged, exclusionWithin(e.exists, exclusion, staged))})`)
         .join("");
-    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${existentialWhereClauses}`;
+    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${factEqualityWhereClauses}${existentialWhereClauses}`;
 }
 
 interface ResultDescription {

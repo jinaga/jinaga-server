@@ -13,10 +13,24 @@ export interface EdgeDescription {
     roleParameter: number;
 }
 
+/**
+ * An identity between two labels that are both already bound to facts.
+ *
+ * A path condition with roles ties its two sides together with an edge. One
+ * with no roles has no edge to carry the tie, so when both of its labels are
+ * already bound the condition is an equality between two facts, compared in
+ * the scope where the condition appears.
+ */
+export interface FactEqualityDescription {
+    leftFactIndex: number;
+    rightFactIndex: number;
+}
+
 export interface ExistentialConditionDescription {
     exists: boolean;
     inputs: InputDescription[];
     edges: EdgeDescription[];
+    factEqualities: FactEqualityDescription[];
     existentialConditions: ExistentialConditionDescription[];
 }
 
@@ -51,7 +65,8 @@ export class QueryDescription {
         public readonly outputs: OutputDescription[],
         public readonly facts: FactDescription[],
         public readonly edges: EdgeDescription[],
-        public readonly existentialConditions: ExistentialConditionDescription[] = []
+        public readonly existentialConditions: ExistentialConditionDescription[] = [],
+        public readonly factEqualities: FactEqualityDescription[] = []
     ) {}
 
     public withParameter(parameter: string | number): { query: QueryDescription; parameterIndex: number; } {
@@ -62,7 +77,8 @@ export class QueryDescription {
             this.outputs,
             this.facts,
             this.edges,
-            this.existentialConditions
+            this.existentialConditions,
+            this.factEqualities
         );
         return { query, parameterIndex };
     }
@@ -98,7 +114,8 @@ export class QueryDescription {
                 this.outputs,
                 facts,
                 this.edges,
-                this.existentialConditions
+                this.existentialConditions,
+                this.factEqualities
             );
             return { queryDescription, factDescription };
         }
@@ -110,7 +127,8 @@ export class QueryDescription {
                 this.outputs,
                 facts,
                 this.edges,
-                existentialConditions
+                existentialConditions,
+                this.factEqualities
             );
             return { queryDescription, factDescription };
         }
@@ -134,7 +152,8 @@ export class QueryDescription {
                 this.outputs,
                 this.facts,
                 this.edges,
-                this.existentialConditions
+                this.existentialConditions,
+                this.factEqualities
             );
         }
         else {
@@ -145,7 +164,8 @@ export class QueryDescription {
                 this.outputs,
                 this.facts,
                 this.edges,
-                existentialConditions
+                existentialConditions,
+                this.factEqualities
             );
         }
     }
@@ -159,7 +179,8 @@ export class QueryDescription {
             this.outputs,
             this.facts.concat(fact),
             this.edges,
-            this.existentialConditions
+            this.existentialConditions,
+            this.factEqualities
         );
         return { query, factIndex };
     }
@@ -172,7 +193,8 @@ export class QueryDescription {
             this.outputs.concat(output),
             this.facts,
             this.edges,
-            this.existentialConditions
+            this.existentialConditions,
+            this.factEqualities
         );
         return query;
     }
@@ -191,7 +213,8 @@ export class QueryDescription {
                 this.outputs,
                 this.facts,
                 this.edges.concat(edge),
-                this.existentialConditions
+                this.existentialConditions,
+                this.factEqualities
             )
             : new QueryDescription(
                 this.inputs,
@@ -199,7 +222,35 @@ export class QueryDescription {
                 this.outputs,
                 this.facts,
                 this.edges,
-                existentialsWithEdge(this.existentialConditions, edge, path)
+                existentialsWithEdge(this.existentialConditions, edge, path),
+                this.factEqualities
+            );
+        return query;
+    }
+
+    public withFactEquality(leftFactIndex: number, rightFactIndex: number, path: number[]): QueryDescription {
+        const factEquality: FactEqualityDescription = {
+            leftFactIndex,
+            rightFactIndex
+        };
+        const query = (path.length === 0)
+            ? new QueryDescription(
+                this.inputs,
+                this.parameters,
+                this.outputs,
+                this.facts,
+                this.edges,
+                this.existentialConditions,
+                this.factEqualities.concat(factEquality)
+            )
+            : new QueryDescription(
+                this.inputs,
+                this.parameters,
+                this.outputs,
+                this.facts,
+                this.edges,
+                existentialsWithFactEquality(this.existentialConditions, factEquality, path),
+                this.factEqualities
             );
         return query;
     }
@@ -212,7 +263,8 @@ export class QueryDescription {
             this.outputs,
             this.facts,
             this.edges,
-            newExistentialConditions
+            newExistentialConditions,
+            this.factEqualities
         );
         return { query, path: newPath };
     }
@@ -276,6 +328,27 @@ function existentialsWithEdge(existentialConditions: ExistentialConditionDescrip
     }
 }
 
+function existentialsWithFactEquality(existentialConditions: ExistentialConditionDescription[], factEquality: FactEqualityDescription, path: number[]): ExistentialConditionDescription[] {
+    if (path.length === 1) {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                factEqualities: [...c.factEqualities, factEquality]
+            } :
+            c
+        );
+    }
+    else {
+        return existentialConditions.map((c, i) => i === path[0] ?
+            {
+                ...c,
+                existentialConditions: existentialsWithFactEquality(c.existentialConditions, factEquality, path.slice(1))
+            } :
+            c
+        );
+    }
+}
+
 function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], exists: boolean, path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
     if (path.length === 0) {
         path = [existentialConditions.length];
@@ -285,6 +358,7 @@ function existentialsWithNewCondition(existentialConditions: ExistentialConditio
                 exists: exists,
                 inputs: [],
                 edges: [],
+                factEqualities: [],
                 existentialConditions: []
             }
         ];
@@ -294,9 +368,7 @@ function existentialsWithNewCondition(existentialConditions: ExistentialConditio
         const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(existentialConditions[path[0]].existentialConditions, exists, path.slice(1));
         existentialConditions = existentialConditions.map((c, i) => i === path[0] ?
             {
-                exists: c.exists,
-                inputs: c.inputs,
-                edges: c.edges,
+                ...c,
                 existentialConditions: newExistentialConditions
             } :
             c
@@ -482,6 +554,15 @@ export class QueryDescriptionBuilder {
                 factIndex = successorFactIndex;
             }
         });
+
+        // An identity condition carries no roles, so neither walk above emitted
+        // an edge to tie its two sides together. When both labels are already
+        // bound, the condition is an equality between two facts: record it so
+        // that this scope's WHERE clause compares them. Bound to the same fact
+        // index, the condition holds trivially and needs no clause.
+        if (knownFact && roleCount === 0 && knownFact.factIndex !== factIndex) {
+            queryDescription = queryDescription.withFactEquality(knownFact.factIndex, factIndex, path);
+        }
 
         // If we have not captured the known fact, add it now.
         if (!knownFact) {
