@@ -2,6 +2,7 @@ import { dehydrateReference, getAllFactTypes, getAllRoles, SpecificationParser }
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "../../src/postgres/maps";
 import { resultSqlFromSpecification } from "../../src/postgres/specification-result-sql";
 import { sqlFromSpecification } from "../../src/postgres/specification-sql";
+import { purgeSqlFromSpecification } from "../../src/postgres/purge-sql";
 
 // Issue #229. An identity condition between two labels that are both already
 // bound carries no role, so neither role walk emits an edge to tie its two
@@ -344,6 +345,34 @@ describe("Feed of an identity between two bound labels", () => {
             `) ` +
             `AND sort(array[f2.fact_id], 'desc') > $5 ` +
             `ORDER BY bookmark ASC LIMIT $6`
+        );
+    });
+});
+
+// Purge builds its query description through the same
+// `QueryDescriptionBuilder.addEdges`, so a purge condition carrying this shape
+// records the same equality. Dropping it from the candidates clause would read
+// the condition as "an office with a child" rather than "an office that is its
+// own parent", and purge the root of every office that merely has one.
+describe("Purge of an identity between two bound labels", () => {
+    it("compares the two facts in the candidates clause", () => {
+        const descriptiveString = `
+            (office: Office) {
+                o: Office [
+                    o->parent: Office = office
+                    o = office
+                ]
+            }
+        `;
+        const maps = mapsFor(descriptiveString);
+        const specification = parseSpecification(descriptiveString);
+
+        const purgeCommand = purgeSqlFromSpecification(specification, maps.factTypes, maps.roleMap, "public");
+
+        expect(purgeCommand).not.toBeNull();
+        expect(purgeCommand!.sql).toContain(
+            `    WHERE f1.fact_type_id = $1\n` +
+            `        AND f2.fact_id = f1.fact_id\n`
         );
     });
 });

@@ -1,6 +1,6 @@
 import { FactReference, Specification } from "jinaga";
 import { FactTypeMap, RoleMap } from "./maps";
-import { EdgeDescription, FactByLabel, QueryDescription, QueryDescriptionBuilder } from "./query-description";
+import { EdgeDescription, FactByLabel, FactEqualityDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 export function purgeDescendantsSql(triggerCount: number, schema: string): string {
     let whereClause = "    WHERE (t.fact_type_id = $3 AND t.hash = $4)\n";
@@ -171,14 +171,24 @@ function generateCandidates(queryDescription: QueryDescription, offset: number, 
     const inputWhereClauses = queryDescription.inputs
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter + offset}`)
         .join(" AND ");
+    const factEqualityWhereClauses = factEqualityClauses(queryDescription.factEqualities);
 
     return (
         `    SELECT\n` +
         `        f${firstFactIndex}.fact_id as purge_root,\n` +
         `        ${columns}\n` +
         `    FROM ${schema}.fact f${firstFactIndex}\n${joins.join("")}` +
-        `    WHERE ${inputWhereClauses}\n`
+        `    WHERE ${inputWhereClauses}${factEqualityWhereClauses}\n`
     );
+}
+
+// An identity condition between two labels that are both already bound
+// compares the two facts. A purge condition carries no existential condition,
+// so every equality it records belongs to the candidates clause.
+function factEqualityClauses(factEqualities: FactEqualityDescription[]): string {
+    return factEqualities
+        .map(equality => `\n        AND f${equality.leftFactIndex}.fact_id = f${equality.rightFactIndex}.fact_id`)
+        .join("");
 }
 
 function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, offset: number, schema: string) {
