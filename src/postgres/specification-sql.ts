@@ -5,7 +5,7 @@ import {
     validateGiven
 } from "jinaga";
 
-import { EdgeDescription, ExistentialConditionDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
+import { EdgeDescription, ExistentialConditionDescription, FactEqualityDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 interface SpecificationLabel {
     type: string;
@@ -18,6 +18,16 @@ interface SpecificationSqlQuery {
     labels: SpecificationLabel[];
     bookmark: string;
 };
+
+// An identity condition between two labels that are both already bound
+// compares the two facts in the scope where the condition appears. Both fact
+// indexes are written by the joins of that scope, or of one enclosing it,
+// before the WHERE clause is evaluated.
+function factEqualityClauses(factEqualities: FactEqualityDescription[]): string {
+    return factEqualities
+        .map(equality => ` AND f${equality.leftFactIndex}.fact_id = f${equality.rightFactIndex}.fact_id`)
+        .join("");
+}
 
 function generateSqlQuery(queryDescription: QueryDescription, schema: string, bookmark: string, limit: number): SpecificationSqlQuery {
     const hashes = queryDescription.outputs
@@ -44,9 +54,10 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
         .filter(c => c.exists === true))
         .map(existsWhereClause => ` AND EXISTS (${generateNotExistsWhereClause(schema, existsWhereClause, writtenFactIndexes)})`)
         .join("");
+    const factEqualityWhereClauses = factEqualityClauses(queryDescription.factEqualities);
     const bookmarkParameter = queryDescription.parameters.length + 1;
     const limitParameter = bookmarkParameter + 1;
-    const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${notExistsWhereClauses}${existsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+    const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${factEqualityWhereClauses}${notExistsWhereClauses}${existsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
     const bookmarkValue: number[] = parseBookmark(bookmark);
     return {
         sql,
@@ -110,7 +121,15 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: Exis
     const whereClause: string[] = [];
     if (writtenFactIndexes.has(firstEdge.predecessorFactIndex)) {
         if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
-            throw new Error("Not yet implemented");
+            // An identity condition can bind the condition's own unknown to a
+            // fact the enclosing scope has already written, which leaves the
+            // first edge joining two written facts. Correlate on both and join
+            // no new fact, as generateJoins does for a later edge.
+            whereClause.push(
+                `e${firstEdge.edgeIndex}.predecessor_fact_id = f${firstEdge.predecessorFactIndex}.fact_id` +
+                ` AND e${firstEdge.edgeIndex}.successor_fact_id = f${firstEdge.successorFactIndex}.fact_id` +
+                ` AND e${firstEdge.edgeIndex}.role_id = $${firstEdge.roleParameter}`
+            );
         }
         else {
             whereClause.push(
@@ -143,10 +162,11 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: Exis
     const inputWhereClauses = notExistsWhereClause.inputs
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
         .join("");
+    const factEqualityWhereClauses = factEqualityClauses(notExistsWhereClause.factEqualities);
     const nestedExistsWhereClauses = notExistsWhereClause.existentialConditions
         .map(nested => ` AND ${nested.exists ? "EXISTS" : "NOT EXISTS"} (${generateNotExistsWhereClause(schema, nested, writtenFactIndexes)})`)
         .join("");
-    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${nestedExistsWhereClauses}`;
+    return `SELECT 1 FROM ${schema}.edge e${firstEdge.edgeIndex}${joins.join("")} WHERE ${whereClause.join(" AND ")}${inputWhereClauses}${factEqualityWhereClauses}${nestedExistsWhereClauses}`;
 }
 
 function parseBookmark(bookmark: string): number[] {
