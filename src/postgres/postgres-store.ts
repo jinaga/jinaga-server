@@ -201,33 +201,66 @@ export class PostgresStore implements Storage {
         }
     }
 
+    /**
+     * Read the projected results of a specification.
+     *
+     * One read sees one graph. Every statement runs on one connection inside
+     * one `REPEATABLE READ` transaction, whose snapshot is taken by its first
+     * statement: the type and role lookups, the parent query, each child
+     * query, and the load of the projected facts. A save that commits during
+     * the read is in all of them or none of them. The graph the read returns
+     * is one the store held at or after the call; feeds and inverses carry an
+     * observer forward from there.
+     *
+     * Every id the read sees belongs to a committed row, so the fact types and
+     * roles it discovers are merged into the store's caches afterwards.
+     */
     async read(start: FactReference[], specification: Specification): Promise<ProjectedResult[]> {
-        const factTypes = await this.loadFactTypesFromSpecification(specification);
-        const roleMap = await this.loadRolesFromSpecification(specification, factTypes);
+        const { results, factTypes, roleMap } = await this.connectionFactory.with(async (connection) => {
+            await connection.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+            try {
+                return await this.readInSnapshot(start, specification, connection);
+            }
+            finally {
+                await connection.query('COMMIT');
+            }
+        });
+        this.factTypeMap = mergeFactTypes(this.factTypeMap, factTypes);
+        this.roleMap = mergeRoleMaps(this.roleMap, roleMap);
+        return results;
+    }
+
+    private async readInSnapshot(start: FactReference[], specification: Specification, connection: PoolClient): Promise<{
+        results: ProjectedResult[];
+        factTypes: FactTypeMap;
+        roleMap: RoleMap;
+    }> {
+        const factTypes = await resolveFactTypes(getAllFactTypes(specification), this.factTypeMap, connection, this.schema);
+        const roleMap = await resolveRoles(specification, factTypes, deepCopyRoleMap(this.roleMap), connection, this.schema);
 
         // If any of the start facts are not known types, the specification cannot be satisfied.
         if (start.filter(f => getFactTypeId(factTypes, f.type) === undefined).length > 0) {
-            return [];
+            return { results: [], factTypes, roleMap };
         }
 
         const composer = resultSqlFromSpecification(start, specification, factTypes, roleMap, this.schema);
         if (composer === null) {
-            return [];
+            return { results: [], factTypes, roleMap };
         }
-        
-        const sqlQueryTree = composer.getSqlQueries();
-        const resultSets = await this.connectionFactory.with(async (connection) => {
-            return await executeQueryTree(sqlQueryTree, connection);
-        });
 
-        // Find the references for fact projections
+        const resultSets = await executeQueryTree(composer.getSqlQueries(), connection);
+
+        // Load the facts that the results project, with their ancestors.
         const factReferences: FactReference[] = composer.findFactReferences(resultSets);
-
-        // Load the references into a fact tree
-        const factEnvelopes = await this.load(factReferences);
-        const factRecords = factEnvelopes.map(envelope => envelope.fact);
-
-        return composer.compose(resultSets, factRecords);
+        const projectionFactTypes = await resolveFactTypes(
+            factReferences.map(r => r.type), factTypes, connection, this.schema);
+        const { envelopes, discoveredFactTypes } = await loadEnvelopes(factReferences, projectionFactTypes, connection, this.schema);
+        const results = composer.compose(resultSets, envelopes.map(envelope => envelope.fact));
+        return {
+            results,
+            factTypes: mergeFactTypes(projectionFactTypes, discoveredFactTypes),
+            roleMap
+        };
     }
 
     /**
