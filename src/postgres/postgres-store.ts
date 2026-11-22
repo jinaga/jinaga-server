@@ -127,6 +127,24 @@ function loadFactTuple(labels: SpecificationLabel[], row: Row): FactTuple {
     };
 }
 
+/**
+ * The key of the advisory lock that serializes the saves which insert facts.
+ *
+ * `fact.fact_id` is a `SERIAL`, so a save is given its ids when it inserts,
+ * not when it commits. Two saves running at `READ COMMITTED` can therefore
+ * commit out of id order: the one holding the lower id commits second, and
+ * lands behind a feed bookmark that has already moved past it.
+ *
+ * Every save takes this one lock, so a save cannot take an id until every
+ * save holding a lower one has committed or rolled back. Ids are then handed
+ * out in commit order, and no tuple can appear behind a published position.
+ *
+ * The value is arbitrary. What matters is that every save, in every process
+ * reaching the same database, uses the same one. Advisory locks occupy a
+ * namespace of their own, so this cannot collide with a row or table lock.
+ */
+const saveFactsLockKey = 1263186513;
+
 export class PostgresStore implements Storage {
     private connectionFactory: ConnectionFactory;
     private factTypeMap: FactTypeMap = emptyFactTypeMap();
@@ -140,6 +158,19 @@ export class PostgresStore implements Storage {
         return Promise.resolve();
     }
     
+    /**
+     * Save facts, assigning their ids in commit order.
+     *
+     * The transaction takes `saveFactsLockKey` as its first statement, before
+     * it reads or writes anything, so the saves that insert facts run one at a
+     * time. The lock is transaction-scoped: a commit or a rollback releases it,
+     * and a save that fails cannot strand the next one.
+     *
+     * This is what lets a feed bookmark mean "every tuple up to here". A
+     * bookmark is a position in `fact_id` order, so a fact whose id is lower
+     * than a position a reader has already passed would never be delivered to
+     * that reader. Serializing the saves keeps that state from forming.
+     */
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         if (envelopes.length > 0) {
             const facts = envelopes.map(e => e.fact).filter((value, index, self) =>
@@ -152,6 +183,9 @@ export class PostgresStore implements Storage {
                 factTypes: FactTypeMap;
                 roles: RoleMap;
             } = await this.connectionFactory.withTransaction(async (connection) => {
+                // Before anything else, so that no save can take a fact id
+                // while another save that has already taken one is still open.
+                await connection.query('SELECT pg_advisory_xact_lock($1::bigint)', [saveFactsLockKey]);
                 const factTypes = await storeFactTypes(facts, this.factTypeMap, connection, this.schema);
                 const existingFacts = await findExistingFacts(facts, factTypes, connection, this.schema);
                 const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
