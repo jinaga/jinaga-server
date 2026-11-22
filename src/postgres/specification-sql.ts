@@ -43,7 +43,8 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
     const givenFactIndexes = new Set<number>(queryDescription.inputs.map(input => input.factIndex));
-    const joins: string[] = generateJoins(schema, queryDescription.edges, writtenFactIndexes, givenFactIndexes);
+    const anchorColumns = new Map<number, string>();
+    const joins: string[] = generateJoins(schema, queryDescription.edges, writtenFactIndexes, givenFactIndexes, anchorColumns);
     const inputWhereClauses = queryDescription.inputs
         .filter(input => input.factTypeParameter !== 0)
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
@@ -59,11 +60,58 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
     const factEqualityWhereClauses = factEqualityClauses(queryDescription.factEqualities);
     const bookmarkParameter = queryDescription.parameters.length + 1;
     const limitParameter = bookmarkParameter + 1;
-    const sql = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${factEqualityWhereClauses}${notExistsWhereClauses}${existsWhereClauses} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+    const firstParameter = limitParameter + 1;
     const bookmarkValue: number[] = parseBookmark(bookmark);
+    const matches = `SELECT ${hashes}, sort(array[${factIds}], 'desc') as bookmark FROM ${schema}.fact f${firstFactIndex}${joins.join("")} WHERE ${inputWhereClauses}${factEqualityWhereClauses}${notExistsWhereClauses}${existsWhereClauses}`;
+    const ordering = `ORDER BY bookmark ASC LIMIT $${limitParameter}`;
+
+    // The bookmark filter compares a value computed from the joined row, so no
+    // index can serve it. Postgres has to build every tuple of the feed, compute
+    // each tuple's bookmark, sort them, and then discard the ones at or before
+    // the bookmark, which costs as much for the newest page as for the whole
+    // history.
+    //
+    // A bookmark is the tuple's fact_ids sorted descending, compared as arrays.
+    // If b > B and B is not empty, then b[0] >= B[0], because a smaller first
+    // element already makes the whole array smaller. b[0] is the largest
+    // fact_id in the tuple, so b > B implies that some output fact of the tuple
+    // has fact_id >= B[0]. That condition is implied by the filter, so adding it
+    // excludes no row the filter alone returns.
+    //
+    // Each branch names one output fact, rather than one branch OR-ing the
+    // condition across all of them, because an inequality OR'd across several
+    // relations restricts none of them. The branches are combined with UNION
+    // rather than UNION ALL, since one tuple can satisfy more than one of them.
+    //
+    // A branch states the condition on the edge column that brought its output
+    // fact into the query, not on that fact's own primary key. The two are
+    // equivalent, because the join equates them, but Postgres does not carry an
+    // inequality across an equijoin: a condition on `f.fact_id` becomes an index
+    // condition on the fact lookup, which runs once per row the edge walk has
+    // already produced, and so bounds nothing. On the edge column it joins
+    // `predecessor_fact_id` and `role_id` in the ix_predecessor index (or their
+    // counterparts in ix_successor), which bounds the walk itself.
+    const impliedConditionApplies = bookmarkValue.length > 0 && queryDescription.outputs.length > 0;
+    let sql: string;
+    let parameters: (string | number | number[])[];
+    if (impliedConditionApplies) {
+        const branches = queryDescription.outputs
+            // The query's first fact is written before any edge is joined, so
+            // it has no edge column. Its own primary key is the only anchor it
+            // has, and it is already pinned by hash.
+            .map(output => anchorColumns.get(output.factIndex) || `f${output.factIndex}.fact_id`)
+            .map(anchorColumn => `${matches} AND ${anchorColumn} >= $${firstParameter}`)
+            .join(" UNION ");
+        sql = `SELECT * FROM (${branches}) AS matches WHERE bookmark > $${bookmarkParameter} ${ordering}`;
+        parameters = [...queryDescription.parameters, bookmarkValue, limit, bookmarkValue[0]];
+    }
+    else {
+        sql = `${matches} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ${ordering}`;
+        parameters = [...queryDescription.parameters, bookmarkValue, limit];
+    }
     return {
         sql,
-        parameters: [...queryDescription.parameters, bookmarkValue, limit],
+        parameters,
         labels: queryDescription.outputs.map(output => ({
             type: output.type,
             index: output.factIndex
@@ -94,7 +142,16 @@ function crossJoinUnreachedGiven(schema: string, edge: EdgeDescription, writtenF
     writtenFactIndexes.add(unreachedGiven);
 }
 
-function generateJoins(schema: string, edges: EdgeDescription[], writtenFactIndexes: Set<number>, givenFactIndexes: Set<number>) {
+/**
+ * Generates the joins that walk the edges of one scope.
+ *
+ * `writtenFactIndexes` carries the facts already in scope, and grows as each
+ * edge brings a new one in. `anchorColumns`, when given, records the edge
+ * column each fact arrived on, keyed by fact index: the column that a condition
+ * on that fact can be stated against so the index serving the walk can use it.
+ * A fact a CROSS JOIN brought in has no such column and gets no entry.
+ */
+function generateJoins(schema: string, edges: EdgeDescription[], writtenFactIndexes: Set<number>, givenFactIndexes: Set<number>, anchorColumns?: Map<number, string>) {
     const joins: string[] = [];
     edges.forEach(edge => {
         crossJoinUnreachedGiven(schema, edge, writtenFactIndexes, givenFactIndexes, joins);
@@ -118,6 +175,7 @@ function generateJoins(schema: string, edges: EdgeDescription[], writtenFactInde
                     ` ON f${edge.successorFactIndex}.fact_id = e${edge.edgeIndex}.successor_fact_id`
                 );
                 writtenFactIndexes.add(edge.successorFactIndex);
+                anchorColumns?.set(edge.successorFactIndex, `e${edge.edgeIndex}.successor_fact_id`);
             }
         }
         else if (writtenFactIndexes.has(edge.successorFactIndex)) {
@@ -131,6 +189,7 @@ function generateJoins(schema: string, edges: EdgeDescription[], writtenFactInde
                 ` ON f${edge.predecessorFactIndex}.fact_id = e${edge.edgeIndex}.predecessor_fact_id`
             );
             writtenFactIndexes.add(edge.predecessorFactIndex);
+            anchorColumns?.set(edge.predecessorFactIndex, `e${edge.edgeIndex}.predecessor_fact_id`);
         }
         else {
             throw new Error("Neither predecessor nor successor fact has been written");

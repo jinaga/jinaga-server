@@ -477,13 +477,16 @@ describe("Postgres query generator", () => {
 
         expect(sqlQueries.length).toEqual(3);
         expect(sqlQueries[0].sql).toEqual(
+            'SELECT * FROM (' +
             'SELECT f2.hash as hash2, ' +
             'sort(array[f2.fact_id], \'desc\') as bookmark ' +
             'FROM public.fact f1 ' +
             'JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3 ' +
             'JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id ' +
             'WHERE f1.fact_type_id = $1 AND f1.hash = $2 ' +
-            'AND sort(array[f2.fact_id], \'desc\') > $4 ' +
+            'AND e1.successor_fact_id >= $6' +
+            ') AS matches ' +
+            'WHERE bookmark > $4 ' +
             'ORDER BY bookmark ASC ' +
             'LIMIT $5'
         );
@@ -492,7 +495,8 @@ describe("Postgres query generator", () => {
             rootHash,
             roleParameter(roleMap, factTypes, "MyApplication.Project", "root"),
             [ 123 ],
-            100
+            100,
+            123
         ]);
         expect(sqlQueries[0].labels).toEqual([
             {
