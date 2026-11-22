@@ -93,6 +93,33 @@ function anchorColumnOf(sql: string, factIndex: number) {
     return match ? match[1] : `f${factIndex}.fact_id`;
 }
 
+// The post is reached by walking back from the given title, so the query brings
+// it in as the predecessor of that edge. Its sibling titles are reached forward
+// from the post, so one feed carries an output anchored on an edge's
+// `predecessor_fact_id` and another on a `successor_fact_id`.
+const BOTH_WALK_DIRECTIONS = `
+    (title: Blog.Post.Title) {
+        post: Blog.Post [
+            post = title->post: Blog.Post
+        ]
+        other: Blog.Post.Title [
+            other->post: Blog.Post = post
+        ]
+    }`;
+
+const titleGiven = dehydrateReference({ type: "Blog.Post.Title", value: "a title" });
+
+// Generates the feed SQL for a single-feed specification read from a title.
+function titleFeedSqlFor(descriptiveString: string, bookmark: string) {
+    const specification = parseSpecification(descriptiveString);
+    const { factTypes, roleMap } = buildMaps(specification);
+    const feeds = buildFeeds(specification);
+    return {
+        query: sqlFromFeed(feeds[0], [titleGiven], "public", bookmark, 100, factTypes, roleMap),
+        feedCount: feeds.length
+    };
+}
+
 // `buildFeeds` lifts a positive existential condition into the feed's matches,
 // and an identity inside one can unify the condition's unknown with a given. The
 // given is then an output of the feed, as boundIdentitySqlSpec pins. No edge
@@ -260,6 +287,44 @@ describe("Feed bookmark filter (issue #206)", () => {
         ]);
     });
 
+    it("anchors each output on the end of the edge that brought it in", () => {
+        // An output reached by walking back from its successor is anchored on
+        // `predecessor_fact_id`, which joins ix_successor's third column the way
+        // `successor_fact_id` joins ix_predecessor's. Both directions appear in
+        // this one feed, and the edge column, not the fact's key, is what an
+        // index can serve.
+        const { query, feedCount } = titleFeedSqlFor(BOTH_WALK_DIRECTIONS, "4321");
+        expect(feedCount).toBe(1);
+        expect(query).not.toBeNull();
+        const body =
+            "SELECT f2.hash as hash2, f3.hash as hash3, " +
+            "sort(array[f2.fact_id, f3.fact_id], 'desc') as bookmark " +
+            "FROM public.fact f1 " +
+            "JOIN public.edge e1 ON e1.successor_fact_id = f1.fact_id AND e1.role_id = $3 " +
+            "JOIN public.fact f2 ON f2.fact_id = e1.predecessor_fact_id " +
+            "JOIN public.edge e2 ON e2.predecessor_fact_id = f2.fact_id AND e2.role_id = $4 " +
+            "JOIN public.fact f3 ON f3.fact_id = e2.successor_fact_id " +
+            "WHERE f1.fact_type_id = $1 AND f1.hash = $2";
+        expect(query!.sql).toEqual(
+            "SELECT * FROM (" +
+            `${body} AND e1.predecessor_fact_id >= $7` +
+            " UNION " +
+            `${body} AND e2.successor_fact_id >= $7` +
+            ") AS matches " +
+            "WHERE bookmark > $5 " +
+            "ORDER BY bookmark ASC LIMIT $6"
+        );
+        expect(query!.parameters).toEqual([
+            1,
+            titleGiven.hash,
+            100,
+            100,
+            [4321],
+            100,
+            4321
+        ]);
+    });
+
     it("anchors an output that is a given on its own primary key", () => {
         // No edge brought the given into the query, so its branch falls back to
         // its fact_id. That branch gains nothing from an index — the given is
@@ -298,6 +363,10 @@ describe("Feed bookmark filter (issue #206)", () => {
                 empty: [feedSqlFor(specification, "").query],
                 paged: [feedSqlFor(specification, "4321").query]
             })),
+            {
+                empty: [titleFeedSqlFor(BOTH_WALK_DIRECTIONS, "").query],
+                paged: [titleFeedSqlFor(BOTH_WALK_DIRECTIONS, "4321").query]
+            },
             {
                 empty: feedSqlsFor(GIVEN_AS_OUTPUT, ""),
                 paged: feedSqlsFor(GIVEN_AS_OUTPUT, "4321")

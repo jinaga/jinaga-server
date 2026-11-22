@@ -72,14 +72,20 @@ function envelopesOf(facts) {
 // The specifications whose feeds are paged. Between them they cover a feed with
 // one output fact, feeds with two and three, a feed carrying a negative
 // existential condition, and a feed carrying a positive one.
+// `given` names which seed fact the specification is read from, since the last
+// one is read from a title rather than from the site.
 const specifications = {
-    "posts of a site": `
+    "posts of a site": {
+        given: "site",
+        text: `
         (site: ${siteType}) {
             post: ${postType} [
                 post->site: ${siteType} = site
             ]
-        }`,
-    "posts and their titles": `
+        }`},
+    "posts and their titles": {
+        given: "site",
+        text: `
         (site: ${siteType}) {
             post: ${postType} [
                 post->site: ${siteType} = site
@@ -87,8 +93,10 @@ const specifications = {
             title: ${titleType} [
                 title->post: ${postType} = post
             ]
-        }`,
-    "titles superseded by a later title": `
+        }`},
+    "titles superseded by a later title": {
+        given: "site",
+        text: `
         (site: ${siteType}) {
             post: ${postType} [
                 post->site: ${siteType} = site
@@ -99,8 +107,10 @@ const specifications = {
             next: ${titleType} [
                 next->prior: ${titleType} = title
             ]
-        }`,
-    "current titles of posts that are not deleted": `
+        }`},
+    "current titles of posts that are not deleted": {
+        given: "site",
+        text: `
         (site: ${siteType}) {
             post: ${postType} [
                 post->site: ${siteType} = site
@@ -118,8 +128,10 @@ const specifications = {
                     ]
                 }
             ]
-        }`,
-    "posts that have a title": `
+        }`},
+    "posts that have a title": {
+        given: "site",
+        text: `
         (site: ${siteType}) {
             post: ${postType} [
                 post->site: ${siteType} = site
@@ -129,7 +141,23 @@ const specifications = {
                     ]
                 }
             ]
-        }`
+        }`},
+    // The post is reached by walking *back* from the given title, so the query
+    // brings it in as the predecessor of that edge and its branch is anchored
+    // on `e1.predecessor_fact_id`. Its sibling titles are reached forward from
+    // the post, so the same feed also carries a `successor_fact_id` anchor, and
+    // the two directions are exercised side by side.
+    "the post of a title, and that post's titles": {
+        given: "title",
+        text: `
+        (title: ${titleType}) {
+            post: ${postType} [
+                post = title->post: ${postType}
+            ]
+            other: ${titleType} [
+                other->post: ${postType} = post
+            ]
+        }`}
 };
 
 const pool = new Pool({ connectionString });
@@ -206,6 +234,23 @@ async function pageThrough(read, feed, start, limit) {
 // bookmark filter is applied, so it reports the page, and the enumeration the
 // issue is about shows up at the joins beneath it. The largest join node is the
 // quantity the criterion was reaching for, so that is what this measures.
+// Every index condition in a plan, which is where an anchor has to land for an
+// index to serve it. A condition that reaches only a filter bounds nothing.
+function indexConditions(plan) {
+    const conditions = [];
+    const queue = [plan];
+    while (queue.length > 0) {
+        const node = queue.shift();
+        if (node['Index Cond']) {
+            conditions.push(`${node['Relation Name'] || ''} ${node['Index Name'] || ''} ${node['Index Cond']}`);
+        }
+        for (const child of node['Plans'] || []) {
+            queue.push(child);
+        }
+    }
+    return conditions;
+}
+
 function largestJoinRows(plan) {
     const isJoin = node => node['Node Type'] === 'Nested Loop' ||
         node['Node Type'] === 'Hash Join' ||
@@ -229,6 +274,7 @@ async function explain(sql, parameters) {
     const explained = rows[0]['QUERY PLAN'][0];
     return {
         largestJoinRows: largestJoinRows(explained['Plan']),
+        indexConditions: indexConditions(explained['Plan']),
         executionTime: explained['Execution Time']
     };
 }
@@ -236,6 +282,14 @@ async function explain(sql, parameters) {
 describe("Feed bookmark filter (issue #206)", () => {
     const siteFact = site(`${suffix}.example.com`);
     const start = [dehydrateReference(siteFact)];
+    // The seed for the specifications read from a title; set in beforeAll,
+    // because it has to be a title the saves actually produced.
+    let titleStart;
+
+    // The seed a specification is read from, by its `given`.
+    function startFor(name) {
+        return specifications[name].given === "title" ? titleStart : start;
+    }
 
     beforeAll(async () => {
         store = new PostgresStore(pool, 'public');
@@ -262,6 +316,10 @@ describe("Feed bookmark filter (issue #206)", () => {
             }
             await store.save(envelopesOf(batch));
         }
+
+        // A title of the post that collected the most of them, so the feed read
+        // back from it has several tuples to page.
+        titleStart = [dehydrateReference(title(posts[0], `post 0 title 5`, [titles[0]]))];
     });
 
     afterAll(async () => {
@@ -273,13 +331,14 @@ describe("Feed bookmark filter (issue #206)", () => {
         // the empty bookmark, yields the same pages, tuples and bookmarks as
         // the pre-change SQL yields for the same bookmarks.
         for (const name of Object.keys(specifications)) {
-            const specification = parseSpecification(specifications[name]).specification;
+            const specification = parseSpecification(specifications[name].text).specification;
             const feeds = buildFeeds(specification);
+            const seed = startFor(name);
             expect(feeds.length).toBeGreaterThan(0);
             for (let f = 0; f < feeds.length; f++) {
                 for (const limit of [1, 2, 3, 100]) {
-                    const current = await pageThrough(readPageWithPreChangeSql, feeds[f], start, limit);
-                    const paged = await pageThrough(readPage, feeds[f], start, limit);
+                    const current = await pageThrough(readPageWithPreChangeSql, feeds[f], seed, limit);
+                    const paged = await pageThrough(readPage, feeds[f], seed, limit);
                     expect({ name, feed: f, limit, pages: paged })
                         .toEqual({ name, feed: f, limit, pages: current });
                 }
@@ -294,11 +353,12 @@ describe("Feed bookmark filter (issue #206)", () => {
         // unpaged read returns, in the same order. The unpaged read runs the
         // empty-bookmark SQL, which this change does not touch.
         for (const name of Object.keys(specifications)) {
-            const specification = parseSpecification(specifications[name]).specification;
+            const specification = parseSpecification(specifications[name].text).specification;
             const feeds = buildFeeds(specification);
+            const seed = startFor(name);
             for (let f = 0; f < feeds.length; f++) {
-                const whole = await readPage(feeds[f], start, '', 1000);
-                const pages = await pageThrough(readPage, feeds[f], start, 1);
+                const whole = await readPage(feeds[f], seed, '', 1000);
+                const pages = await pageThrough(readPage, feeds[f], seed, 1);
                 const paged = pages.reduce((all, page) => all.concat(page), []);
                 expect({ name, feed: f, tuples: paged.map(tuple => tuple.bookmark) })
                     .toEqual({ name, feed: f, tuples: whole.map(bookmarkOf) });
@@ -324,7 +384,7 @@ describe("Feed bookmark filter (issue #206)", () => {
             await store.save(envelopesOf(batch));
         }
 
-        const specification = parseSpecification(specifications["posts and their titles"]).specification;
+        const specification = parseSpecification(specifications["posts and their titles"].text).specification;
         const feeds = buildFeeds(specification);
         expect(feeds.length).toBe(1);
         const feed = feeds[0];
@@ -363,5 +423,34 @@ describe("Feed bookmark filter (issue #206)", () => {
         const preChangeRows = await pool.query(preChangeQuery.sql, preChangeParameters);
         expect(pagedRows.rows.map(bookmarkOf)).toEqual(preChangeRows.rows.map(bookmarkOf));
         expect(pagedRows.rows.length).toBe(49);
+    });
+
+    it("drives an anchor on either end of an edge from an index", async () => {
+        // The anchor lands on `successor_fact_id` for an output reached forward
+        // from its predecessor, and on `predecessor_fact_id` for one reached
+        // back from its successor. Both have to arrive as an index condition
+        // rather than as a filter, since a filter runs after the walk it was
+        // meant to bound. This feed carries one of each, so one plan shows both.
+        const name = "the post of a title, and that post's titles";
+        const specification = parseSpecification(specifications[name].text).specification;
+        const feeds = buildFeeds(specification);
+        expect(feeds.length).toBe(1);
+        const feed = feeds[0];
+        const seed = startFor(name);
+
+        const whole = await readPage(feed, seed, '', 1000);
+        expect(whole.length).toBeGreaterThan(2);
+        const bookmark = bookmarkOf(whole[0]);
+
+        const factTypes = await store.loadFactTypesFromFeed(feed);
+        const roleMap = await store.loadRolesFromFeed(feed, factTypes);
+        const pagedQuery = sqlFromFeed(feed, seed, 'public', bookmark, 100, factTypes, roleMap);
+        expect(pagedQuery.sql).toContain('predecessor_fact_id >=');
+        expect(pagedQuery.sql).toContain('successor_fact_id >=');
+
+        const plan = await explain(pagedQuery.sql, pagedQuery.parameters);
+        const edgeConditions = plan.indexConditions.filter(condition => condition.includes('edge'));
+        expect(edgeConditions.some(condition => condition.includes('predecessor_fact_id >='))).toBe(true);
+        expect(edgeConditions.some(condition => condition.includes('successor_fact_id >='))).toBe(true);
     });
 });
