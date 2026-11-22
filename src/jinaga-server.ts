@@ -38,6 +38,7 @@ import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
 import { AuthorizationKeystore, DistributionBranchesResult, FeedResult, SubscriptionAuthorizer } from "./authorization/authorization-keystore";
 import { FeedStreamSessionConfig } from "./feeds/feed-stream-session";
+import { validateMaxLineBytes } from "./http/line-reader";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
 import { PostgresKeystore } from "./postgres/postgres-keystore";
@@ -63,7 +64,17 @@ export type JinagaServerConfig = {
      * (/feeds/:hash with Accept: application/x-jinaga-feed-stream).
      * See FeedStreamSessionConfig for the available limits and defaults.
      */
-    feedStream?: Partial<FeedStreamSessionConfig>
+    feedStream?: Partial<FeedStreamSessionConfig>,
+    /**
+     * Maximum number of bytes in a single line of a POST /save body sent as
+     * application/x-jinaga-graph-v1. That route reads the request stream
+     * directly, so no Express body-parser limit applies to it; a line over
+     * this limit is refused with 413 and nothing from the request is saved.
+     * Omit it to use the line reader's own default of 16 MiB. A value that
+     * is not a positive integer within the safe integer range denotes no
+     * usable bound, and server creation throws a `RangeError`.
+     */
+    maxSaveLineBytes?: number
 };
 
 export type JinagaServerInstance = {
@@ -81,6 +92,10 @@ const localDeviceIdentity = {
 
 export class JinagaServer {
     static create(config: JinagaServerConfig): JinagaServerInstance {
+        // Screen the save line limit here, so a configuration that would leave
+        // the limit unenforceable fails at startup rather than on the first
+        // graph save. The rule itself lives with the reader that enforces it.
+        validateMaxLineBytes(config.maxSaveLineBytes);
         const syncStatusNotifier = new SyncStatusNotifier();
         const pools: { [uri: string]: Pool } = {};
         const pool = makePool(config, pools);
@@ -98,7 +113,7 @@ export class JinagaServer {
         const purgeConditions = createPurgeConditions(config);
         const factManager = new FactManager(fork, source, store, network, purgeConditions);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
-        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*', config.feedStream || {});
+        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*', config.feedStream || {}, config.maxSaveLineBytes);
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {
