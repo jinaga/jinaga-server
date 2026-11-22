@@ -125,12 +125,19 @@ describe("Postgres read of two givens unified onto one fact", () => {
                     ]
                 } => o
             `).query.sql,
-            // One unknown unified with a given, beside a given of its own.
+            // A unified pair beside a given on a fact index of its own, so
+            // one statement exercises both the index that is skipped and the
+            // index that is still joined. The second given needs its own
+            // unknown to bind it: a given no condition names is allocated no
+            // input at all, and leaves the SQL identical to the case above.
             readQueryFor(`
                 (office: Office, other: Office, company: Company) {
                     o: Office [
                         o = office
                         o = other
+                    ]
+                    c: Company [
+                        c = company
                     ]
                 } => o
             `).query.sql
