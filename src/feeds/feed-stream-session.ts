@@ -12,6 +12,8 @@ import {
 } from "jinaga";
 import { FeedResult } from "../authorization/authorization-keystore";
 import { Stream } from "../http/stream";
+import { FeedKeys, feedKeys } from "./feed-identity";
+import { FeedAccounting } from "./feed-usage";
 
 /**
  * A function that queries the feed for the next page of tuples, starting
@@ -79,6 +81,7 @@ function dedupeReferences(references: FactReference[]): FactReference[] {
 export class FeedStreamSession {
     private bookmark: string;
     private readonly config: FeedStreamSessionConfig;
+    private readonly keys: FeedKeys | null;
 
     // Waitlist of fact references surfaced by inverse observers, keyed by
     // "{type}:{hash}" so duplicates collapse. A reference stays on the
@@ -112,10 +115,18 @@ export class FeedStreamSession {
         private readonly stream: Stream<FeedResponse>,
         initialBookmark: string,
         private readonly connectionId: string = Math.random().toString(36).substring(2, 10),
-        config: Partial<FeedStreamSessionConfig> = {}
+        config: Partial<FeedStreamSessionConfig> = {},
+        // Accounting for what this feed instance costs. A session reports
+        // the streaming reads its cycle runs, the time it is open, and the
+        // inverse matches its listeners are handed.
+        private readonly feedUsage: FeedAccounting | null = null
     ) {
         this.bookmark = initialBookmark;
         this.config = { ...defaultFeedStreamSessionConfig, ...config };
+        // The keys are derived from the feed this session serves, so a
+        // session accounts against the same instance the polling handler
+        // does. Derived only when there is somewhere to report them.
+        this.keys = feedUsage ? feedKeys(feedDefinition) : null;
     }
 
     /** Current number of references on the waitlist (observability/testing). */
@@ -129,6 +140,9 @@ export class FeedStreamSession {
      * cycle continues to run asynchronously, feeding the stream.
      */
     start(): void {
+        if (this.feedUsage && this.keys) {
+            this.feedUsage.openStreamingSession(this.keys);
+        }
         this.registerInverseListeners();
         this.registerAnchorListeners();
         // Kick off the initial backfill. Errors are isolated so a failed
@@ -144,6 +158,9 @@ export class FeedStreamSession {
             return;
         }
         this.shuttingDown = true;
+        if (this.feedUsage && this.keys) {
+            this.feedUsage.closeStreamingSession(this.keys);
+        }
         for (const listener of this.listeners) {
             try {
                 this.factManager.removeSpecificationListener(listener);
@@ -336,6 +353,12 @@ export class FeedStreamSession {
                 async (results: ProjectedResult[]) => {
                     if (this.shuttingDown) {
                         return;
+                    }
+                    // The shape is what an inverse belongs to, so the rows it
+                    // produced are accounted for before the given subset
+                    // narrows them to this one instance.
+                    if (this.feedUsage && this.keys) {
+                        this.feedUsage.recordInverseMatches(this.keys.shapeKey, results.length);
                     }
                     // Only enqueue results whose given subset matches this
                     // subscription's given.

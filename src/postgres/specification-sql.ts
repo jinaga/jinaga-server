@@ -5,6 +5,7 @@ import {
     validateGiven
 } from "jinaga";
 
+import { parseBookmarkPositions } from "../util/bookmark";
 import { EdgeDescription, ExistentialConditionDescription, FactEqualityDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 interface SpecificationLabel {
@@ -170,25 +171,14 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: Exis
 }
 
 function parseBookmark(bookmark: string): number[] {
-    try {
-        if (bookmark === undefined || bookmark === null || bookmark === "") {
-            return [];
-        }
-        else {
-            return bookmark.split(".").map(str => strictParseInt(str));
-        }
-    }
-    catch (e) {
+    // The spelling of a bookmark is read in one place, src/util/bookmark.ts,
+    // so that a reader comparing two bookmarks orders them the way this
+    // query pages them.
+    const positions = parseBookmarkPositions(bookmark);
+    if (positions === null) {
         throw new Error(`Invalid bookmark: "${bookmark}"`);
     }
-
-    function strictParseInt(str: string): number {
-        const parsed = parseInt(str);
-        if (isNaN(parsed)) {
-            throw new Error("NaN");
-        }
-        return parsed;
-    }
+    return positions;
 }
 
 export function sqlFromSpecification(start: FactReference[], schema: string, bookmarks: string[], limit: number, specification: Specification, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery[] {
