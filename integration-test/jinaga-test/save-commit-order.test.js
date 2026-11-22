@@ -160,6 +160,39 @@ function within(promise, ms) {
     ]).finally(() => clearTimeout(timer));
 }
 
+// The number of backends waiting for an advisory lock. `PostgresStore.save`
+// holds the only advisory lock this codebase takes, so on a build without it
+// this is always zero and the wait below can only end by the save finishing.
+async function advisoryWaiters() {
+    const { rows } = await pool.query(
+        `SELECT count(*)::int AS waiting
+         FROM pg_locks
+         WHERE locktype = 'advisory' AND NOT granted`);
+    return rows[0].waiting;
+}
+
+// Wait until `save` has either finished or parked waiting for the save lock,
+// and say which. Neither branch is a timeout, so the phase that follows starts
+// from a known state on both builds: without the lock a save can only finish,
+// and with it a save contending for a held lock can only park.
+async function settledOrBlocked(save) {
+    let settled = false;
+    const mark = () => { settled = true; };
+    save.then(mark, mark);
+    for (;;) {
+        // Give the save a turn, then look, so a save that finishes without
+        // ever contending is seen as settled rather than as blocked.
+        await new Promise(resolve => setImmediate(resolve));
+        if (settled) {
+            return "settled";
+        }
+        if (await advisoryWaiters() > 0) {
+            return "blocked";
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+}
+
 async function factIdOf(reference) {
     const { rows } = await pool.query(
         `SELECT f.fact_id
@@ -208,9 +241,11 @@ describe("PostgresStore save assigns fact ids in commit order", () => {
         const held = startHeldSave(envelopesOf(first));
         await untilHolding(held.state);
 
-        // The second save cannot take an id while the first one holds its own.
+        // The second save cannot take an id while the first one holds its own,
+        // so it parks on the lock rather than running to completion. On main
+        // there is no lock to park on and this reads "settled".
         const secondSave = track(writer.save(envelopesOf(second)));
-        expect(await within(secondSave, 1000)).toBe("pending");
+        expect(await settledOrBlocked(secondSave)).toBe("blocked");
 
         held.release();
         await held.save;
@@ -235,6 +270,13 @@ describe("PostgresStore save assigns fact ids in commit order", () => {
         const held = startHeldSave(envelopesOf(first));
         await untilHolding(held.state);
         const secondSave = track(writer.save(envelopesOf(second)));
+
+        // Do not read until the second save has gone as far as it can. On main
+        // that is a commit, which is the interleaving this criterion is about:
+        // reading before it would let the reader see nothing, keep the seed
+        // bookmark, and then receive both facts after the release, passing for
+        // the wrong reason. On this branch it is parked on the lock instead.
+        await settledOrBlocked(secondSave);
 
         // Read between the commits, keeping the bookmark.
         const between = await drain(writer, start, bookmark);
