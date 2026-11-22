@@ -197,6 +197,47 @@ describe("line reader chunk boundaries", () => {
     });
 });
 
+// A review of this change observed that `number` admits several values that
+// silently disable the bound: `NaN` and `Infinity` make every comparison
+// false, and `??` does not screen them out because only null and undefined
+// fall through to the default. Each case below is driven through the reader
+// rather than asserted against the guard's source.
+describe("line reader invalid limits", () => {
+    it.each([
+        ["NaN", NaN],
+        ["Infinity", Infinity],
+        ["-Infinity", -Infinity],
+        ["zero", 0],
+        ["a negative", -1],
+        ["a fraction", 1.5],
+        ["beyond the safe integer range", Number.MAX_SAFE_INTEGER + 2]
+    ])("refuses to build a reader whose limit is %s", (_label, maxLineBytes) => {
+        const stream = new FakeStream();
+
+        expect(() => createLineReader(stream.asReadable, { maxLineBytes }))
+            .toThrow(RangeError);
+        // Nothing was read, so a refused limit never governs a body.
+        expect(stream.listenerCount("data")).toBe(0);
+    });
+
+    it("builds a reader at the largest bound a caller can name", async () => {
+        const lines = await readLinesSplitAt(
+            Buffer.from("one\ntwo\n", "utf8"),
+            [],
+            { maxLineBytes: Number.MAX_SAFE_INTEGER });
+
+        expect(lines).toEqual(["one", "two"]);
+    });
+
+    it("falls back to the default when the limit is left out entirely", async () => {
+        // An explicitly undefined limit takes the same path as no options.
+        const lines = await readLinesSplitAt(
+            Buffer.from("one\n", "utf8"), [], { maxLineBytes: undefined });
+
+        expect(lines).toEqual(["one"]);
+    });
+});
+
 // Criterion 4. The reader is exported from the package, so a caller that
 // passes no options must behave as it did before the limit existed. The
 // default is read back out of the reader's behavior rather than off its

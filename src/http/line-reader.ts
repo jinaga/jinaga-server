@@ -14,15 +14,49 @@ export interface LineReaderOptions {
      * A line that would exceed this rejects the pending read with
      * {@link PayloadTooLarge} and the reader stops reading the stream.
      * Defaults to 16 MiB.
+     *
+     * Must be a positive integer within the safe integer range. Anything
+     * else — `NaN`, `Infinity`, zero, a negative, a fraction — denotes no
+     * usable bound, and creating the reader throws a `RangeError` rather
+     * than reading a body the limit would not govern.
      */
     maxLineBytes?: number;
+}
+
+/**
+ * Resolve a configured line limit to the number the reader compares against,
+ * refusing a value that would denote no usable bound.
+ *
+ * The type `number` admits several values that silently disable the limit
+ * rather than setting it. `NaN` and `Infinity` make every `>` comparison
+ * false, so the reader would buffer without end — the very defect the limit
+ * exists to prevent, reintroduced by a caller's typo. Zero and negatives
+ * refuse every line instead. `??` does not screen any of them out, because
+ * only `null` and `undefined` fall through to the default.
+ *
+ * Throwing is what makes the bound dependable: a limit that cannot hold is a
+ * configuration error, and it is better to say so than to serve requests with
+ * no protection. A caller that wants the largest bound available passes
+ * `Number.MAX_SAFE_INTEGER` and says so explicitly.
+ */
+export function validateMaxLineBytes(maxLineBytes: number | undefined): number {
+    if (maxLineBytes === undefined) {
+        return DefaultMaxLineBytes;
+    }
+    if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0) {
+        throw new RangeError(
+            "A line limit must be a positive integer no greater than " +
+            `${Number.MAX_SAFE_INTEGER}, so it cannot be ${maxLineBytes}.`);
+    }
+    return maxLineBytes;
 }
 
 export function createLineReader(
     stream: NodeJS.ReadableStream,
     options: LineReaderOptions = {}
 ): () => Promise<string | null> {
-    const maxLineBytes = options.maxLineBytes ?? DefaultMaxLineBytes;
+    // Refuse an unusable limit before taking a single byte from the stream.
+    const maxLineBytes = validateMaxLineBytes(options.maxLineBytes);
     // The line in progress, as the chunks it arrived in plus their total size.
     // Joining is deferred to the newline so a line delivered in N chunks is
     // copied once rather than N times: concatenating on every chunk made the

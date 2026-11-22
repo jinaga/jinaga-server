@@ -4,7 +4,7 @@ export { AuthorizationKeystore } from "./authorization/authorization-keystore";
 export { DistributedFactCache } from "./authorization/distributed-fact-cache";
 export { FeedStreamSession, FeedStreamSessionConfig, defaultFeedStreamSessionConfig } from "./feeds/feed-stream-session";
 export { PayloadTooLarge } from "./http/errors";
-export { createLineReader, LineReaderOptions } from "./http/line-reader";
+export { createLineReader, LineReaderOptions, validateMaxLineBytes } from "./http/line-reader";
 export { FeedNotFound, HttpRouter, RequestUser } from "./http/router";
 export { Stream } from "./http/stream";
 export { JinagaServer, JinagaServerConfig, JinagaServerInstance, tracePool } from "./jinaga-server";
