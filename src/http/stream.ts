@@ -1,3 +1,5 @@
+import { Trace } from "jinaga";
+
 // This class logs nothing on its success path. A stream's lifetime is reported
 // once by the request that opened it (see getOrStream in router.ts), and a line
 // per feed, per replayed item, or per done handler says the same thing again
@@ -17,7 +19,7 @@ export class Stream<T> {
 
     next(handler: (data: T) => void): Stream<T> {
         if (this.closed) {
-            console.warn(`[Stream:${this.streamId}] Attempted to add handler to closed stream`);
+            Trace.warn(`[Stream:${this.streamId}] Attempted to add handler to closed stream`);
             return this;
         }
 
@@ -28,7 +30,7 @@ export class Stream<T> {
             try {
                 handler(data);
             } catch (error) {
-                console.error(`[Stream:${this.streamId}] Error replaying queued item ${index + 1}: ${error}`);
+                Trace.error(`[Stream:${this.streamId}] Error replaying queued item ${index + 1}: ${error}`);
             }
         });
 
@@ -37,11 +39,11 @@ export class Stream<T> {
 
     done(handler: () => void): Stream<T> {
         if (this.closed) {
-            console.warn(`[Stream:${this.streamId}] Attempted to add done handler to closed stream - executing immediately`);
+            Trace.warn(`[Stream:${this.streamId}] Attempted to add done handler to closed stream - executing immediately`);
             try {
                 handler();
             } catch (error) {
-                console.error(`[Stream:${this.streamId}] Error in immediate done handler: ${error}`);
+                Trace.error(`[Stream:${this.streamId}] Error in immediate done handler: ${error}`);
             }
             return this;
         }
@@ -52,7 +54,7 @@ export class Stream<T> {
 
     close(): void {
         if (this.closed) {
-            console.warn(`[Stream:${this.streamId}] Attempted to close already closed stream`);
+            Trace.warn(`[Stream:${this.streamId}] Attempted to close already closed stream`);
             return;
         }
 
@@ -63,7 +65,7 @@ export class Stream<T> {
             try {
                 handler();
             } catch (error) {
-                console.error(`[Stream:${this.streamId}] Error in done handler ${index + 1}: ${error}`);
+                Trace.error(`[Stream:${this.streamId}] Error in done handler ${index + 1}: ${error}`);
             }
         });
 
@@ -77,7 +79,7 @@ export class Stream<T> {
         const feedStart = Date.now();
 
         if (this.closed) {
-            console.warn(`[Stream:${this.streamId}] Attempted to feed data to closed stream - Data type: ${typeof data}`);
+            Trace.warn(`[Stream:${this.streamId}] Attempted to feed data to closed stream - Data type: ${typeof data}`);
             return;
         }
 
@@ -93,17 +95,17 @@ export class Stream<T> {
                 const handlerDuration = Date.now() - handlerStart;
 
                 if (handlerDuration > 50) {
-                    console.warn(`[Stream:${this.streamId}] SLOW handler - Handler ${index + 1}/${handlerCount}, Duration: ${handlerDuration}ms`);
+                    Trace.warn(`[Stream:${this.streamId}] SLOW handler - Handler ${index + 1}/${handlerCount}, Duration: ${handlerDuration}ms`);
                 }
             } catch (error) {
-                console.error(`[Stream:${this.streamId}] ERROR in handler ${index + 1}/${handlerCount}: ${error}`);
+                Trace.error(`[Stream:${this.streamId}] ERROR in handler ${index + 1}/${handlerCount}: ${error}`);
             }
         });
 
         const totalDuration = Date.now() - feedStart;
 
         if (totalDuration > 100) {
-            console.warn(`[Stream:${this.streamId}] SLOW feed operation - Duration: ${totalDuration}ms`);
+            Trace.warn(`[Stream:${this.streamId}] SLOW feed operation - Duration: ${totalDuration}ms`);
         }
     }
 }

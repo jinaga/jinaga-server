@@ -73,7 +73,7 @@ function getOrStream<U>(
                         res.flushHeaders();
 
                         const openedAt = Date.now();
-                        console.log(`[HttpConnection:${connectionId}] Stream opened - User: ${user?.id || 'anonymous'}, URL: ${req.url}`);
+                        Trace.info(`[HttpConnection:${connectionId}] Stream opened - User: ${user?.id || 'anonymous'}, URL: ${req.url}`);
 
                         let clientDisconnected = false;
                         let streamClosed = false;
@@ -110,7 +110,7 @@ function getOrStream<U>(
                                 const writeStart = Date.now();
 
                                 if (clientDisconnected) {
-                                    console.warn(`[HttpConnection:${connectionId}] Attempted to write to disconnected client - Message #${messageCount}`);
+                                    Trace.warn(`[HttpConnection:${connectionId}] Attempted to write to disconnected client - Message #${messageCount}`);
                                     return;
                                 }
 
@@ -120,30 +120,30 @@ function getOrStream<U>(
                                     const writeDuration = Date.now() - writeStart;
 
                                     if (writeDuration > 50) {
-                                        console.warn(`[HttpConnection:${connectionId}] SLOW write operation - Duration: ${writeDuration}ms`);
+                                        Trace.warn(`[HttpConnection:${connectionId}] SLOW write operation - Duration: ${writeDuration}ms`);
                                     }
                                 } catch (error) {
-                                    console.error(`[HttpConnection:${connectionId}] ERROR writing message #${messageCount}: ${error}`);
+                                    Trace.error(`[HttpConnection:${connectionId}] ERROR writing message #${messageCount}: ${error}`);
                                 }
                             })
                             .done(() => {
                                 clearTimeout(timeout);
                                 streamClosed = true;
 
-                                console.log(`[HttpConnection:${connectionId}] Stream ended - Messages sent: ${messageCount}, Duration: ${Date.now() - openedAt}ms, Reason: ${closedBy ?? "done"}`);
+                                Trace.info(`[HttpConnection:${connectionId}] Stream ended - Messages sent: ${messageCount}, Duration: ${Date.now() - openedAt}ms, Reason: ${closedBy ?? "done"}`);
 
                                 try {
                                     if (!clientDisconnected) {
                                         res.socket?.end();
                                     }
                                 } catch (error) {
-                                    console.error(`[HttpConnection:${connectionId}] ERROR ending socket: ${error}`);
+                                    Trace.error(`[HttpConnection:${connectionId}] ERROR ending socket: ${error}`);
                                 }
                             });
                     }
                 })
                 .catch(error => {
-                    console.error(`[HttpConnection:${connectionId}] ERROR in stream method: ${error}`);
+                    Trace.error(`[HttpConnection:${connectionId}] ERROR in stream method: ${error}`);
                     handleError(error, req, res, next);
                 });
         }
@@ -161,7 +161,7 @@ function getOrStream<U>(
                     }
                 })
                 .catch(error => {
-                    console.error(`[HttpConnection:${connectionId}] ERROR in get method: ${error}`);
+                    Trace.error(`[HttpConnection:${connectionId}] ERROR in get method: ${error}`);
                     handleError(error, req, res, next);
                 });
         }
@@ -350,6 +350,18 @@ function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: strin
     res.send(JSON.stringify(result));
 }
 
+// An Error carries its stack, and a template literal drops it: interpolation
+// calls toString(), which yields only the name and the message. `console.error`
+// used to receive the Error as a second argument and render the stack itself,
+// so moving to `Trace.error`, which takes one value, is what put the formatting
+// here. V8's `stack` already opens with the name and message, so it is the
+// whole of what the two-argument call used to show.
+//
+// Not exported from `src/index.ts`, so this is internal to the package.
+export function formatErrorWithStack(error: unknown): string {
+    return error instanceof Error && error.stack ? error.stack : String(error);
+}
+
 function outputReadResults(
     result: ResultStream<any>, 
     res: Response, 
@@ -359,7 +371,7 @@ function outputReadResults(
     // Use streaming output formatter
     outputReadResultsStreaming(result, res, acceptType, csvMetadata)
         .catch(error => {
-            console.error('Error in outputReadResults:', error);
+            Trace.error(`Error in outputReadResults: ${formatErrorWithStack(error)}`);
             if (!res.headersSent) {
                 // Without an explicit type, res.send of a string makes Express
                 // infer text/html and label an error body as markup.
@@ -814,7 +826,16 @@ export class HttpRouter {
         // listener callbacks and bookmark mutation, guarantees tuple
         // completeness, and ensures no update is lost between pages.
         const session = new FeedStreamSession(
-            (b: string) => this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, b),
+            // One dependency per cycle of the session's query loop, named
+            // apart from the polling path's `feed` so the two are
+            // distinguishable in a trace. Issue #189: the streaming path ran
+            // this query on every wake and recorded nothing, which is why
+            // #187's stampede left no record of when or where. The wrapper
+            // goes here rather than inside `queryFeed`, because the polling
+            // handler already wraps its own call and would otherwise record
+            // each poll twice.
+            (b: string) => Trace.dependency("feedStream", feedHash,
+                () => this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, b)),
             this.factManager,
             feedDefinition,
             start,

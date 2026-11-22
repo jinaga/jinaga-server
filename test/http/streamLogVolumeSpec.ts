@@ -5,14 +5,17 @@ import { AddressInfo } from "net";
 import {
     AuthorizationRules,
     buildModel,
+    ConsoleTracer,
     DistributionRules,
     FactManager,
     FeedCache,
     FeedResponse,
     MemoryStore,
     NetworkNoOp,
+    NoOpTracer,
     ObservableSource,
     PassThroughFork,
+    Trace,
     User
 } from "jinaga";
 
@@ -40,6 +43,12 @@ class ConsoleCapture {
     readonly lines: string[] = [];
 
     constructor() {
+        // Issue #189 routed these lines through `Trace`, so what reaches the
+        // console is now the configured tracer's decision rather than each
+        // call site's. `ConsoleTracer` is the tracer that puts them on the
+        // console, which is what this suite counts; the default `NoOpTracer`
+        // would make every count zero and say nothing about volume.
+        Trace.configure(new ConsoleTracer());
         for (const method of CONSOLE_METHODS) {
             this.spies.push(jest.spyOn(console, method).mockImplementation((...args: any[]) => {
                 // A single call can carry several lines, and it is lines that
@@ -53,6 +62,7 @@ class ConsoleCapture {
         for (const spy of this.spies) {
             spy.mockRestore();
         }
+        Trace.configure(new NoOpTracer());
     }
 }
 
