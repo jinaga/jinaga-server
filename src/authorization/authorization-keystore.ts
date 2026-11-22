@@ -62,6 +62,7 @@ export interface SubscriptionAuthorizer {
     ): Promise<FeedResult>;
 }
 
+import { instanceKey } from "../feeds/feed-identity";
 import { Keystore } from "../keystore";
 import { DistributedFactCache } from "./distributed-fact-cache";
 
@@ -69,10 +70,46 @@ function factKey(reference: FactReference): string {
     return `${reference.type}:${reference.hash}`;
 }
 
+function namedStartOf(specification: Specification, start: FactReference[]): ReferencesByName {
+    return specification.given.reduce((map, given, index) => ({
+        ...map,
+        [given.label.name]: start[index]
+    }), {} as ReferencesByName);
+}
+
+/**
+ * The identity of one feed read: which feed instance, at which bookmark.
+ *
+ * `instanceKey` is the one definition of feed identity in this series, so
+ * this composes it with the bookmark and derives nothing of its own. A feed
+ * read's result depends on the feed, the facts it starts from and the
+ * bookmark, and on nothing about the user, so two reads carrying equal keys
+ * would return equal results.
+ *
+ * A given that takes no part in any match is absent from the skeleton, so
+ * `instanceKey` does not carry it. That is correct rather than lossy: such a
+ * start fact reaches neither the feed's output labels nor its query
+ * parameters, so it cannot change what the read returns.
+ */
+function feedReadKey(specification: Specification, start: FactReference[], bookmark: string): string {
+    return `${instanceKey(specification, namedStartOf(specification, start))}|${bookmark}`;
+}
+
 export class AuthorizationKeystore implements Authorization, SubscriptionAuthorizer {
     private authorizationEngine: AuthorizationEngine | null;
     private distributionEngine: DistributionEngine | null;
     private distributedFacts: DistributedFactCache = new DistributedFactCache();
+    // The feed reads that are in flight right now, by feed read key.
+    //
+    // A save wakes every FeedStreamSession subscribed to the specification,
+    // and each one queries on its own: `wake` starts its cycle with
+    // `void this.runCycle()` (src/feeds/feed-stream-session.ts), so the
+    // listener returns before the query runs and nothing upstream waits for
+    // it. N sessions on one feed therefore issued N identical queries in the
+    // same tick, and queued N connection acquisitions behind the pool
+    // (issue #187). Merging the identical ones leaves one read per feed
+    // instance and bookmark.
+    private feedReadsInFlight: Map<string, Promise<FactFeed>> = new Map();
 
     constructor(
         private factManager: FactManager,
@@ -104,10 +141,7 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const namedStart = specification.given.reduce((map, g, index) => ({
-                ...map,
-                [g.label.name]: start[index]
-            }), {} as ReferencesByName);
+            const namedStart = namedStartOf(specification, start);
             // Break the specification into feeds and check distribution.
             const feeds = buildFeeds(specification);
             const canDistribute = await this.distributionEngine.canDistributeToAll(feeds, namedStart, userReference);
@@ -131,22 +165,19 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
                 : null;
-            const namedStart = specification.given.reduce((map, g, index) => ({
-                ...map,
-                [g.label.name]: start[index]
-            }), {} as ReferencesByName);
+            const namedStart = namedStartOf(specification, start);
             const canDistribute = await this.distributionEngine.canDistributeToAll([specification], namedStart, userReference);
             if (canDistribute.type === "failure") {
                 return { type: "denied", reason: canDistribute.reason };
             }
-            const factFeed = await this.store.feed(specification, start, bookmark);
+            const factFeed = await this.feedOnce(specification, start, bookmark);
             const factReferences = factFeed.tuples
                 .flatMap(tuple => tuple.facts)
                 .filter((value, index, self) => self.findIndex(factReferenceEquals(value)) === index);
             this.distributedFacts.add(factReferences, userReference);
             return { type: "success", feed: factFeed };
         }
-        return { type: "success", feed: await this.store.feed(specification, start, bookmark) };
+        return { type: "success", feed: await this.feedOnce(specification, start, bookmark) };
     }
 
     async feedPreVerified(userIdentity: UserIdentity | null, specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
@@ -155,7 +186,7 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
         // authorization condition into the matches and therefore self-
         // filters). Skip the redundant per-query distribution check, but
         // keep tracking the returned references so /load stays consistent.
-        const factFeed = await this.store.feed(specification, start, bookmark);
+        const factFeed = await this.feedOnce(specification, start, bookmark);
         if (this.distributionEngine) {
             const userReference: FactReference | null = userIdentity
                 ? await this.keystore.getUserFact(userIdentity)
@@ -166,6 +197,33 @@ export class AuthorizationKeystore implements Authorization, SubscriptionAuthori
             this.distributedFacts.add(factReferences, userReference);
         }
         return factFeed;
+    }
+
+    /**
+     * Read a feed page, sharing a read that is already in flight for the same
+     * feed instance and bookmark.
+     *
+     * Only the read is shared. Everything that depends on who is asking stays
+     * per call: the distribution check runs before this, and
+     * `distributedFacts.add` after it.
+     */
+    private feedOnce(specification: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
+        const key = feedReadKey(specification, start, bookmark);
+        const inFlight = this.feedReadsInFlight.get(key);
+        if (inFlight) {
+            return inFlight;
+        }
+        const read = this.store.feed(specification, start, bookmark);
+        this.feedReadsInFlight.set(key, read);
+        // Nothing is kept past the moment the read settles, success or
+        // failure, so a call that arrives afterwards reads the store again.
+        const forget = () => {
+            if (this.feedReadsInFlight.get(key) === read) {
+                this.feedReadsInFlight.delete(key);
+            }
+        };
+        read.then(forget, forget);
+        return read;
     }
 
     async load(userIdentity: UserIdentity, references: FactReference[]) {
