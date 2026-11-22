@@ -255,6 +255,33 @@ export class QueryDescription {
         return query;
     }
 
+    /**
+     * Rewrite every reference to one fact index as another.
+     *
+     * An identity condition whose own match allocated the unknown has a
+     * variable that nothing else needs, pinned by the condition to a fact the
+     * enclosing scope already wrote. Substituting the one index for the other
+     * removes the variable rather than constraining it, so both orders of the
+     * condition describe one query. The `FactDescription` left behind in
+     * `facts` stays: `facts.length` only allocates indexes, and no generator
+     * reads `facts`.
+     */
+    public withFactIndexReplaced(fromFactIndex: number, toFactIndex: number): QueryDescription {
+        if (fromFactIndex === toFactIndex) {
+            return this;
+        }
+        const replace = (factIndex: number) => factIndex === fromFactIndex ? toFactIndex : factIndex;
+        return new QueryDescription(
+            this.inputs.map(input => ({ ...input, factIndex: replace(input.factIndex) })),
+            this.parameters,
+            this.outputs.map(output => ({ ...output, factIndex: replace(output.factIndex) })),
+            this.facts,
+            this.edges.map(edge => edgeWithFactIndexReplaced(edge, replace)),
+            existentialsWithFactIndexReplaced(this.existentialConditions, replace),
+            this.factEqualities.map(equality => factEqualityWithFactIndexReplaced(equality, replace))
+        );
+    }
+
     public withExistentialCondition(exists: boolean, path: number[]): { query: QueryDescription; path: number[]; } {
         const { existentialConditions: newExistentialConditions, path: newPath } = existentialsWithNewCondition(this.existentialConditions, exists, path);
         const query = new QueryDescription(
@@ -349,6 +376,42 @@ function existentialsWithFactEquality(existentialConditions: ExistentialConditio
     }
 }
 
+function edgeWithFactIndexReplaced(edge: EdgeDescription, replace: (factIndex: number) => number): EdgeDescription {
+    return {
+        edgeIndex: edge.edgeIndex,
+        predecessorFactIndex: replace(edge.predecessorFactIndex),
+        successorFactIndex: replace(edge.successorFactIndex),
+        roleParameter: edge.roleParameter
+    };
+}
+
+function factEqualityWithFactIndexReplaced(equality: FactEqualityDescription, replace: (factIndex: number) => number): FactEqualityDescription {
+    return {
+        leftFactIndex: replace(equality.leftFactIndex),
+        rightFactIndex: replace(equality.rightFactIndex)
+    };
+}
+
+function existentialsWithFactIndexReplaced(existentialConditions: ExistentialConditionDescription[], replace: (factIndex: number) => number): ExistentialConditionDescription[] {
+    return existentialConditions.map(c => ({
+        exists: c.exists,
+        inputs: c.inputs.map(input => ({ ...input, factIndex: replace(input.factIndex) })),
+        edges: c.edges.map(edge => edgeWithFactIndexReplaced(edge, replace)),
+        factEqualities: c.factEqualities.map(equality => factEqualityWithFactIndexReplaced(equality, replace)),
+        existentialConditions: existentialsWithFactIndexReplaced(c.existentialConditions, replace)
+    }));
+}
+
+function knownFactsWithFactIndexReplaced(knownFacts: FactByLabel, fromFactIndex: number, toFactIndex: number): FactByLabel {
+    return Object.keys(knownFacts).reduce((result, label) => {
+        const fact = knownFacts[label];
+        result[label] = fact.factIndex === fromFactIndex
+            ? { ...fact, factIndex: toFactIndex }
+            : fact;
+        return result;
+    }, {} as FactByLabel);
+}
+
 function existentialsWithNewCondition(existentialConditions: ExistentialConditionDescription[], exists: boolean, path: number[]): { existentialConditions: ExistentialConditionDescription[]; path: number[]; } {
     if (path.length === 0) {
         path = [existentialConditions.length];
@@ -394,9 +457,13 @@ export class QueryDescriptionBuilder {
 
     public addEdges(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], matches: Match[]): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
         for (const match of matches) {
+            // Every fact index above this count was allocated while this match
+            // was being described. An identity condition tells the difference
+            // between the match's own unknown and a fact from outside it.
+            const factCountBeforeMatch = queryDescription.facts.length;
             for (const condition of match.conditions) {
                 if (condition.type === "path") {
-                    ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, given, start, knownFacts, path, match.unknown, "", condition));
+                    ({queryDescription, knownFacts} = this.addPathCondition(queryDescription, given, start, knownFacts, path, match.unknown, "", condition, factCountBeforeMatch));
                 }
                 else if (condition.type === "existential") {
                     // Apply the where clause and continue with the tuple where it is true.
@@ -426,7 +493,7 @@ export class QueryDescriptionBuilder {
         };
     }
 
-    private addPathCondition(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], unknown: Label, prefix: string, condition: PathCondition): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
+    private addPathCondition(queryDescription: QueryDescription, given: Label[], start: FactReference[], knownFacts: FactByLabel, path: number[], unknown: Label, prefix: string, condition: PathCondition, factCountBeforeMatch: number): { queryDescription: QueryDescription, knownFacts: FactByLabel } {
         // If no input parameter has been allocated, allocate one now.
         if (!knownFacts.hasOwnProperty(condition.labelRight)) {
             const givenIndex = given.findIndex(given => given.name === condition.labelRight);
@@ -557,11 +624,27 @@ export class QueryDescriptionBuilder {
 
         // An identity condition carries no roles, so neither walk above emitted
         // an edge to tie its two sides together. When both labels are already
-        // bound, the condition is an equality between two facts: record it so
-        // that this scope's WHERE clause compares them. Bound to the same fact
-        // index, the condition holds trivially and needs no clause.
+        // bound, the two sides have to be brought together some other way.
+        // Bound to the same fact index, the condition holds trivially and
+        // needs no clause.
         if (knownFact && roleCount === 0 && knownFact.factIndex !== factIndex) {
-            queryDescription = queryDescription.withFactEquality(knownFact.factIndex, factIndex, path);
+            if (knownFact.factIndex > factCountBeforeMatch) {
+                // This match's own role walk allocated the unknown, and the
+                // condition pins it to a fact that the enclosing scope has
+                // already written. Substitute that fact for the unknown
+                // throughout, so that the query carries neither the surplus
+                // variable nor a constraint on it. Writing the identity before
+                // the role walk allocates nothing and records nothing, so the
+                // substitution is what makes the two orders one query.
+                queryDescription = queryDescription.withFactIndexReplaced(knownFact.factIndex, factIndex);
+                knownFacts = knownFactsWithFactIndexReplaced(knownFacts, knownFact.factIndex, factIndex);
+            }
+            else {
+                // Both facts come from outside this match, so the condition is
+                // a real constraint between them. Record it as an equality,
+                // compared in the scope where the condition appears.
+                queryDescription = queryDescription.withFactEquality(knownFact.factIndex, factIndex, path);
+            }
         }
 
         // If we have not captured the known fact, add it now.
