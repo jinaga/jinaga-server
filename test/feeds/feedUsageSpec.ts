@@ -46,6 +46,13 @@ class CapturingTracer extends NoOpTracer implements Tracer {
     }
 }
 
+/**
+ * How the authorization layer answers a feed query. `queryFeed` accounts
+ * for the read whichever way it goes, because every one of them cost query
+ * time, so the accounting has to be exercised on all three.
+ */
+type FeedOutcome = "success" | "denied" | "reject";
+
 interface Harness {
     router: HttpRouter;
     factManager: FactManager;
@@ -62,7 +69,7 @@ interface Harness {
     queriedBookmarks: string[];
 }
 
-async function makeHarness(): Promise<Harness> {
+async function makeHarness(outcome: FeedOutcome = "success"): Promise<Harness> {
     const storage = new MemoryStore();
     const keystore = new MemoryKeystore();
     const userFact = await keystore.getOrCreateUserFact(userIdentity);
@@ -91,6 +98,18 @@ async function makeHarness(): Promise<Harness> {
             identity: unknown, specification: unknown, start: unknown, bookmark: string
         ) => {
             queriedBookmarks.push(bookmark);
+            // Only the distribution-checked path is reachable in this
+            // harness, so only it answers for the outcome. If the
+            // pre-verified path ever became reachable here it would
+            // answer successfully, and the tests below would say so.
+            if (method === "feedWithDistribution") {
+                if (outcome === "denied") {
+                    return Promise.resolve({ type: "denied", reason: "no rule permits this feed" });
+                }
+                if (outcome === "reject") {
+                    return Promise.reject(new Error("the store refused the query"));
+                }
+            }
             return original(identity, specification, start, bookmark);
         };
     }
@@ -200,6 +219,38 @@ describe("feed usage accounting", () => {
         await poll(h, feedHash, "10.5");
 
         expect(usageOf(h, key).earliestBookmark).toBe("7.12");
+    });
+
+    it("counts a read that authorization denied", async () => {
+        const h = await makeHarness("denied");
+        const feedHash = await subscribe(h, h.authorHash);
+        const key = await instanceKeyOfFeed(h, feedHash);
+
+        const response = await (h.router as any).feed(
+            h.requestUser, { hash: feedHash }, { b: "4.2" });
+        // On a denial the polling handler serves an empty page at the
+        // request's own bookmark, which is how the test knows the denied
+        // result reached it rather than a page.
+        expect(response).toEqual({ references: [], bookmark: "4.2" });
+
+        const usage = usageOf(h, key);
+        expect(usage.reads).toBe(h.queriedBookmarks.length);
+        expect(usage.reads).toBe(1);
+        expect(usage.earliestBookmark).toBe("4.2");
+    });
+
+    it("counts a read whose query rejected", async () => {
+        const h = await makeHarness("reject");
+        const feedHash = await subscribe(h, h.authorHash);
+        const key = await instanceKeyOfFeed(h, feedHash);
+
+        await expect((h.router as any).feed(h.requestUser, { hash: feedHash }, {}))
+            .rejects.toThrow("the store refused the query");
+
+        const usage = usageOf(h, key);
+        expect(usage.reads).toBe(h.queriedBookmarks.length);
+        expect(usage.reads).toBe(1);
+        expect(usage.readsFromEmptyBookmark).toBe(1);
     });
 
     it("accounts each read against the instance that was read", async () => {
