@@ -123,10 +123,23 @@ function joinEdges(queryDescription: QueryDescription, schema: string) {
 // A specification with no matches has no edges. Each given is its own fact,
 // selected by type and hash in the WHERE clause, so the givens are joined to
 // one another without a condition.
+//
+// Two givens unified onto one unknown share a fact index: the fact carries an
+// input for each, and must satisfy every one of their type-and-hash filters,
+// which is how the read compares the givens to each other. One fact is one
+// table reference, so join each distinct index once and skip the one already
+// in the FROM clause. Every input keeps its own filter in the WHERE clause.
 function joinGivens(queryDescription: QueryDescription, schema: string) {
     const [ first, ...rest ] = queryDescription.inputs;
-    const joins = rest.map(input => ` CROSS JOIN ${schema}.fact f${input.factIndex}`);
-    const writtenFactIndexes = new Set<number>(queryDescription.inputs.map(input => input.factIndex));
+    const writtenFactIndexes = new Set<number>().add(first.factIndex);
+    const joins: string[] = [];
+    rest.forEach(input => {
+        if (writtenFactIndexes.has(input.factIndex)) {
+            return;
+        }
+        writtenFactIndexes.add(input.factIndex);
+        joins.push(` CROSS JOIN ${schema}.fact f${input.factIndex}`);
+    });
     return { firstFactIndex: first.factIndex, joins, writtenFactIndexes };
 }
 
