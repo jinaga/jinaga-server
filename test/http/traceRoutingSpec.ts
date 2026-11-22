@@ -20,7 +20,7 @@ import {
 } from "jinaga";
 
 import { AuthorizationKeystore } from "../../src/authorization/authorization-keystore";
-import { HttpRouter, RequestUser } from "../../src/http/router";
+import { formatErrorWithStack, HttpRouter, RequestUser } from "../../src/http/router";
 import { Stream } from "../../src/http/stream";
 import { MemoryKeystore } from "../../src/memory/memory-keystore";
 
@@ -283,5 +283,37 @@ describe("stream logging through Trace", () => {
 
         expect(tracer.lines.map(l => l.level)).toEqual(["info", "info", "warn"]);
         expect(consoleSpy.calls).toEqual([]);
+    });
+});
+
+// Raised in review of this change: before it, the read-stream failure path
+// passed the Error to `console.error` as a second argument, so Node rendered
+// the stack. `Trace.error` takes one value, so formatting moved to the call
+// site, and interpolating an Error drops the stack to name and message.
+describe("formatting an error for the tracer", () => {
+    it("keeps the stack of an Error", () => {
+        const error = new Error("read stream failed");
+
+        const formatted = formatErrorWithStack(error);
+
+        // Derived from the Error the test built rather than from a literal, so
+        // this fails if the formatting reverts to interpolation, and does not
+        // pin V8's stack rendering.
+        expect(formatted).toBe(error.stack);
+        expect(formatted).toContain("read stream failed");
+        // A stack is more than the one line interpolation would have produced.
+        expect(formatted.split("\n").length).toBeGreaterThan(1);
+    });
+
+    it("falls back to the string form of a value that is not an Error", () => {
+        expect(formatErrorWithStack("plain failure")).toBe("plain failure");
+        expect(formatErrorWithStack(undefined)).toBe("undefined");
+    });
+
+    it("falls back to the string form of an Error with no stack", () => {
+        const error = new Error("no stack here");
+        delete (error as { stack?: string }).stack;
+
+        expect(formatErrorWithStack(error)).toBe("Error: no stack here");
     });
 });

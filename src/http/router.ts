@@ -350,6 +350,18 @@ function outputFeeds(result: FeedsResponse, res: Response, accepts: (type: strin
     res.send(JSON.stringify(result));
 }
 
+// An Error carries its stack, and a template literal drops it: interpolation
+// calls toString(), which yields only the name and the message. `console.error`
+// used to receive the Error as a second argument and render the stack itself,
+// so moving to `Trace.error`, which takes one value, is what put the formatting
+// here. V8's `stack` already opens with the name and message, so it is the
+// whole of what the two-argument call used to show.
+//
+// Not exported from `src/index.ts`, so this is internal to the package.
+export function formatErrorWithStack(error: unknown): string {
+    return error instanceof Error && error.stack ? error.stack : String(error);
+}
+
 function outputReadResults(
     result: ResultStream<any>, 
     res: Response, 
@@ -359,7 +371,7 @@ function outputReadResults(
     // Use streaming output formatter
     outputReadResultsStreaming(result, res, acceptType, csvMetadata)
         .catch(error => {
-            Trace.error(`Error in outputReadResults: ${error}`);
+            Trace.error(`Error in outputReadResults: ${formatErrorWithStack(error)}`);
             if (!res.headersSent) {
                 // Without an explicit type, res.send of a string makes Express
                 // infer text/html and label an error body as markup.
