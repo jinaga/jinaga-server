@@ -38,6 +38,7 @@ import { AuthenticationDevice } from "./authentication/authentication-device";
 import { AuthenticationSession } from "./authentication/authentication-session";
 import { AuthorizationKeystore, DistributionBranchesResult, FeedResult, SubscriptionAuthorizer } from "./authorization/authorization-keystore";
 import { FeedStreamSessionConfig } from "./feeds/feed-stream-session";
+import { traceFeedUsage } from "./feeds/feed-usage";
 import { validateMaxLineBytes } from "./http/line-reader";
 import { HttpRouter, RequestUser } from "./http/router";
 import { Keystore } from "./keystore";
@@ -114,9 +115,11 @@ export class JinagaServer {
         const factManager = new FactManager(fork, source, store, network, purgeConditions);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
         const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*', config.feedStream || {}, config.maxSaveLineBytes);
+        const stopFeedUsageReporting = traceFeedUsage(router.feedUsage);
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {
+            stopFeedUsageReporting();
             for (const pool of Object.values(pools)) {
                 await pool.end();
             }

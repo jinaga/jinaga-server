@@ -11,6 +11,7 @@ import {
     FactReference,
     FeedCache,
     FeedDecision,
+    FeedObject,
     FeedResponse,
     FeedsResponse,
     Forbidden,
@@ -33,7 +34,9 @@ import {
     verifyEnvelopes
 } from "jinaga";
 import { DistributionIntersectionBranch, FeedResult, SubscriptionAuthorizer } from "../authorization/authorization-keystore";
+import { feedKeys } from "../feeds/feed-identity";
 import { FeedStreamSession, FeedStreamSessionConfig } from "../feeds/feed-stream-session";
+import { FeedAccounting } from "../feeds/feed-usage";
 import { CsvMetadata } from "./csv-metadata";
 import { validateSpecificationForCsv } from "./csv-validator";
 import { PayloadTooLarge } from "./errors";
@@ -284,6 +287,12 @@ function postReadWithStreaming(
     };
 }
 
+// The facts a registered feed starts from, in the order its specification
+// declares its givens, which is the order the storage layer expects.
+function startReferences(feedDefinition: FeedObject): FactReference[] {
+    return feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
+}
+
 function subscriptionOwnerKey(userIdentity: UserIdentity | null): string | null {
     return userIdentity ? `${userIdentity.provider}|${userIdentity.id}` : null;
 }
@@ -404,7 +413,11 @@ export class HttpRouter {
         private feedCache: FeedCache,
         private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
         private feedStreamConfig: Partial<FeedStreamSessionConfig> = {},
-        private maxSaveLineBytes?: number
+        private maxSaveLineBytes?: number,
+        // Accounting for what each feed instance costs to read. The router
+        // owns it so that the polling handler and every streaming session
+        // report into one set of totals; `traceFeedUsage` reports them.
+        public readonly feedUsage: FeedAccounting = new FeedAccounting()
     ) {
         const router = Router();
         const applyAllowOrigin = this.applyAllowOrigin.bind(this);
@@ -737,21 +750,32 @@ export class HttpRouter {
     private async queryFeed(
         feedHash: string,
         userIdentity: UserIdentity | null,
-        specification: Specification,
-        start: FactReference[],
+        feedDefinition: FeedObject,
         bookmark: string
     ): Promise<FeedResult> {
-        const cachedOwner = this.intersectedFeedOwners.get(feedHash);
-        const requesterOwner = subscriptionOwnerKey(userIdentity);
-        if (cachedOwner !== undefined && cachedOwner === requesterOwner) {
-            const feed = await this.authorization.feedPreVerified(userIdentity, specification, start, bookmark);
-            return { type: "success", feed };
+        const specification = feedDefinition.feed;
+        const start = startReferences(feedDefinition);
+        // Both paths through this function are reads of the same feed
+        // instance, and both cost query time whether they end in a page, an
+        // empty page or a denial, so the read is accounted for in `finally`.
+        const keys = feedKeys(feedDefinition);
+        const startedAt = Date.now();
+        try {
+            const cachedOwner = this.intersectedFeedOwners.get(feedHash);
+            const requesterOwner = subscriptionOwnerKey(userIdentity);
+            if (cachedOwner !== undefined && cachedOwner === requesterOwner) {
+                const feed = await this.authorization.feedPreVerified(userIdentity, specification, start, bookmark);
+                return { type: "success", feed };
+            }
+            // For everyone else (different user, anonymous mismatch, or a
+            // non-intersected hash) go through the normal distribution-checked
+            // path. A "denied" result means the streaming / polling caller
+            // serves an empty page and keeps the subscription alive.
+            return await this.authorization.feedWithDistribution(userIdentity, specification, start, bookmark);
         }
-        // For everyone else (different user, anonymous mismatch, or a
-        // non-intersected hash) go through the normal distribution-checked
-        // path. A "denied" result means the streaming / polling caller
-        // serves an empty page and keeps the subscription alive.
-        return await this.authorization.feedWithDistribution(userIdentity, specification, start, bookmark);
+        finally {
+            this.feedUsage.recordRead(keys, bookmark, Date.now() - startedAt);
+        }
     }
 
     private feed(user: RequestUser | null, params: { [key: string]: string }, query: qs.ParsedQs): Promise<FeedResponse | null> {
@@ -773,8 +797,7 @@ export class HttpRouter {
             const bookmark = query["b"] as string ?? "";
 
             const userIdentity = serializeUserIdentity(user);
-            const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
-            const result = await this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, bookmark);
+            const result = await this.queryFeed(feedHash, userIdentity, feedDefinition, bookmark);
             if (result.type === "denied") {
                 // The subscription has been accepted; treat poll-time
                 // distribution failures as an empty page so the client
@@ -814,7 +837,7 @@ export class HttpRouter {
         const bookmark = query["b"] as string ?? "";
 
         const userIdentity = serializeUserIdentity(user);
-        const start = feedDefinition.feed.given.map(g => feedDefinition.namedStart[g.label.name]);
+        const start = startReferences(feedDefinition);
         const givenHash = computeObjectHash(feedDefinition.namedStart);
 
         const stream = new Stream<FeedResponse>();
@@ -835,7 +858,7 @@ export class HttpRouter {
             // handler already wraps its own call and would otherwise record
             // each poll twice.
             (b: string) => Trace.dependency("feedStream", feedHash,
-                () => this.queryFeed(feedHash, userIdentity, feedDefinition.feed, start, b)),
+                () => this.queryFeed(feedHash, userIdentity, feedDefinition, b)),
             this.factManager,
             feedDefinition,
             start,
@@ -843,7 +866,8 @@ export class HttpRouter {
             stream,
             bookmark,
             connectionId,
-            this.feedStreamConfig
+            this.feedStreamConfig,
+            this.feedUsage
         );
 
         stream.done(() => session.dispose());
