@@ -36,6 +36,7 @@ import { DistributionIntersectionBranch, FeedResult, SubscriptionAuthorizer } fr
 import { FeedStreamSession, FeedStreamSessionConfig } from "../feeds/feed-stream-session";
 import { CsvMetadata } from "./csv-metadata";
 import { validateSpecificationForCsv } from "./csv-validator";
+import { PayloadTooLarge } from "./errors";
 import { createLineReader } from "./line-reader";
 import { outputReadResultsStreaming } from "./output-formatters";
 import { arrayToResultStream, ResultStream } from "./result-stream";
@@ -297,10 +298,16 @@ function serializeUserIdentity(user: RequestUser | null): UserIdentity | null {
     };
 }
 
-function inputSaveMessage(req: Request): GraphSource {
+// The graph content type attaches the line reader straight to the request
+// stream, so none of Express's body parsers — and none of their limits — sit in
+// front of it. The reader's own bound is the only thing standing between a
+// client that sends a body with no newline and the server's memory (issue
+// #169). Passing no limit leaves the reader's default in one place rather than
+// restating it here.
+function inputSaveMessage(req: Request, maxLineBytes: number | undefined): GraphSource {
     if (req.is('application/x-jinaga-graph-v1')) {
         // Convert the request into a function that reads one line at a time.
-        const readLine = createLineReader(req);
+        const readLine = createLineReader(req, { maxLineBytes });
 
         return new GraphDeserializer(readLine);
     }
@@ -384,7 +391,8 @@ export class HttpRouter {
         private authorization: Authorization & SubscriptionAuthorizer,
         private feedCache: FeedCache,
         private allowedOrigin: string | string[] | ((origin: string, callback: (err: Error | null, allow?: boolean) => void) => void),
-        private feedStreamConfig: Partial<FeedStreamSessionConfig> = {}
+        private feedStreamConfig: Partial<FeedStreamSessionConfig> = {},
+        private maxSaveLineBytes?: number
     ) {
         const router = Router();
         const applyAllowOrigin = this.applyAllowOrigin.bind(this);
@@ -395,7 +403,7 @@ export class HttpRouter {
             outputGraph
         ));
         router.post('/save', applyAllowOrigin, postCreate(
-            inputSaveMessage,
+            request => inputSaveMessage(request, this.maxSaveLineBytes),
             (user, graphSource) => this.save(user, graphSource)
         ));
 
@@ -1174,6 +1182,12 @@ function handleError(error: any, req: Request, res: Response, next: NextFunction
         Trace.warn(`Invalid: ${error.message} (Path: ${requestPath})`);
         res.type("text");
         res.status(400).send(sanitizeErrorBody(error.message));
+    } else if (error instanceof PayloadTooLarge) {
+        // The request was refused for its size, not its content, so the
+        // message names the limit and nothing the client sent.
+        Trace.warn(`Payload too large: ${error.message} (Path: ${requestPath})`);
+        res.type("text");
+        res.status(413).send(sanitizeErrorBody(error.message));
     } else {
         // Classification above is an allow-list, so anything reaching here is
         // unclassified — including genuine internal failures whose message can

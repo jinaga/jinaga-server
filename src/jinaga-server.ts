@@ -63,7 +63,15 @@ export type JinagaServerConfig = {
      * (/feeds/:hash with Accept: application/x-jinaga-feed-stream).
      * See FeedStreamSessionConfig for the available limits and defaults.
      */
-    feedStream?: Partial<FeedStreamSessionConfig>
+    feedStream?: Partial<FeedStreamSessionConfig>,
+    /**
+     * Maximum number of bytes in a single line of a POST /save body sent as
+     * application/x-jinaga-graph-v1. That route reads the request stream
+     * directly, so no Express body-parser limit applies to it; a line over
+     * this limit is refused with 413 and nothing from the request is saved.
+     * Omit it to use the line reader's own default of 16 MiB.
+     */
+    maxSaveLineBytes?: number
 };
 
 export type JinagaServerInstance = {
@@ -98,7 +106,7 @@ export class JinagaServer {
         const purgeConditions = createPurgeConditions(config);
         const factManager = new FactManager(fork, source, store, network, purgeConditions);
         const authorization = createAuthorization(authorizationRules, distributionRules, factManager, store, keystore);
-        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*', config.feedStream || {});
+        const router = new HttpRouter(factManager, authorization, feedCache, config.origin || '*', config.feedStream || {}, config.maxSaveLineBytes);
         const j: Jinaga = new Jinaga(authentication, factManager, syncStatusNotifier);
 
         async function close() {
