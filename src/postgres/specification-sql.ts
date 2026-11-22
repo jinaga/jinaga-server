@@ -142,8 +142,15 @@ function generateJoins(schema: string, edges: EdgeDescription[], writtenFactInde
 function generateNotExistsWhereClause(schema: string, notExistsWhereClause: ExistentialConditionDescription, outerFactIndexes: Set<number>): string {
     const firstEdge = notExistsWhereClause.edges[0];
     const writtenFactIndexes = new Set<number>(outerFactIndexes);
+    const conditionGivenFactIndexes = new Set<number>(notExistsWhereClause.inputs.map(input => input.factIndex));
     const firstJoin: string[] = [];
     const whereClause: string[] = [];
+    // A given that first appears inside this condition is an input of the
+    // condition rather than of the query, so the enclosing scope has not
+    // written it. When the condition's FIRST edge walks from it, neither end
+    // of that edge is written, exactly as for a later edge, so bring the given
+    // in the same way and let the branches below correlate the edge against it.
+    crossJoinUnreachedGiven(schema, firstEdge, writtenFactIndexes, conditionGivenFactIndexes, firstJoin);
     if (writtenFactIndexes.has(firstEdge.predecessorFactIndex)) {
         if (writtenFactIndexes.has(firstEdge.successorFactIndex)) {
             // An identity condition can bind the condition's own unknown to a
@@ -182,7 +189,6 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: Exis
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const conditionGivenFactIndexes = new Set<number>(notExistsWhereClause.inputs.map(input => input.factIndex));
     const tailJoins: string[] = generateJoins(schema, notExistsWhereClause.edges.slice(1), writtenFactIndexes, conditionGivenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
     const inputWhereClauses = notExistsWhereClause.inputs
