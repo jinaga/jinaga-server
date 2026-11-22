@@ -116,7 +116,8 @@ function joinEdges(queryDescription: QueryDescription, schema: string) {
     const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-    const joins = generateJoins(queryDescription.edges, writtenFactIndexes, schema, undefined);
+    const givenFactIndexes = new Set<number>(queryDescription.inputs.map(input => input.factIndex));
+    const joins = generateJoins(queryDescription.edges, writtenFactIndexes, schema, undefined, givenFactIndexes);
     return { firstFactIndex, joins, writtenFactIndexes };
 }
 
@@ -143,9 +144,32 @@ function joinGivens(queryDescription: QueryDescription, schema: string) {
     return { firstFactIndex: first.factIndex, joins, writtenFactIndexes };
 }
 
-function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string, exclusion: StagedExclusion | undefined) {
+// An edge reaches a fact from one that the joins have already written. When
+// neither end has been written, the edge walks from a given that no earlier
+// edge reached. Each given is pinned by type and hash in the WHERE clause, so
+// bringing it into the FROM clause with a CROSS JOIN costs nothing, and the
+// edge then joins as any other does. Mark it written by fact index, so a fact
+// index that two unified givens share is brought in at most once. A given is
+// brought in only where an edge needs it, which leaves the SQL of every
+// specification that already built unchanged.
+function crossJoinUnreachedGiven(schema: string, edge: EdgeDescription, writtenFactIndexes: Set<number>, givenFactIndexes: Set<number>, joins: string[]) {
+    if (writtenFactIndexes.has(edge.predecessorFactIndex) ||
+        writtenFactIndexes.has(edge.successorFactIndex)) {
+        return;
+    }
+    const unreachedGiven = [edge.predecessorFactIndex, edge.successorFactIndex]
+        .find(factIndex => givenFactIndexes.has(factIndex));
+    if (unreachedGiven === undefined) {
+        return;
+    }
+    joins.push(` CROSS JOIN ${schema}.fact f${unreachedGiven}`);
+    writtenFactIndexes.add(unreachedGiven);
+}
+
+function generateJoins(edges: EdgeDescription[], writtenFactIndexes: Set<number>, schema: string, exclusion: StagedExclusion | undefined, givenFactIndexes: Set<number>) {
     const joins: string[] = [];
     edges.forEach(edge => {
+        crossJoinUnreachedGiven(schema, edge, writtenFactIndexes, givenFactIndexes, joins);
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
             if (writtenFactIndexes.has(edge.successorFactIndex)) {
                 joins.push(
@@ -232,7 +256,8 @@ function generateExistentialWhereClause(existentialCondition: ExistentialConditi
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes, schema, exclusion);
+    const conditionGivenFactIndexes = new Set<number>(existentialCondition.inputs.map(input => input.factIndex));
+    const tailJoins: string[] = generateJoins(existentialCondition.edges.slice(1), writtenFactIndexes, schema, exclusion, conditionGivenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
     const inputWhereClauses = existentialCondition.inputs
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
@@ -257,6 +282,7 @@ interface NamedResultDescription extends ResultDescription {
 
 interface IdentifiedResults {
     factIds: number[];
+    parentFactIds: number[];
     tuple: ReferencesByName;
     result: any;
 }
@@ -317,7 +343,15 @@ export class ResultComposer {
     constructor(
         private readonly sqlQuery: SpecificationSqlQuery,
         private readonly resultProjection: Projection,
-        private readonly parentFactIdLength: number,
+        // The fact indexes of the labels of the composer one level up, in the
+        // order that composer's own identifier lists them. A child query
+        // extends its parent's, so every one of them is in the child's rows,
+        // but not necessarily at the front: a child that reaches a given its
+        // parent did not reach allocates a new input, which lands among the
+        // inputs and not after them. Addressing the parent's labels by fact
+        // index rather than by position is what lets such a child's rows be
+        // grouped under the parent rows they belong to.
+        private readonly parentFactIndexes: number[],
         private readonly givenTuple: ReferencesByName,
         private readonly childResultComposers: NamedResultComposer[]
     ) { }
@@ -406,6 +440,7 @@ export class ResultComposer {
         // Project all rows and their identifiers
         const identifiedResults: IdentifiedResults[] = rows.map(row => ({
             factIds: this.identifierOf(row),
+            parentFactIds: this.parentIdentifierOf(row),
             tuple: this.tupleOf(row),
             result: this.projectionOf(row, factRecords)
         }));
@@ -437,13 +472,13 @@ export class ResultComposer {
 
         // Group the results by their parent identifiers
         const childResults: ChildResults[] = [];
-        let parentFactIds: number[] = identifiedResults[0].factIds.slice(0, this.parentFactIdLength);
+        let parentFactIds: number[] = identifiedResults[0].parentFactIds;
         let results: ProjectedResult[] = [{
             tuple: identifiedResults[0].tuple,
             result: identifiedResults[0].result
         }];
         for (const identifiedResult of identifiedResults.slice(1)) {
-            const nextParentFactIds = identifiedResult.factIds.slice(0, this.parentFactIdLength);
+            const nextParentFactIds = identifiedResult.parentFactIds;
             if (idsEqual(nextParentFactIds, parentFactIds)) {
                 results.push({
                     tuple: identifiedResult.tuple,
@@ -473,6 +508,13 @@ export class ResultComposer {
         return this.sqlQuery.labels.map(label => row[label.index].factId);
     }
 
+    // The identifier the composer one level up computes for its own row, read
+    // out of this row. A child row belongs under the parent row whose
+    // identifier this equals.
+    private parentIdentifierOf(row: ResultSetRow): number[] {
+        return this.parentFactIndexes.map(factIndex => row[factIndex].factId);
+    }
+
     private tupleOf(row: ResultSetRow): ReferencesByName {
         const tuple = this.sqlQuery.labels.reduce((acc, label) => ({
             ...acc,
@@ -493,7 +535,7 @@ export class ResultComposer {
                 this.resultProjection.components.length === 0 &&
                 this.childResultComposers.length === 0) {
                 return this.sqlQuery.labels
-                    .slice(this.parentFactIdLength)
+                    .filter(label => !this.parentFactIndexes.includes(label.index))
                     .reduce((acc, label) => ({
                         ...acc,
                         [label.name]: row[label.index].data.fields
@@ -759,17 +801,30 @@ export function resultSqlFromSpecification(start: FactReference[], specification
     if (!description.queryDescription.isSatisfiable()) {
         return null;
     }
-    return createResultComposer(description, start.length, schema, stagedFactIds);
+    // The top level has no composer above it. Its givens stand in: each is
+    // fixed by type and hash, so they take the same value in every row and
+    // group them all together, as the given count did when every given was an
+    // input of the top-level query.
+    return createResultComposer(description, description.queryDescription.inputs.map(input => input.factIndex), schema, stagedFactIds);
 }
 
-function createResultComposer(description: ResultDescription, parentFactIdLength: number, schema: string, stagedFactIds: number[]): ResultComposer {
+function createResultComposer(description: ResultDescription, parentFactIndexes: number[], schema: string, stagedFactIds: number[]): ResultComposer {
     const sqlQuery = generateResultSqlQuery(description.queryDescription, schema, stagedFactIds);
     const resultProjection = description.resultProjection;
+    // The fact indexes of this query's own labels, in the order
+    // generateResultSqlQuery lists them, which is the order its identifier
+    // uses. Each child groups its rows by these.
+    const ownFactIndexes = labelFactIndexes(description.queryDescription);
     const childResultComposers = description.childResultDescriptions
         .filter(child => child.queryDescription.isSatisfiable())
         .map(child => ({
             name: child.name,
-            resultComposer: createResultComposer(child, description.queryDescription.outputLength(), schema, stagedFactIds)
+            resultComposer: createResultComposer(child, ownFactIndexes, schema, stagedFactIds)
         }));
-    return new ResultComposer(sqlQuery, resultProjection, parentFactIdLength, description.givenTuple, childResultComposers);
+    return new ResultComposer(sqlQuery, resultProjection, parentFactIndexes, description.givenTuple, childResultComposers);
+}
+
+function labelFactIndexes(queryDescription: QueryDescription): number[] {
+    return [ ...queryDescription.inputs, ...queryDescription.outputs ]
+        .map(label => label.factIndex);
 }

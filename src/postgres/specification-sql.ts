@@ -42,7 +42,8 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
     const successorFact = queryDescription.inputs.find(i => i.factIndex === firstEdge.successorFactIndex);
     const firstFactIndex = predecessorFact ? predecessorFact.factIndex : successorFact!.factIndex;
     const writtenFactIndexes = new Set<number>().add(firstFactIndex);
-    const joins: string[] = generateJoins(schema, queryDescription.edges, writtenFactIndexes);
+    const givenFactIndexes = new Set<number>(queryDescription.inputs.map(input => input.factIndex));
+    const joins: string[] = generateJoins(schema, queryDescription.edges, writtenFactIndexes, givenFactIndexes);
     const inputWhereClauses = queryDescription.inputs
         .filter(input => input.factTypeParameter !== 0)
         .map(input => `f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
@@ -71,9 +72,32 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
     };
 }
 
-function generateJoins(schema: string, edges: EdgeDescription[], writtenFactIndexes: Set<number>) {
+// An edge reaches a fact from one that the joins have already written. When
+// neither end has been written, the edge walks from a given that no earlier
+// edge reached. Each given is pinned by type and hash in the WHERE clause, so
+// bringing it into the FROM clause with a CROSS JOIN costs nothing, and the
+// edge then joins as any other does. Mark it written by fact index, so a fact
+// index that two unified givens share is brought in at most once. A given is
+// brought in only where an edge needs it, which leaves the SQL of every
+// specification that already built unchanged.
+function crossJoinUnreachedGiven(schema: string, edge: EdgeDescription, writtenFactIndexes: Set<number>, givenFactIndexes: Set<number>, joins: string[]) {
+    if (writtenFactIndexes.has(edge.predecessorFactIndex) ||
+        writtenFactIndexes.has(edge.successorFactIndex)) {
+        return;
+    }
+    const unreachedGiven = [edge.predecessorFactIndex, edge.successorFactIndex]
+        .find(factIndex => givenFactIndexes.has(factIndex));
+    if (unreachedGiven === undefined) {
+        return;
+    }
+    joins.push(` CROSS JOIN ${schema}.fact f${unreachedGiven}`);
+    writtenFactIndexes.add(unreachedGiven);
+}
+
+function generateJoins(schema: string, edges: EdgeDescription[], writtenFactIndexes: Set<number>, givenFactIndexes: Set<number>) {
     const joins: string[] = [];
     edges.forEach(edge => {
+        crossJoinUnreachedGiven(schema, edge, writtenFactIndexes, givenFactIndexes, joins);
         if (writtenFactIndexes.has(edge.predecessorFactIndex)) {
             if (writtenFactIndexes.has(edge.successorFactIndex)) {
                 joins.push(
@@ -158,7 +182,8 @@ function generateNotExistsWhereClause(schema: string, notExistsWhereClause: Exis
     else {
         throw new Error("Neither predecessor nor successor fact has been written");
     }
-    const tailJoins: string[] = generateJoins(schema, notExistsWhereClause.edges.slice(1), writtenFactIndexes);
+    const conditionGivenFactIndexes = new Set<number>(notExistsWhereClause.inputs.map(input => input.factIndex));
+    const tailJoins: string[] = generateJoins(schema, notExistsWhereClause.edges.slice(1), writtenFactIndexes, conditionGivenFactIndexes);
     const joins = firstJoin.concat(tailJoins);
     const inputWhereClauses = notExistsWhereClause.inputs
         .map(input => ` AND f${input.factIndex}.fact_type_id = $${input.factTypeParameter} AND f${input.factIndex}.hash = $${input.factHashParameter}`)
