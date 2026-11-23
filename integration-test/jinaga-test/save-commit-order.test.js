@@ -315,3 +315,105 @@ describe("PostgresStore save assigns fact ids in commit order", () => {
         expect(await factIdOf(referenceOf(next))).not.toBeNull();
     });
 });
+
+// Issue #252. The lock is taken immediately before the fact insert, and keyed
+// by schema, so it serializes only the work that assigns a fact id.
+//
+// The instrument is the one above: a save held at its COMMIT has inserted its
+// fact and holds the lock. What differs here is what the second save is. Each
+// of the first two cases is a save that #244's version made wait and this one
+// does not, so each reads "pending" on that version. The third is the race the
+// change opens, between a save's existence check and its lock, and it must
+// hold on both versions.
+describe("PostgresStore takes the save lock only when it will insert", () => {
+    const writer = new PostgresStore(pool, 'public');
+    let tenant;
+
+    beforeEach(async () => {
+        const id = Math.random().toString(36).slice(2, 10);
+        const user = new User(`PUBLIC KEY ${suffix} ${id}`);
+        tenant = new Tenant(user, id);
+        // The types and roles the later saves need are already known, so no
+        // save below is the one that first inserts them.
+        await writer.save(envelopesOf(new Answer(tenant, "seed")));
+    });
+
+    // Criterion 2.
+    it("completes a save whose facts all exist while another save holds the lock", async () => {
+        const existing = new Answer(tenant, "saved before the hold");
+        await writer.save(envelopesOf(existing));
+
+        const held = startHeldSave(envelopesOf(new Answer(tenant, "holding")));
+        await untilHolding(held.state);
+
+        // This save inserts nothing, so it assigns no fact id and has nothing
+        // to order against the save that is holding. It never reaches the lock.
+        const again = track(writer.save(envelopesOf(existing)));
+        expect(await within(again, 5000)).toBe("settled");
+        expect(await again).toEqual([]);
+
+        held.release();
+        await held.save;
+    });
+
+    // Criterion 3.
+    it("completes a save to another schema while this schema's lock is held", async () => {
+        const held = startHeldSave(envelopesOf(new Answer(tenant, "holding public")));
+        await untilHolding(held.state);
+
+        // The `alt` schema has its own fact_id sequence
+        // (integration-test/postgres/3-alt-schema.sh), so the lock that puts
+        // public's ids in commit order says nothing about alt's.
+        const elsewhere = new Answer(tenant, "saved to another schema");
+        const other = new PostgresStore(pool, 'alt');
+        const otherSave = track(other.save(envelopesOf(elsewhere)));
+        expect(await within(otherSave, 5000)).toBe("settled");
+        await otherSave;
+
+        const reference = referenceOf(elsewhere);
+        const { rows } = await pool.query(
+            `SELECT f.fact_id
+             FROM alt.fact f
+             JOIN alt.fact_type t ON t.fact_type_id = f.fact_type_id
+             WHERE f.hash = $1 AND t.name = $2`,
+            [reference.hash, reference.type]);
+        expect(rows.length).toBe(1);
+
+        held.release();
+        await held.save;
+    });
+
+    // Criterion 4. This one must hold on #244's version too. There the second
+    // save's existence check runs after the release, under the lock, and finds
+    // the fact. Here it runs before the lock and finds nothing, so the insert
+    // is what has to tolerate the fact already being there.
+    it("stores the fact once when two concurrent saves insert the same new fact", async () => {
+        const same = new Answer(tenant, "saved twice at once");
+        const reference = referenceOf(same);
+
+        const held = startHeldSave(envelopesOf(same));
+        await untilHolding(held.state);
+
+        // The holding save has not committed, so nothing the second save can
+        // read says the fact exists. It parks on the lock on both versions.
+        const second = track(writer.save(envelopesOf(same)));
+        expect(await settledOrBlocked(second)).toBe("blocked");
+
+        held.release();
+        const heldEnvelopes = await held.save;
+        const secondEnvelopes = await second;
+
+        // Both saves succeed, and exactly one of them reports the fact as new.
+        const reported = [...heldEnvelopes, ...secondEnvelopes]
+            .filter(envelope => envelope.fact.hash === reference.hash);
+        expect(reported.length).toBe(1);
+
+        const { rows } = await pool.query(
+            `SELECT f.fact_id
+             FROM public.fact f
+             JOIN public.fact_type t ON t.fact_type_id = f.fact_type_id
+             WHERE f.hash = $1 AND t.name = $2`,
+            [reference.hash, reference.type]);
+        expect(rows.length).toBe(1);
+    });
+});
