@@ -45,6 +45,8 @@ afterAll(async () => {
 const suffix = Math.random().toString(36).slice(2, 10);
 const tenantType = `SCO${suffix}.Tenant`;
 const answerType = `SCO${suffix}.Answer`;
+const nodeType = `SCO${suffix}.Node`;
+const linkType = `SCO${suffix}.Link`;
 
 class Tenant {
     constructor(creator, identifier) {
@@ -415,5 +417,80 @@ describe("PostgresStore takes the save lock only when it will insert", () => {
              WHERE f.hash = $1 AND t.name = $2`,
             [reference.hash, reference.type]);
         expect(rows.length).toBe(1);
+    });
+
+    // Raised in review of this change. The schema reaches every other
+    // statement as an unquoted identifier, which PostgreSQL folds to lower
+    // case, so `PUBLIC` and `public` name one schema and one `fact_id`
+    // sequence. Keying the lock off the raw argument gave them two keys and
+    // let them assign ids at the same time, which is the state the lock
+    // exists to prevent.
+    it("serializes two stores that spell the same schema differently", async () => {
+        const held = startHeldSave(envelopesOf(new Answer(tenant, "holding public")));
+        await untilHolding(held.state);
+
+        // Same tables, same sequence, so this save has to wait.
+        const shouting = new PostgresStore(pool, 'PUBLIC');
+        const save = track(shouting.save(envelopesOf(new Answer(tenant, "saved as PUBLIC"))));
+        expect(await settledOrBlocked(save)).toBe("blocked");
+
+        held.release();
+        await held.save;
+        await save;
+    });
+
+    // Raised in review of this change. `storeRoles` now runs before the lock,
+    // and it was given a shallow copy of the store's role map. `addRole`
+    // mutates the inner map it finds, and a shallow copy shares those, so a
+    // role id assigned by a transaction that then rolled back stayed in the
+    // store's own map. The next save through that store read it from the
+    // cache, skipped the insert, and pointed an edge at a role_id no
+    // committed row carried, which `edge.fk_role_id` rejects with 23503, a
+    // code `ConnectionFactory` does not retry.
+    //
+    // Reaching it takes a fact type that gains a SECOND role after its first
+    // has committed, because the shallow copy only shares an inner map that
+    // already exists. The model classes cannot express that, so these are
+    // raw fact records, as in `postgres-duplicates.test.js`.
+    it("does not keep a role id from a save that rolled back", async () => {
+        const id = Math.random().toString(36).slice(2, 10);
+        const node = hash => ({ type: nodeType, hash, fields: {}, predecessors: {} });
+        const link = (hash, role, predecessor) => ({
+            type: linkType,
+            hash,
+            fields: {},
+            predecessors: { [role]: { type: nodeType, hash: predecessor.hash } }
+        });
+        const envelopesFor = facts => facts.map(fact => ({ fact, signatures: [] }));
+
+        let failNextFactInsert = false;
+        const failing = hookedPool(async text => {
+            if (isFactInsert(text) && failNextFactInsert) {
+                failNextFactInsert = false;
+                throw new Error("insert failed for the test");
+            }
+        });
+        // One store for all three saves, so each one sees what the last left
+        // in the store's role map.
+        const store = new PostgresStore(failing, 'public');
+
+        // Commits the Link fact type and its first role, so the store's map
+        // holds an inner map for that type.
+        const first = node(`node-first-${id}`);
+        await track(store.save(envelopesFor([first, link(`link-first-${id}`, "first", first)])));
+
+        // Inserts a second role on that same type, then rolls back.
+        failNextFactInsert = true;
+        const rolled = node(`node-rolled-${id}`);
+        await expect(store.save(envelopesFor([rolled, link(`link-rolled-${id}`, "second", rolled)])))
+            .rejects.toThrow("insert failed for the test");
+        expect(failNextFactInsert).toBe(false);
+
+        // That role's id was never committed, so this save has to insert it
+        // rather than read it back out of the store.
+        const after = node(`node-after-${id}`);
+        const kept = link(`link-after-${id}`, "second", after);
+        await track(store.save(envelopesFor([after, kept])));
+        expect(await factIdOf({ type: kept.type, hash: kept.hash })).not.toBeNull();
     });
 });
