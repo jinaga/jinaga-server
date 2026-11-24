@@ -1,6 +1,6 @@
-import { buildFeeds, dehydrateReference, getAllFactTypes, getAllRoles, Invalid, SpecificationParser } from "jinaga";
+import { buildFeeds, dehydrateFact, dehydrateReference, FactRecord, getAllFactTypes, getAllRoles, Invalid, SpecificationParser } from "jinaga";
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "../../src/postgres/maps";
-import { resultSqlFromSpecification } from "../../src/postgres/specification-result-sql";
+import { ResultSetFact, ResultSetRow, ResultSetTree, resultSqlFromSpecification } from "../../src/postgres/specification-result-sql";
 import { sqlFromFeed } from "../../src/postgres/specification-sql";
 
 // Issue #233. Both SQL builders seeded the FROM clause with the one given that
@@ -51,6 +51,28 @@ const P = `
                 ]
             } => x
         }
+    }
+`;
+
+// Specification Q. P's child inherited `u` and reached only `p1`, so nothing
+// joined the two chains and jinaga now refuses it. Q is the nearest shape that
+// is still well formed: its child joins its parent's label `u` and *also*
+// reaches `p1`, a given the parent never reached. That still makes the child
+// allocate a new input, and a new input lands among the inputs rather than
+// after them, which is the case the `ResultComposer` addressing issue #233
+// introduced exists to serve. Issue #251.
+const Q = `
+    (p1: R, p2: A) {
+        u: A [
+            u->a: A = p2
+        ]
+    } => {
+        k = {
+            c: A [
+                c->u: A = u
+                c->r: R = p1
+            ]
+        } => c
     }
 `;
 
@@ -158,6 +180,49 @@ function readFor(descriptiveString: string) {
     const start = specification.given.map(given => referenceFor(given.label.type));
     const composer = resultSqlFromSpecification(start, specification, maps.factTypes, maps.roleMap, "public");
     return { composer, ...maps };
+}
+
+// Rows as the composer receives them from Postgres, built here instead of read
+// from a database. `main.yml` does not run the integration suite, so the
+// grouping these rows exercise would otherwise be covered only there.
+const rootFact = { type: "R", identifier: "r1" };
+const anchorFact = { type: "A", identifier: "a1" };
+
+class Graph {
+    public readonly factRecords: FactRecord[] = [];
+
+    // One row column: the fact at a label, with the fact id that the
+    // composer's identifiers are made of.
+    public at(fact: {}, factId: number): ResultSetFact {
+        const records = dehydrateFact(fact);
+        for (const record of records) {
+            if (!this.factRecords.some(known =>
+                known.type === record.type && known.hash === record.hash)) {
+                this.factRecords.push(record);
+            }
+        }
+        const reference = dehydrateReference(fact);
+        const record = records.find(candidate =>
+            candidate.type === reference.type && candidate.hash === reference.hash)!;
+        return {
+            hash: record.hash,
+            factId,
+            data: { fields: record.fields, predecessors: record.predecessors },
+            timestamp: new Date(0)
+        };
+    }
+}
+
+function factIndexOf(labels: { name: string, index: number }[], name: string): number {
+    const label = labels.find(candidate => candidate.name === name);
+    if (!label) {
+        throw new Error(`No label named ${name} in ${labels.map(l => l.name).join(", ")}`);
+    }
+    return label.index;
+}
+
+function row(columns: { [factIndex: number]: ResultSetFact }): ResultSetRow {
+    return columns;
 }
 
 describe("Postgres SQL for a specification that walks from a second given", () => {
@@ -283,6 +348,174 @@ describe("Postgres SQL for a specification that walks from a second given", () =
         // rather than the 500 a throw from the builders produced.
         it("raises the refusal as an Invalid", () => {
             expect(captureParseError(P)).toBeInstanceOf(Invalid);
+        });
+    });
+
+    // Issue #251. These replace what specification P held for the read path:
+    // a child query whose label list is not its parent's with extra columns
+    // appended. `ResultComposer` groups each child row under the parent row
+    // whose identifier it matches, and it reads that identifier out of the
+    // child row by the parent's fact indexes. Taking it to be the child's
+    // leading columns instead would read p1 where `u` belongs.
+    describe("specification Q, feeds", () => {
+        it("generates a query for the top level and for the child", () => {
+            const { queries } = feedsFor(Q);
+
+            expect(queries.length).toBe(2);
+            expect(queries.every(query => query !== null)).toBe(true);
+        });
+
+        it("reaches p2 alone in the top-level feed", () => {
+            const { queries, factTypes, roleMap } = feedsFor(Q);
+
+            expect(queries[0]!.sql).toEqual(
+                "SELECT f2.hash as hash2, sort(array[f2.fact_id], 'desc') as bookmark " +
+                "FROM public.fact f1" +
+                " JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3" +
+                " JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id" +
+                " WHERE f1.fact_type_id = $1 AND f1.hash = $2" +
+                " AND sort(array[f2.fact_id], 'desc') > $4" +
+                " ORDER BY bookmark ASC LIMIT $5");
+            expect(queries[0]!.parameters).toEqual([
+                typeId(factTypes, "A"), a1.hash,
+                roleId(factTypes, roleMap, "A", "a"),
+                [],
+                100
+            ]);
+        });
+
+        it("reaches p1 in the child feed, which the top level never reached", () => {
+            const { queries, factTypes, roleMap } = feedsFor(Q);
+
+            // The child's own edge walks from `c` back to p1, so p1 arrives on
+            // an ordinary join from a written successor and needs no CROSS
+            // JOIN. It is pinned by type and hash all the same, which is what
+            // makes it an input of this query and not an output.
+            expect(queries[1]!.sql).toEqual(
+                "SELECT f2.hash as hash2, f3.hash as hash3, " +
+                "sort(array[f2.fact_id, f3.fact_id], 'desc') as bookmark " +
+                "FROM public.fact f1" +
+                " JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3" +
+                " JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id" +
+                " JOIN public.edge e2 ON e2.predecessor_fact_id = f2.fact_id AND e2.role_id = $4" +
+                " JOIN public.fact f3 ON f3.fact_id = e2.successor_fact_id" +
+                " JOIN public.edge e3 ON e3.successor_fact_id = f3.fact_id AND e3.role_id = $7" +
+                " JOIN public.fact f4 ON f4.fact_id = e3.predecessor_fact_id" +
+                " WHERE f1.fact_type_id = $1 AND f1.hash = $2 AND f4.fact_type_id = $5 AND f4.hash = $6" +
+                " AND sort(array[f2.fact_id, f3.fact_id], 'desc') > $8" +
+                " ORDER BY bookmark ASC LIMIT $9");
+            expect(queries[1]!.parameters).toEqual([
+                typeId(factTypes, "A"), a1.hash,
+                roleId(factTypes, roleMap, "A", "a"),
+                roleId(factTypes, roleMap, "A", "u"),
+                typeId(factTypes, "R"), r1.hash,
+                roleId(factTypes, roleMap, "A", "r"),
+                [],
+                100
+            ]);
+        });
+
+        it("declares every fact alias in the FROM clause of every feed exactly once", () => {
+            const { queries } = feedsFor(Q);
+
+            queries.forEach(query => expectEveryAliasDeclaredOnce(query!.sql));
+        });
+    });
+
+    describe("specification Q, read", () => {
+        it("generates a query for the top level and one for the child projection", () => {
+            const { composer } = readFor(Q);
+
+            const tree = composer!.getSqlQueries();
+
+            expect(tree.childQueries.length).toBe(1);
+            expect(tree.childQueries[0].name).toBe("k");
+        });
+
+        // The labels of a query, in the order its identifier reads them:
+        // inputs first, then outputs. p1 is an input of the child and not of
+        // the parent, so it sorts ahead of the parent's output `u`. A composer
+        // that read its parent's identifier off the child's leading columns
+        // would take p2 and p1 for p2 and `u`, and p1 is fixed by hash in
+        // every row — so every child row would group under one parent row.
+        it("allocates the given the parent did not reach among the child's inputs", () => {
+            const { composer } = readFor(Q);
+
+            const tree = composer!.getSqlQueries();
+
+            expect(tree.sqlQuery.labels.map(label => label.name)).toEqual(["p2", "u"]);
+            expect(tree.childQueries[0].sqlQuery.labels.map(label => label.name))
+                .toEqual(["p2", "p1", "u", "c"]);
+        });
+
+        it("declares every fact alias in the FROM clause of every nested query exactly once", () => {
+            const { composer } = readFor(Q);
+
+            const tree = composer!.getSqlQueries();
+
+            expectEveryAliasDeclaredOnce(tree.sqlQuery.sql);
+            expectEveryAliasDeclaredOnce(tree.childQueries[0].sqlQuery.sql);
+        });
+
+        // The addressing itself, rather than the label order it rests on. Two
+        // `u` of p2, with two `c` under the first and one under the second.
+        // Reading the parent's identifier off the child's leading columns
+        // would take p2 and p1 for p2 and `u`; p1 is fixed by hash, so every
+        // child row would carry the same pair and all three `c` would group
+        // under the first `u`, leaving the second empty.
+        it("groups each child row under the parent row it belongs to", () => {
+            const { composer } = readFor(Q);
+            const queries = composer!.getSqlQueries();
+            const parentLabels = queries.sqlQuery.labels;
+            const childLabels = queries.childQueries[0].sqlQuery.labels;
+
+            const p2Parent = factIndexOf(parentLabels, "p2");
+            const uParent = factIndexOf(parentLabels, "u");
+            const p2Child = factIndexOf(childLabels, "p2");
+            const p1Child = factIndexOf(childLabels, "p1");
+            const uChild = factIndexOf(childLabels, "u");
+            const cChild = factIndexOf(childLabels, "c");
+
+            const graph = new Graph();
+            const u1 = { type: "A", a: anchorFact, identifier: "u1" };
+            const u2 = { type: "A", a: anchorFact, identifier: "u2" };
+            const anchor = graph.at(anchorFact, 10);
+            const root = graph.at(rootFact, 11);
+            const firstU = graph.at(u1, 21);
+            const secondU = graph.at(u2, 22);
+
+            const resultSets: ResultSetTree = {
+                resultSet: [
+                    row({ [p2Parent]: anchor, [uParent]: firstU }),
+                    row({ [p2Parent]: anchor, [uParent]: secondU })
+                ],
+                childResultSets: [{
+                    name: "k",
+                    resultSet: [
+                        row({
+                            [p2Child]: anchor, [p1Child]: root, [uChild]: firstU,
+                            [cChild]: graph.at({ type: "A", u: u1, r: rootFact, identifier: "c1" }, 31)
+                        }),
+                        row({
+                            [p2Child]: anchor, [p1Child]: root, [uChild]: firstU,
+                            [cChild]: graph.at({ type: "A", u: u1, r: rootFact, identifier: "c2" }, 32)
+                        }),
+                        row({
+                            [p2Child]: anchor, [p1Child]: root, [uChild]: secondU,
+                            [cChild]: graph.at({ type: "A", u: u2, r: rootFact, identifier: "c3" }, 33)
+                        })
+                    ],
+                    childResultSets: []
+                }]
+            };
+
+            const results = composer!.compose(resultSets, graph.factRecords);
+
+            // `compose` hands back each child row as a projected result, so
+            // the fact Q projects is `result` on it.
+            expect(results.map(result =>
+                (result.result.k as any[]).map(child => child.result.identifier)))
+                .toEqual([["c1", "c2"], ["c3"]]);
         });
     });
 });

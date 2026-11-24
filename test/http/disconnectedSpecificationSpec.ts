@@ -70,6 +70,54 @@ const CONNECTED_SPECIFICATION = `
     }
 `;
 
+// jinaga/jinaga.js#437, in the same jinaga 6.17.0, extends the refusal to each
+// scope of a projection. A child specification inherits its parent's matches,
+// so a child whose own matches reach a given the parent never reached, and
+// which joins nothing of its parent's, is the product of two chains inside
+// that child. This is specification P of issue #233, over this test's types:
+// the child `others` inherits e1 and o1 and adds e2, reaching only o2. Issue
+// #251 takes the release that refuses it.
+const CHILD_NOT_JOINED_TO_PARENT = `
+    (o1: Disconnected.Office, o2: Disconnected.Office) {
+        e1: Disconnected.Employee [
+            e1->office: Disconnected.Office = o1
+        ]
+    } => {
+        others = {
+            e2: Disconnected.Employee [
+                e2->office: Disconnected.Office = o2
+            ]
+        } => {
+            pairings = {
+                p: Disconnected.Pairing [
+                    p->lead: Disconnected.Employee = e1
+                    p->report: Disconnected.Employee = e2
+                ]
+            } => p
+        }
+    }
+`;
+
+// The same child, joined to its parent by one path condition, and still
+// reaching o2, which its parent never reached. The control for the pair above:
+// it differs from it only in that one condition, and it is the shape issue
+// #251 puts in P's place, so a child projection that reaches a second given is
+// shown to be servable rather than refused along with it.
+const CHILD_JOINED_TO_PARENT = `
+    (o1: Disconnected.Office, o2: Disconnected.Office) {
+        e1: Disconnected.Employee [
+            e1->office: Disconnected.Office = o1
+        ]
+    } => {
+        others = {
+            e2: Disconnected.Employee [
+                e2->manager: Disconnected.Employee = e1
+                e2->office: Disconnected.Office = o2
+            ]
+        } => e2
+    }
+`;
+
 // Both routes take the specification after a declaration that supplies its
 // start facts. The declaration is identical for both specifications.
 const DECLARATION = `
@@ -216,6 +264,65 @@ describe("a disconnected specification on /read and POST /feeds", () => {
 
             expect(response.status).toBe(200);
             expect(feedCache.registered.length).toBeGreaterThan(0);
+        });
+    });
+
+    // Issue #251, criterion 1. The per-scope rule refuses a shape whose top
+    // level is connected, so the subgraphs it names are the same two this
+    // file's other refusal names. What tells the two rules apart is the scope
+    // the message attributes the product to, which is asserted here.
+    describe("a child specification that is not joined to its parent", () => {
+        const CHILD_SCOPE_REFUSAL =
+            "a child specification of the projection would be the product of 2 chains";
+
+        it("answers 400 on /read, naming the child scope", async () => {
+            const response = await post("/read", CHILD_NOT_JOINED_TO_PARENT);
+            const body = await response.text();
+
+            expect(response.status).toBe(400);
+            expect(body).toContain(CHILD_SCOPE_REFUSAL);
+            expect(body).toContain("'e1:Disconnected.Employee', 'o1:Disconnected.Office'");
+            expect(body).toContain("'e2:Disconnected.Employee', 'o2:Disconnected.Office'");
+        });
+
+        it("reads nothing from storage for such a /read", async () => {
+            await post("/read", CHILD_NOT_JOINED_TO_PARENT);
+
+            expect(store.readSpecifications).toEqual([]);
+            expect(store.feedSpecifications).toEqual([]);
+        });
+
+        it("answers 400 on POST /feeds, naming the child scope", async () => {
+            const response = await post("/feeds", CHILD_NOT_JOINED_TO_PARENT);
+            const body = await response.text();
+
+            expect(response.status).toBe(400);
+            expect(body).toContain(CHILD_SCOPE_REFUSAL);
+        });
+
+        it("registers no feed for such a POST /feeds", async () => {
+            await post("/feeds", CHILD_NOT_JOINED_TO_PARENT);
+
+            expect(feedCache.registered).toEqual([]);
+            expect(store.readSpecifications).toEqual([]);
+            expect(store.feedSpecifications).toEqual([]);
+        });
+
+        // The control.
+        describe("the same child, joined to its parent", () => {
+            it("answers /read and reaches storage", async () => {
+                const response = await post("/read", CHILD_JOINED_TO_PARENT);
+
+                expect(response.status).toBe(200);
+                expect(store.readSpecifications).toHaveLength(1);
+            });
+
+            it("registers a feed on POST /feeds", async () => {
+                const response = await post("/feeds", CHILD_JOINED_TO_PARENT);
+
+                expect(response.status).toBe(200);
+                expect(feedCache.registered.length).toBeGreaterThan(0);
+            });
         });
     });
 });
