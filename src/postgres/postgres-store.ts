@@ -12,7 +12,9 @@ import {
     PredecessorCollection,
     ProjectedResult,
     Specification,
-    Storage
+    Storage,
+    TopologicalSorter,
+    Trace
 } from "jinaga";
 import { Pool, PoolClient } from "pg";
 
@@ -131,6 +133,7 @@ export class PostgresStore implements Storage {
     private connectionFactory: ConnectionFactory;
     private factTypeMap: FactTypeMap = emptyFactTypeMap();
     private roleMap: RoleMap = emptyRoleMap();
+    private idOrderValidatedPromise: Promise<boolean> | null = null;
 
     constructor (pool: Pool, private schema: string) {
         this.connectionFactory = new ConnectionFactory(pool);
@@ -139,7 +142,68 @@ export class PostgresStore implements Storage {
     close() {
         return Promise.resolve();
     }
-    
+
+    /**
+     * Reports whether the database has validated that every edge runs from a
+     * lower fact id to a higher one.
+     *
+     * A feed page's bookmark bound can drop the branch of an output that
+     * another output sits above only while that holds, so the answer comes
+     * from the database's own record of it, the
+     * `ck_edge_successor_after_predecessor` constraint, rather than from
+     * configuration or from a second copy kept in step by hand.
+     *
+     * The answer is read once and held for the store's lifetime. Only DDL can
+     * change it, and the repair script's DDL is transactional, so a validated
+     * constraint stays validated. The first read happens on the first feed
+     * because `JinagaServer.create` is synchronous and has no startup hook.
+     * The promise rather than its value is cached, so concurrent first feeds
+     * ask the database once.
+     */
+    private idOrderValidated(): Promise<boolean> {
+        if (this.idOrderValidatedPromise === null) {
+            this.idOrderValidatedPromise = this.readIdOrderValidated()
+                .catch(reason => {
+                    // A read that failed is not an answer, so it is not kept.
+                    // Caching the rejection would make one unreachable moment
+                    // the store's permanent state.
+                    this.idOrderValidatedPromise = null;
+                    throw reason;
+                });
+        }
+        return this.idOrderValidatedPromise;
+    }
+
+    private async readIdOrderValidated(): Promise<boolean> {
+        return await this.connectionFactory.with(async (connection) => {
+            const { rows }: { rows: { convalidated: boolean }[] } = await connection.query(
+                'SELECT convalidated FROM pg_constraint' +
+                ' WHERE conname = \'ck_edge_successor_after_predecessor\'' +
+                ' AND conrelid = $1::regclass',
+                [`${this.schema}.edge`]);
+            if (rows.length === 0) {
+                Trace.warn(`The ${this.schema}.edge table has no ck_edge_successor_after_predecessor constraint, ` +
+                    `so this schema predates the fact id order invariant and feed pages keep their redundant bounds. ` +
+                    `Run setup.sql to add the constraint.`);
+                return false;
+            }
+            if (!rows[0].convalidated) {
+                const { rows: counts }: { rows: { violations: string }[] } = await connection.query(
+                    `SELECT count(*) AS violations FROM ${this.schema}.edge` +
+                    ' WHERE successor_fact_id < predecessor_fact_id');
+                const violations = Number(counts[0].violations);
+                Trace.warn(`The ${this.schema}.edge constraint ck_edge_successor_after_predecessor is not validated, ` +
+                    `and ${violations} edge${violations === 1 ? '' : 's'} run from a higher fact id to a lower one, ` +
+                    `so feed pages keep their redundant bounds. ` +
+                    (violations === 0
+                        ? `Run setup.sql to validate the constraint.`
+                        : `Run repair-edge-order.sql to restore the order, which also validates the constraint.`));
+                return false;
+            }
+            return true;
+        });
+    }
+
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         if (envelopes.length > 0) {
             const facts = envelopes.map(e => e.fact).filter((value, index, self) =>
@@ -154,7 +218,8 @@ export class PostgresStore implements Storage {
             } = await this.connectionFactory.withTransaction(async (connection) => {
                 const factTypes = await storeFactTypes(facts, this.factTypeMap, connection, this.schema);
                 const existingFacts = await findExistingFacts(facts, factTypes, connection, this.schema);
-                const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
+                const newFacts = sortByPredecessor(
+                    facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type))));
                 if (newFacts.length === 0) {
                     return {
                         newEnvelopes: [],
@@ -294,7 +359,8 @@ export class PostgresStore implements Storage {
                 let stagedFactIds: number[] = [];
                 if (facts.length > 0) {
                     const existingFacts = await findExistingFacts(facts, factTypes, connection, this.schema);
-                    const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
+                    const newFacts = sortByPredecessor(
+                        facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type))));
                     if (newFacts.length > 0) {
                         roleMap = await storeRoles(newFacts, factTypes, roleMap, connection, this.schema);
                         const allFacts = await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roleMap, this.schema);
@@ -337,7 +403,8 @@ export class PostgresStore implements Storage {
     async feed(feed: Specification, start: FactReference[], bookmark: string): Promise<FactFeed> {
         const factTypes: FactTypeMap = await this.loadFactTypesFromFeed(feed);
         const roleMap: RoleMap = await this.loadRolesFromFeed(feed, factTypes);
-        const sql = sqlFromFeed(feed, start, this.schema, bookmark, 100, factTypes, roleMap);
+        const idOrderValidated = await this.idOrderValidated();
+        const sql = sqlFromFeed(feed, start, this.schema, bookmark, 100, factTypes, roleMap, idOrderValidated);
         if (!sql) {
             return {
                 tuples: [],
@@ -866,6 +933,45 @@ async function findExistingFacts(facts: FactRecord[], factTypes: FactTypeMap, co
     }
 }
 
+function factKey(reference: FactReference): string {
+    return `${reference.type}:${reference.hash}`;
+}
+
+/**
+ * Orders a batch so that every fact follows the predecessors it is inserted
+ * with.
+ *
+ * The facts are inserted in the order this returns them, so each one takes a
+ * `fact_id` above its predecessors'. That is what lets a feed page's bookmark
+ * bound rest on one output fact rather than on all of them, and what the
+ * `ck_edge_successor_after_predecessor` constraint enforces from then on. The
+ * guarantee across batches comes from the save lock (#203); this is the
+ * guarantee within one.
+ *
+ * A predecessor outside the batch is already in the database, so it already
+ * has a lower id, and the sorter is told to treat it as placed rather than
+ * wait for a fact that will never arrive. A fact the sorter cannot place
+ * despite that is still returned, after the ones it placed, so no batch loses
+ * a fact to this ordering.
+ */
+function sortByPredecessor(facts: FactRecord[]): FactRecord[] {
+    if (facts.length < 2) {
+        return facts;
+    }
+    const sorter = new TopologicalSorter<FactRecord | null>();
+    const batch = new Set<string>(facts.map(factKey));
+    facts.forEach(fact => predecessorsOf(fact)
+        .filter(predecessor => !batch.has(factKey(predecessor)))
+        .forEach(predecessor => sorter.markAsVisited(predecessor, null)));
+    const sorted = sorter.sort(facts, (_, fact) => fact)
+        .filter((fact): fact is FactRecord => fact !== null);
+    if (sorted.length === facts.length) {
+        return sorted;
+    }
+    const placed = new Set<string>(sorted.map(factKey));
+    return sorted.concat(facts.filter(fact => !placed.has(factKey(fact))));
+}
+
 async function insertFactsEdgesAndAncestors(facts: FactRecord[], factTypes: FactTypeMap, existingFacts: Map<string, Map<number, number>>, connection: PoolClient, roles: RoleMap, schema: string) {
     if (facts.length === 0) {
         return emptyFactMap();
@@ -893,7 +999,15 @@ function sqlInsertFacts(facts: FactRecord[], roles: RoleMap, factTypes: FactType
 
     const edgeRecords = flatten(facts, fact => makeEdgeRecords(fact));
     if (edgeRecords.length > 0) {
-        return sqlInsertFactsEdgesAndAncestors(facts, factParameters, edgeRecords, factTypes, roles, factValues, schema);
+        // The statement below inserts from a SELECT over this list, and a
+        // SELECT with no ORDER BY has no order to rely on. Carry each fact's
+        // position in the batch so the insert can order by it, and so the ids
+        // follow the order `sortByPredecessor` put the facts in. The ordinal is
+        // a literal taken from the array index rather than a parameter, so the
+        // parameter numbering of the rest of the statement is unchanged.
+        const orderedFactValues = facts.map((f, i) =>
+            `(\$${i * 3 + 1}, \$${i * 3 + 2}::integer, \$${i * 3 + 3}::jsonb, ${i})`);
+        return sqlInsertFactsEdgesAndAncestors(facts, factParameters, edgeRecords, factTypes, roles, orderedFactValues, schema);
     }
     else {
         return {
@@ -932,9 +1046,9 @@ function sqlInsertFactsEdgesAndAncestors(facts: FactRecord[], factParameters: (s
 
     const sql =
 `WITH new_fact AS (
-    SELECT hash, fact_type_id, data
+    SELECT hash, fact_type_id, data, ordinal
     FROM (VALUES ${factValues.join(', ')})
-        AS fv (hash, fact_type_id, data)
+        AS fv (hash, fact_type_id, data, ordinal)
 ),
 new_edge AS (
     SELECT successor_hash, successor_fact_type_id, predecessor_hash, predecessor_fact_type_id, role_id
@@ -950,6 +1064,7 @@ inserted_fact AS (
     INSERT INTO ${schema}.fact (hash, fact_type_id, data)
     SELECT hash, fact_type_id, data
     FROM new_fact
+    ORDER BY ordinal
     RETURNING fact_id, fact_type_id, hash
 ),
 inserted_edge AS (

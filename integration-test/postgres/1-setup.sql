@@ -235,5 +235,39 @@ IF (SELECT to_regclass('public.bookmark') IS NULL) THEN
 
 END IF;
 
+--
+-- Every edge runs from a lower fact id to a higher one. Kept in step with the
+-- block of the same name at the end of ../../setup.sql, which this file is a
+-- trimmed copy of: it holds the table creation and not the migrations, because
+-- it builds a fresh database for the integration suite rather than upgrading
+-- one. A database built here therefore has nothing to repair, and the
+-- constraint is validated on the empty table.
+--
+
+IF NOT EXISTS (SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'ck_edge_successor_after_predecessor'
+    AND conrelid = 'public.edge'::regclass) THEN
+
+    ALTER TABLE public.edge
+        ADD CONSTRAINT ck_edge_successor_after_predecessor
+        CHECK (successor_fact_id > predecessor_fact_id) NOT VALID;
+
+END IF;
+
+IF EXISTS (SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'ck_edge_successor_after_predecessor'
+    AND conrelid = 'public.edge'::regclass
+    AND NOT convalidated)
+    AND NOT EXISTS (SELECT 1
+    FROM public.edge
+    WHERE successor_fact_id < predecessor_fact_id) THEN
+
+    ALTER TABLE public.edge
+        VALIDATE CONSTRAINT ck_edge_successor_after_predecessor;
+
+END IF;
+
 END
 $do$

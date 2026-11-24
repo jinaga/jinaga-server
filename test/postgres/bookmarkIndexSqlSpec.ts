@@ -52,11 +52,11 @@ function buildMaps(specification: Specification): { factTypes: FactTypeMap; role
 const site = dehydrateReference({ type: "Blog.Site", domain: "blog.example.com" });
 
 // Generates the feed SQL for a single-feed specification at a given bookmark.
-function feedSqlFor(descriptiveString: string, bookmark: string) {
+function feedSqlFor(descriptiveString: string, bookmark: string, idOrderValidated: boolean = false) {
     const specification = parseSpecification(descriptiveString);
     const { factTypes, roleMap } = buildMaps(specification);
     const feeds = buildFeeds(specification);
-    const query = sqlFromFeed(feeds[0], [site], "public", bookmark, 100, factTypes, roleMap);
+    const query = sqlFromFeed(feeds[0], [site], "public", bookmark, 100, factTypes, roleMap, idOrderValidated);
     return { query, feedCount: feeds.length };
 }
 
@@ -110,12 +110,38 @@ const BOTH_WALK_DIRECTIONS = `
 const titleGiven = dehydrateReference({ type: "Blog.Post.Title", value: "a title" });
 
 // Generates the feed SQL for a single-feed specification read from a title.
-function titleFeedSqlFor(descriptiveString: string, bookmark: string) {
+function titleFeedSqlFor(descriptiveString: string, bookmark: string, idOrderValidated: boolean = false) {
     const specification = parseSpecification(descriptiveString);
     const { factTypes, roleMap } = buildMaps(specification);
     const feeds = buildFeeds(specification);
     return {
-        query: sqlFromFeed(feeds[0], [titleGiven], "public", bookmark, 100, factTypes, roleMap),
+        query: sqlFromFeed(feeds[0], [titleGiven], "public", bookmark, 100, factTypes, roleMap, idOrderValidated),
+        feedCount: feeds.length
+    };
+}
+
+// Two outputs that are both successors of the given, neither reachable from
+// the other: a post's titles and its comments. Nothing here says which of the
+// two carries a tuple's largest fact id, so both keep their bound.
+const SIBLING_OUTPUTS = `
+    (post: Blog.Post) {
+        title: Blog.Post.Title [
+            title->post: Blog.Post = post
+        ]
+        comment: Blog.Comment [
+            comment->post: Blog.Post = post
+        ]
+    }`;
+
+const postGiven = dehydrateReference({ type: "Blog.Post" });
+
+// Generates the feed SQL for a single-feed specification read from a post.
+function postFeedSqlFor(descriptiveString: string, bookmark: string, idOrderValidated: boolean = false) {
+    const specification = parseSpecification(descriptiveString);
+    const { factTypes, roleMap } = buildMaps(specification);
+    const feeds = buildFeeds(specification);
+    return {
+        query: sqlFromFeed(feeds[0], [postGiven], "public", bookmark, 100, factTypes, roleMap, idOrderValidated),
         feedCount: feeds.length
     };
 }
@@ -142,12 +168,12 @@ const company = dehydrateReference({ type: "Company" });
 
 // Generates the feed SQL for every feed of a two-given specification, binding
 // each feed's givens by type.
-function feedSqlsFor(descriptiveString: string, bookmark: string) {
+function feedSqlsFor(descriptiveString: string, bookmark: string, idOrderValidated: boolean = false) {
     const specification = parseSpecification(descriptiveString);
     const { factTypes, roleMap } = buildMaps(specification);
     return buildFeeds(specification).map(feed => {
         const start = feed.given.map(given => given.label.type === "Office" ? office : company);
-        return sqlFromFeed(feed, start, "public", bookmark, 100, factTypes, roleMap);
+        return sqlFromFeed(feed, start, "public", bookmark, 100, factTypes, roleMap, idOrderValidated);
     });
 }
 
@@ -386,6 +412,211 @@ describe("Feed bookmark filter (issue #206)", () => {
                     outputFactIndexes,
                     empty!.parameters.length));
                 expect(paged!.labels).toEqual(empty!.labels);
+            }
+        }
+    });
+});
+
+// Regression coverage for jinaga-server#256.
+//
+// #206 bounds a page by the bookmark's largest fact id, and emits one UNION
+// branch per output fact because an inequality OR'd across several relations
+// restricts none of them. The bound only has to hold of the output that
+// carries the tuple's largest id, though, and where every edge runs from a
+// lower fact id to a higher one that output is the one no other output sits
+// above on a successor path. The branches of the outputs below it bound
+// nothing their descendant's branch does not, and running them anyway walks
+// the feed a second time and hashes both results to deduplicate, which made a
+// deep page of a two-output feed up to 2.5x slower than no bound at all.
+//
+// Whether the ids are ordered is the database's own record, the
+// ck_edge_successor_after_predecessor constraint, which `PostgresStore` reads
+// and passes to the generator as `idOrderValidated`. These tests pass it
+// directly. When it is not true, the SQL is #206's, which is correct whatever
+// order the ids were assigned in.
+
+// Every specification in this file, with the generator that supplies its
+// givens, so the two criteria that hold of all of them are stated once.
+const ALL_SPECIFICATIONS = [
+    {
+        name: "one output",
+        sqls: (bookmark: string, idOrderValidated: boolean) =>
+            [feedSqlFor(ONE_OUTPUT, bookmark, idOrderValidated).query]
+    },
+    {
+        name: "two outputs",
+        sqls: (bookmark: string, idOrderValidated: boolean) =>
+            [feedSqlFor(TWO_OUTPUTS, bookmark, idOrderValidated).query]
+    },
+    {
+        name: "both walk directions",
+        sqls: (bookmark: string, idOrderValidated: boolean) =>
+            [titleFeedSqlFor(BOTH_WALK_DIRECTIONS, bookmark, idOrderValidated).query]
+    },
+    {
+        name: "sibling outputs",
+        sqls: (bookmark: string, idOrderValidated: boolean) =>
+            [postFeedSqlFor(SIBLING_OUTPUTS, bookmark, idOrderValidated).query]
+    },
+    {
+        name: "given as output",
+        sqls: (bookmark: string, idOrderValidated: boolean) =>
+            feedSqlsFor(GIVEN_AS_OUTPUT, bookmark, idOrderValidated)
+    }
+];
+
+// Rebuilds the expected SQL of a page whose bound survived pruning to one
+// condition, from the generator's own empty-bookmark SQL. One branch is not a
+// disjunction, so the condition joins the query's own WHERE clause and the
+// wrapper that applied the bookmark filter across branches is gone. Only the
+// condition and its parameter number are stated here; everything else comes
+// from the other output.
+function inlineAnchorInEmptyBookmarkSql(emptySql: string, anchorColumn: string, parameterCount: number) {
+    const filterIndex = emptySql.lastIndexOf(" AND sort(array[");
+    expect(filterIndex).toBeGreaterThan(0);
+    // The empty-bookmark parameter list ends with the bookmark and the limit,
+    // so the anchor takes the next number after the limit.
+    const firstParameter = parameterCount + 1;
+    return emptySql.substring(0, filterIndex) +
+        ` AND ${anchorColumn} >= $${firstParameter}` +
+        emptySql.substring(filterIndex);
+}
+
+function anchorConditionCount(sql: string) {
+    return (sql.match(/>= \$\d+/g) || []).length;
+}
+
+describe("Feed bookmark bound, pruned by the fact id order (issue #256)", () => {
+    it("bounds the blog titles feed on the title alone", () => {
+        // Acceptance: with the flag true, the two-output blog feed emits
+        // exactly one `>= $first` condition, on the title's edge column, and
+        // no UNION. The post is a predecessor of the title, so its id is the
+        // smaller of the two and it can never carry the tuple's largest.
+        const { query, feedCount } = feedSqlFor(TWO_OUTPUTS, "4321", true);
+        expect(feedCount).toBe(1);
+        expect(query).not.toBeNull();
+        expect(anchorConditionCount(query!.sql)).toBe(1);
+        expect(query!.sql).not.toContain("UNION");
+        expect(query!.sql).not.toContain("AS matches");
+
+        // The column is the one the generator's own joins say brought the
+        // title in, rather than a column named here a second time.
+        const empty = feedSqlFor(TWO_OUTPUTS, "").query;
+        expect(empty).not.toBeNull();
+        const titleFactIndex = empty!.labels[1].index;
+        const titleAnchor = anchorColumnOf(empty!.sql, titleFactIndex);
+        expect(titleAnchor).toMatch(/^e\d+\.successor_fact_id$/);
+        expect(query!.sql).toEqual(inlineAnchorInEmptyBookmarkSql(
+            empty!.sql,
+            titleAnchor,
+            empty!.parameters.length));
+        // The query's own parameters are unchanged; the bookmark, the limit
+        // and the anchor follow them.
+        const queryParameters = empty!.parameters.slice(0, empty!.parameters.length - 2);
+        expect(query!.parameters).toEqual([...queryParameters, [4321], 100, 4321]);
+        expect(query!.labels).toEqual(empty!.labels);
+    });
+
+    it("bounds the deepest output when an output is reached by walking back", () => {
+        // The post arrives as the predecessor of the given title's edge, and
+        // the sibling titles are reached forward from the post, so the two
+        // outputs are related by ancestry even though they arrive on opposite
+        // ends of their edges. The sibling title is the descendant, so its
+        // branch is the one that survives.
+        const { query } = titleFeedSqlFor(BOTH_WALK_DIRECTIONS, "4321", true);
+        expect(query).not.toBeNull();
+        expect(anchorConditionCount(query!.sql)).toBe(1);
+        expect(query!.sql).not.toContain("UNION");
+        const empty = titleFeedSqlFor(BOTH_WALK_DIRECTIONS, "").query;
+        expect(empty).not.toBeNull();
+        const otherTitleAnchor = anchorColumnOf(empty!.sql, empty!.labels[1].index);
+        expect(query!.sql).toEqual(inlineAnchorInEmptyBookmarkSql(
+            empty!.sql,
+            otherTitleAnchor,
+            empty!.parameters.length));
+    });
+
+    it("bounds a given that an output sits above on its successor", () => {
+        // `buildFeeds` can unify a condition's unknown with a given, which
+        // makes the given an output of the feed. The president is its
+        // successor, so the given office's own branch is redundant, and the
+        // one branch left is the president's. Without the id order that branch
+        // had to stay, because the bound was a disjunction over every output.
+        const queries = feedSqlsFor(GIVEN_AS_OUTPUT, "4321", true);
+        expect(queries.length).toBe(2);
+        const empties = feedSqlsFor(GIVEN_AS_OUTPUT, "");
+        for (let f = 0; f < queries.length; f++) {
+            const query = queries[f];
+            const empty = empties[f];
+            expect(query).not.toBeNull();
+            expect(empty).not.toBeNull();
+            expect(anchorConditionCount(query!.sql)).toBe(1);
+            expect(query!.sql).not.toContain("UNION");
+            const presidentAnchor = anchorColumnOf(empty!.sql, empty!.labels[0].index);
+            expect(query!.sql).toEqual(inlineAnchorInEmptyBookmarkSql(
+                empty!.sql,
+                presidentAnchor,
+                empty!.parameters.length));
+        }
+    });
+
+    it("keeps one branch per output when neither output is above the other", () => {
+        // Acceptance: two outputs that are both successors of the given, with
+        // neither reachable from the other, keep a branch each. Either one can
+        // carry the tuple's largest id, so dropping either would drop rows.
+        const { query, feedCount } = postFeedSqlFor(SIBLING_OUTPUTS, "4321", true);
+        expect(feedCount).toBe(1);
+        expect(query).not.toBeNull();
+        expect(query!.sql).toContain(" UNION ");
+        expect(anchorConditionCount(query!.sql)).toBe(2);
+
+        const empty = postFeedSqlFor(SIBLING_OUTPUTS, "").query;
+        expect(empty).not.toBeNull();
+        expect(query!.sql).toEqual(wrapEmptyBookmarkSql(
+            empty!.sql,
+            empty!.labels.map(label => label.index),
+            empty!.parameters.length));
+    });
+
+    it("generates #206's SQL for every specification when the flag is not true", () => {
+        // Acceptance: with the flag not true, nothing is pruned. The expected
+        // SQL is #206's, derived from the generator's own empty-bookmark
+        // output with a branch for every output fact.
+        for (const specification of ALL_SPECIFICATIONS) {
+            const empties = specification.sqls("", false);
+            const paged = specification.sqls("4321", false);
+            expect(paged.length).toEqual(empties.length);
+            expect(empties.length).toBeGreaterThan(0);
+            for (let f = 0; f < empties.length; f++) {
+                const empty = empties[f];
+                const page = paged[f];
+                expect(empty).not.toBeNull();
+                expect(page).not.toBeNull();
+                const outputFactIndexes = empty!.labels.map(label => label.index);
+                expect(outputFactIndexes.length).toBeGreaterThan(0);
+                expect(page!.sql).toEqual(wrapEmptyBookmarkSql(
+                    empty!.sql,
+                    outputFactIndexes,
+                    empty!.parameters.length));
+                expect(anchorConditionCount(page!.sql)).toEqual(outputFactIndexes.length);
+            }
+        }
+    });
+
+    it("generates the same SQL in both modes for an empty bookmark", () => {
+        // Acceptance: an empty bookmark has no first element to bound on, so
+        // there is no bound to prune, in either mode.
+        for (const specification of ALL_SPECIFICATIONS) {
+            const unvalidated = specification.sqls("", false);
+            const validated = specification.sqls("", true);
+            expect(validated.length).toEqual(unvalidated.length);
+            expect(unvalidated.length).toBeGreaterThan(0);
+            for (let f = 0; f < unvalidated.length; f++) {
+                expect(unvalidated[f]).not.toBeNull();
+                expect(validated[f]).not.toBeNull();
+                expect(validated[f]!.sql).toEqual(unvalidated[f]!.sql);
+                expect(validated[f]!.parameters).toEqual(unvalidated[f]!.parameters);
+                expect(anchorConditionCount(validated[f]!.sql)).toBe(0);
             }
         }
     });
