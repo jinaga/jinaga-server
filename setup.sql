@@ -262,7 +262,8 @@ END IF;
 
 IF (SELECT character_maximum_length
     FROM information_schema.columns
-    WHERE table_name = 'fact_type'
+    WHERE table_schema = 'public'
+    AND table_name = 'fact_type'
     AND column_name = 'name') < 200 THEN
 
     ALTER TABLE fact_type
@@ -276,7 +277,8 @@ END IF;
 
 IF (SELECT character_maximum_length
     FROM information_schema.columns
-    WHERE table_name = 'role'
+    WHERE table_schema = 'public'
+    AND table_name = 'role'
     AND column_name = 'name') < 200 THEN
 
     ALTER TABLE role
@@ -290,7 +292,8 @@ END IF;
 
 IF (SELECT confdeltype
     FROM pg_constraint
-    WHERE conname = 'fk_predecessor_fact_id') != 'c' THEN
+    WHERE conname = 'fk_predecessor_fact_id'
+    AND conrelid = 'public.edge'::regclass) != 'c' THEN
 
     -- Configure cascade delete from fact to edge
     ALTER TABLE public.edge
