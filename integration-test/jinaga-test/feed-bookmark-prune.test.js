@@ -547,6 +547,52 @@ describe("Bookmark bound pruned by the fact id order (issue #256)", () => {
         expect(await constraintState()).toEqual('validated');
     });
 
+    it("runs setup.sql again on a migrated legacy database that holds an inverted edge", async () => {
+        // The legacy migration in setup.sql runs on every run while the
+        // legacy schema exists, and it re-inserts every legacy edge.
+        // PostgreSQL checks the edge constraint before ON CONFLICT, so an
+        // edge already migrated that is inverted must not be inserted again,
+        // or every later run of setup.sql fails on it.
+        const legacySite = site(`legacy-${suffix}.example.com`);
+        const legacyPost = post(legacySite, new Date(2026, 7, 1).toISOString());
+        await store.save(envelopesOf([legacyPost]));
+        const siteId = await factIdOf(legacySite);
+        const postId = await factIdOf(legacyPost);
+        const raisedSiteId = await nextFreeFactId();
+        await moveFactId(siteId, raisedSiteId);
+        expect(await invertedEdgeCount()).toBeGreaterThan(0);
+
+        const siteRecord = dehydrateFact(legacySite).slice(-1)[0];
+        const postRecord = dehydrateFact(legacyPost).slice(-1)[0];
+        try {
+            // The tables the migration reads, holding the edge it migrated.
+            await adminPool.query(`CREATE SCHEMA legacy`);
+            await adminPool.query(`CREATE TABLE legacy."user" (provider text, user_id text, private_key text, public_key text)`);
+            await adminPool.query(`CREATE TABLE legacy.fact (type text, hash text, fields jsonb, predecessors jsonb, date_learned timestamp)`);
+            await adminPool.query(`CREATE TABLE legacy.edge (successor_type text, successor_hash text, predecessor_type text, predecessor_hash text, role text)`);
+            await adminPool.query(`CREATE TABLE legacy.signature (type text, hash text, public_key text, signature text, date_learned timestamp)`);
+            await adminPool.query(
+                `INSERT INTO legacy.edge VALUES ($1, $2, $3, $4, 'site')`,
+                [postRecord.type, postRecord.hash, siteRecord.type, siteRecord.hash]);
+
+            await runSqlFile(setupSqlPath);
+            await runSqlFile(setupSqlPath);
+
+            expect(await constraintState()).toEqual('unvalidated');
+            const { rows } = await adminPool.query(
+                `SELECT count(*)::int AS count FROM public.edge
+                 WHERE successor_fact_id = $1 AND predecessor_fact_id = $2`,
+                [postId, raisedSiteId]);
+            expect(rows[0].count).toBe(1);
+        }
+        finally {
+            await adminPool.query(`DROP SCHEMA IF EXISTS legacy CASCADE`);
+            await runSqlFile(repairSqlPath);
+        }
+        expect(await invertedEdgeCount()).toBe(0);
+        expect(await constraintState()).toEqual('validated');
+    });
+
     it("moves an inverted fact and its descendants, and nothing else", async () => {
         // Acceptance criterion 3.
         const repairSite = site(`repair-${suffix}.example.com`);

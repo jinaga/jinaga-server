@@ -391,6 +391,15 @@ IF (SELECT to_regclass('legacy.fact') IS NOT NULL) THEN
 	JOIN public.role r
 	  ON r.defining_fact_type_id = st.fact_type_id
 	  AND r.name = e.role
+	-- This block runs on every run of this file while the legacy schema
+	-- exists, and PostgreSQL checks ck_edge_successor_after_predecessor
+	-- before ON CONFLICT, so re-inserting an edge already migrated would fail
+	-- the run on any inverted one. Insert only the edges not yet present.
+	WHERE NOT EXISTS (SELECT 1
+	    FROM public.edge pe
+	    WHERE pe.successor_fact_id = s.fact_id
+	    AND pe.predecessor_fact_id = p.fact_id
+	    AND pe.role_id = r.role_id)
 	ON CONFLICT DO NOTHING;
 	
 	INSERT INTO public.ancestor
