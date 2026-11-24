@@ -201,9 +201,9 @@ async function moveFactId(oldFactId, newFactId, withPool) {
         ]) {
             await client.query(`ALTER TABLE ${table} ALTER CONSTRAINT ${column} NOT DEFERRABLE`);
         }
-        await client.query(
-            `SELECT setval(pg_get_serial_sequence('public.fact', 'fact_id'),
-                           (SELECT max(fact_id) FROM public.fact))`);
+        // No setval: every caller reserved newFactId from the sequence, so it
+        // is already past it, and a setval to this transaction's max(fact_id)
+        // would move it back below ids a concurrent save holds uncommitted.
         await client.query('COMMIT');
     }
     catch (e) {
@@ -215,8 +215,12 @@ async function moveFactId(oldFactId, newFactId, withPool) {
     }
 }
 
+// An id above every fact's, reserved from the fact_id sequence itself, so no
+// save another suite runs concurrently can be handed it. One read off
+// max(fact_id) is not reserved, and a parallel save can take it first.
 async function nextFreeFactId() {
-    const { rows } = await adminPool.query('SELECT coalesce(max(fact_id), 0) + 1 AS next FROM public.fact');
+    const { rows } = await adminPool.query(
+        `SELECT nextval(pg_get_serial_sequence('public.fact', 'fact_id'))::int AS next`);
     return rows[0].next;
 }
 
@@ -1073,8 +1077,10 @@ describe("The id order flag (issue #256)", () => {
              WHERE t.name = $1`,
             [flagSiteType]);
         expect(siteRows.length).toBe(1);
+        // Reserved from the sequence, as nextFreeFactId does, so a save
+        // another suite runs concurrently cannot be handed the same id.
         const { rows: maxRows } = await flagAdminPool.query(
-            'SELECT coalesce(max(fact_id), 0) + 1 AS next FROM public.fact');
+            `SELECT nextval(pg_get_serial_sequence('public.fact', 'fact_id'))::int AS next`);
         await moveFactId(siteRows[0].fact_id, maxRows[0].next, flagAdminPool);
         await flagAdminPool.query(`ALTER TABLE public.edge DROP CONSTRAINT IF EXISTS ${constraintName}`);
         await flagAdminPool.query(
