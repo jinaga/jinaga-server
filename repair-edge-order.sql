@@ -33,9 +33,10 @@
 
 BEGIN;
 
--- The same lock every save takes, so this runs between saves rather than
+-- The same lock every save to the public schema takes before it inserts,
+-- keyed the way PostgresStore keys it, so this runs between saves rather than
 -- across one. Transaction-scoped: the commit or rollback below releases it.
-SELECT pg_advisory_xact_lock(1263186513::bigint);
+SELECT pg_advisory_xact_lock(1263186513::integer, hashtext(lower('public')));
 
 LOCK TABLE public.fact, public.edge, public.ancestor, public.signature
     IN SHARE ROW EXCLUSIVE MODE;

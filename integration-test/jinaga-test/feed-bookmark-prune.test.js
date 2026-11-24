@@ -593,6 +593,72 @@ describe("Bookmark bound pruned by the fact id order (issue #256)", () => {
         expect(await constraintState()).toEqual('validated');
     });
 
+    it("waits for a save in flight on the advisory lock that save holds", async () => {
+        // The repair takes the save lock so that it runs between saves. A
+        // save holds that lock from its insert to its commit, so a repair
+        // started while one is open has to park on the advisory lock, before
+        // it asks for any table lock the open save would deadlock against.
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        let holding = false;
+        const heldPool = {
+            connect: async () => {
+                const client = await pool.connect();
+                const query = client.query;
+                const releaseClient = client.release;
+                client.query = async function (text, ...rest) {
+                    if (typeof text === 'string' && text.trim() === 'COMMIT') {
+                        holding = true;
+                        await gate;
+                    }
+                    return query.call(client, text, ...rest);
+                };
+                client.release = function (...args) {
+                    delete client.query;
+                    delete client.release;
+                    return releaseClient.call(client, ...args);
+                };
+                return client;
+            }
+        };
+        const heldSite = site(`held-${suffix}.example.com`);
+        const heldSave = new PostgresStore(heldPool, 'public').save(envelopesOf([heldSite]));
+        let repair;
+        try {
+            while (!holding) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            const repairClient = await adminPool.connect();
+            const { rows: [{ pid }] } = await repairClient.query('SELECT pg_backend_pid() AS pid');
+            repair = repairClient.query(fs.readFileSync(repairSqlPath, 'utf8'))
+                .finally(() => repairClient.release());
+
+            // Which lock the repair is waiting on, read from the server
+            // rather than inferred from a timeout.
+            let waitingOn;
+            while (waitingOn === undefined) {
+                const { rows } = await adminPool.query(
+                    `SELECT locktype FROM pg_locks WHERE pid = $1 AND NOT granted`, [pid]);
+                if (rows.length > 0) {
+                    waitingOn = rows[0].locktype;
+                }
+                else {
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+            }
+            expect(waitingOn).toEqual('advisory');
+        }
+        finally {
+            release();
+            await heldSave;
+            if (repair) {
+                await repair;
+            }
+        }
+        expect(await invertedEdgeCount()).toBe(0);
+        expect(await constraintState()).toEqual('validated');
+    });
+
     it("moves an inverted fact and its descendants, and nothing else", async () => {
         // Acceptance criterion 3.
         const repairSite = site(`repair-${suffix}.example.com`);
