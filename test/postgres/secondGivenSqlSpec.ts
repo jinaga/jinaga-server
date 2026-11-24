@@ -1,4 +1,4 @@
-import { buildFeeds, dehydrateReference, getAllFactTypes, getAllRoles, SpecificationParser } from "jinaga";
+import { buildFeeds, dehydrateReference, getAllFactTypes, getAllRoles, Invalid, SpecificationParser } from "jinaga";
 import { addFactType, addRole, emptyFactTypeMap, emptyRoleMap, FactTypeMap, getFactTypeId, getRoleId, RoleMap } from "../../src/postgres/maps";
 import { resultSqlFromSpecification } from "../../src/postgres/specification-result-sql";
 import { sqlFromFeed } from "../../src/postgres/specification-sql";
@@ -58,6 +58,16 @@ function parseSpecification(input: string) {
     const parser = new SpecificationParser(input);
     parser.skipWhitespace();
     return parser.parseSpecification();
+}
+
+// A specification the parser refuses, and the error it refused it with.
+function captureParseError(input: string): Error {
+    try {
+        parseSpecification(input);
+    } catch (error) {
+        return error as Error;
+    }
+    throw new Error("Expected the parser to refuse the specification, but it accepted it.");
 }
 
 function mapsFor(descriptiveString: string): { factTypes: FactTypeMap, roleMap: RoleMap } {
@@ -243,119 +253,36 @@ describe("Postgres SQL for a specification that walks from a second given", () =
         });
     });
 
-    describe("specification P, feeds", () => {
-        it("generates a query for every feed, including the child and the grandchild", () => {
-            const { queries } = feedsFor(P);
+    // Specification P was written for issue #233 to pin what the builders do
+    // with a child feed that is the product of two chains: both of them cross
+    // joined p1 into that feed and generated the product, and these tests
+    // asserted the SQL for it.
+    //
+    // jinaga 6.17.0 (jinaga/jinaga.js#436), taken in issue #250, refuses such
+    // a specification in the parser, so neither builder receives it any more
+    // and there is no generated SQL left to assert. P's top-level and
+    // grandchild feeds were connected; it is the child feed, which inherits
+    // only `u` and adds `c`, that is the product, and the message says so.
+    //
+    // What is still true of this repository, and worth holding, is that the
+    // refusal arrives before any SQL is generated. The same guarantee is held
+    // at the HTTP boundary by test/http/disconnectedSpecificationSpec.ts.
+    // Specification J above is unaffected and still covers the CROSS JOIN that
+    // issue #233 added, for a second given that an edge does reach.
+    describe("specification P", () => {
+        it("is refused for its child feed, naming that scope and both chains", () => {
+            const error = captureParseError(P);
 
-            expect(queries.length).toBe(3);
-            expect(queries.every(query => query !== null)).toBe(true);
+            expect(error.message).toContain("Subgraph 1: ['u:A', 'p2:A']");
+            expect(error.message).toContain("Subgraph 2: ['c:A', 'p1:R']");
+            expect(error.message).toContain(
+                "a child specification of the projection would be the product of 2 chains");
         });
 
-        it("reaches p2 alone in the top-level feed", () => {
-            const { queries, factTypes, roleMap } = feedsFor(P);
-
-            expect(queries[0]!.sql).toEqual(
-                "SELECT f2.hash as hash2, sort(array[f2.fact_id], 'desc') as bookmark " +
-                "FROM public.fact f1" +
-                " JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3" +
-                " JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id" +
-                " WHERE f1.fact_type_id = $1 AND f1.hash = $2" +
-                " AND sort(array[f2.fact_id], 'desc') > $4" +
-                " ORDER BY bookmark ASC LIMIT $5");
-            expect(queries[0]!.parameters).toEqual([
-                typeId(factTypes, "A"), a1.hash,
-                roleId(factTypes, roleMap, "A", "a"),
-                [],
-                100
-            ]);
-        });
-
-        it("cross joins p1 into the child feed, which is the product of two chains", () => {
-            const { queries, factTypes, roleMap } = feedsFor(P);
-
-            expect(queries[1]!.sql).toEqual(
-                "SELECT f2.hash as hash2, f4.hash as hash4, " +
-                "sort(array[f2.fact_id, f4.fact_id], 'desc') as bookmark " +
-                "FROM public.fact f1" +
-                " JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3" +
-                " JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id" +
-                " CROSS JOIN public.fact f3" +
-                " JOIN public.edge e2 ON e2.predecessor_fact_id = f3.fact_id AND e2.role_id = $6" +
-                " JOIN public.fact f4 ON f4.fact_id = e2.successor_fact_id" +
-                " WHERE f1.fact_type_id = $1 AND f1.hash = $2 AND f3.fact_type_id = $4 AND f3.hash = $5" +
-                " AND sort(array[f2.fact_id, f4.fact_id], 'desc') > $7" +
-                " ORDER BY bookmark ASC LIMIT $8");
-            expect(queries[1]!.parameters).toEqual([
-                typeId(factTypes, "A"), a1.hash,
-                roleId(factTypes, roleMap, "A", "a"),
-                typeId(factTypes, "R"), r1.hash,
-                roleId(factTypes, roleMap, "A", "r"),
-                [],
-                100
-            ]);
-        });
-
-        it("cross joins p1 into the grandchild feed, which joins the two chains", () => {
-            const { queries, factTypes, roleMap } = feedsFor(P);
-
-            expect(queries[2]!.sql).toEqual(
-                "SELECT f2.hash as hash2, f4.hash as hash4, f5.hash as hash5, " +
-                "sort(array[f2.fact_id, f4.fact_id, f5.fact_id], 'desc') as bookmark " +
-                "FROM public.fact f1" +
-                " JOIN public.edge e1 ON e1.predecessor_fact_id = f1.fact_id AND e1.role_id = $3" +
-                " JOIN public.fact f2 ON f2.fact_id = e1.successor_fact_id" +
-                " CROSS JOIN public.fact f3" +
-                " JOIN public.edge e2 ON e2.predecessor_fact_id = f3.fact_id AND e2.role_id = $6" +
-                " JOIN public.fact f4 ON f4.fact_id = e2.successor_fact_id" +
-                " JOIN public.edge e3 ON e3.predecessor_fact_id = f4.fact_id AND e3.role_id = $7" +
-                " JOIN public.fact f5 ON f5.fact_id = e3.successor_fact_id" +
-                " JOIN public.edge e4 ON e4.predecessor_fact_id = f2.fact_id AND e4.successor_fact_id = f5.fact_id AND e4.role_id = $8" +
-                " WHERE f1.fact_type_id = $1 AND f1.hash = $2 AND f3.fact_type_id = $4 AND f3.hash = $5" +
-                " AND sort(array[f2.fact_id, f4.fact_id, f5.fact_id], 'desc') > $9" +
-                " ORDER BY bookmark ASC LIMIT $10");
-            expect(queries[2]!.parameters).toEqual([
-                typeId(factTypes, "A"), a1.hash,
-                roleId(factTypes, roleMap, "A", "a"),
-                typeId(factTypes, "R"), r1.hash,
-                roleId(factTypes, roleMap, "A", "r"),
-                roleId(factTypes, roleMap, "B", "c"),
-                roleId(factTypes, roleMap, "B", "u"),
-                [],
-                100
-            ]);
-        });
-
-        it("declares every fact alias in the FROM clause of every feed exactly once", () => {
-            const { queries } = feedsFor(P);
-
-            queries.forEach(query => expectEveryAliasDeclaredOnce(query!.sql));
-        });
-    });
-
-    describe("specification P, read", () => {
-        it("generates a query for the top level and for each nested projection", () => {
-            const { composer } = readFor(P);
-
-            const tree = composer!.getSqlQueries();
-
-            expect(tree.childQueries.length).toBe(1);
-            expect(tree.childQueries[0].name).toBe("k");
-            expect(tree.childQueries[0].childQueries.length).toBe(1);
-            expect(tree.childQueries[0].childQueries[0].name).toBe("g");
-        });
-
-        it("declares every fact alias in the FROM clause of every nested query exactly once", () => {
-            const { composer } = readFor(P);
-
-            const tree = composer!.getSqlQueries();
-            const child = tree.childQueries[0];
-            const grandchild = child.childQueries[0];
-
-            expectEveryAliasDeclaredOnce(tree.sqlQuery.sql);
-            expectEveryAliasDeclaredOnce(child.sqlQuery.sql);
-            expectEveryAliasDeclaredOnce(grandchild.sqlQuery.sql);
-            expect(child.sqlQuery.sql).toContain(" CROSS JOIN public.fact f3");
-            expect(grandchild.sqlQuery.sql).toContain(" CROSS JOIN public.fact f3");
+        // The refusal is an Invalid, so a request carrying P is a client error
+        // rather than the 500 a throw from the builders produced.
+        it("raises the refusal as an Invalid", () => {
+            expect(captureParseError(P)).toBeInstanceOf(Invalid);
         });
     });
 });
