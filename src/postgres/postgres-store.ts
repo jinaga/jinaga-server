@@ -24,7 +24,6 @@ import {
     addFactType,
     addRole,
     copyFactTypeMap,
-    copyRoleMap,
     deepCopyRoleMap,
     emptyFactMap,
     emptyFactTypeMap,
@@ -128,19 +127,31 @@ function loadFactTuple(labels: SpecificationLabel[], row: Row): FactTuple {
 }
 
 /**
- * The key of the advisory lock that serializes the saves which insert facts.
+ * The first key of the advisory lock that serializes the saves which insert
+ * facts.
  *
  * `fact.fact_id` is a `SERIAL`, so a save is given its ids when it inserts,
  * not when it commits. Two saves running at `READ COMMITTED` can therefore
  * commit out of id order: the one holding the lower id commits second, and
  * lands behind a feed bookmark that has already moved past it.
  *
- * Every save takes this one lock, so a save cannot take an id until every
- * save holding a lower one has committed or rolled back. Ids are then handed
- * out in commit order, and no tuple can appear behind a published position.
+ * A save takes this lock immediately before it inserts, so it cannot take an
+ * id until every save holding a lower one has committed or rolled back. Ids
+ * are then handed out in commit order, and no tuple can appear behind a
+ * published position.
+ *
+ * The second key is `hashtext(lower(schema))`. The guarantee is about one
+ * `fact_id` sequence, and each schema has its own, so stores on different
+ * schemas of the same database have no reason to wait on each other.
+ *
+ * The schema is folded to lower case first because it reaches every other
+ * statement as an unquoted identifier, which PostgreSQL folds the same way:
+ * `public` and `PUBLIC` name one schema, so they have to key one lock. The
+ * folding errs toward collision, and a collision costs the two stores that
+ * share a key their concurrency, never correctness.
  *
  * The value is arbitrary. What matters is that every save, in every process
- * reaching the same database, uses the same one. Advisory locks occupy a
+ * reaching the same schema, uses the same pair. Advisory locks occupy a
  * namespace of their own, so this cannot collide with a row or table lock.
  */
 const saveFactsLockKey = 1263186513;
@@ -161,15 +172,27 @@ export class PostgresStore implements Storage {
     /**
      * Save facts, assigning their ids in commit order.
      *
-     * The transaction takes `saveFactsLockKey` as its first statement, before
-     * it reads or writes anything, so the saves that insert facts run one at a
-     * time. The lock is transaction-scoped: a commit or a rollback releases it,
-     * and a save that fails cannot strand the next one.
+     * The transaction takes the save lock immediately before it inserts the
+     * facts, so the saves that assign fact ids run one at a time. The lock is
+     * transaction-scoped: a commit or a rollback releases it, and a save that
+     * fails cannot strand the next one.
      *
      * This is what lets a feed bookmark mean "every tuple up to here". A
      * bookmark is a position in `fact_id` order, so a fact whose id is lower
      * than a position a reader has already passed would never be delivered to
      * that reader. Serializing the saves keeps that state from forming.
+     *
+     * Only the insert needs that guarantee. Resolving fact types, looking up
+     * which facts already exist, and resolving roles assign no fact id, so
+     * they run before the lock is taken, and a save whose facts all exist
+     * already returns without taking it at all.
+     *
+     * Because the existence check no longer runs under the lock, a concurrent
+     * save can insert a fact this one has just found absent. The insert then
+     * violates `ux_fact`, and `ConnectionFactory` retries the whole
+     * transaction on a unique violation; the next attempt's existence check
+     * finds the fact and inserts nothing. That is the same race this save
+     * path ran before the lock existed, and the same mechanism answers it.
      */
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         if (envelopes.length > 0) {
@@ -183,9 +206,6 @@ export class PostgresStore implements Storage {
                 factTypes: FactTypeMap;
                 roles: RoleMap;
             } = await this.connectionFactory.withTransaction(async (connection) => {
-                // Before anything else, so that no save can take a fact id
-                // while another save that has already taken one is still open.
-                await connection.query('SELECT pg_advisory_xact_lock($1::bigint)', [saveFactsLockKey]);
                 const factTypes = await storeFactTypes(facts, this.factTypeMap, connection, this.schema);
                 const existingFacts = await findExistingFacts(facts, factTypes, connection, this.schema);
                 const newFacts = facts.filter(f => !hasFact(existingFacts, f.hash, ensureGetFactTypeId(factTypes, f.type)));
@@ -197,7 +217,21 @@ export class PostgresStore implements Storage {
                     };
                 }
 
-                const roles = await storeRoles(newFacts, factTypes, copyRoleMap(this.roleMap), connection, this.schema);
+                // `addRole` mutates the inner map it is given and
+                // `copyRoleMap` leaves those shared, so a shallow copy would
+                // put a role id into the store's own map before this
+                // transaction commits. A rollback would then leave an id
+                // behind that names no row, and the next save through this
+                // store would skip the insert and point an edge at it. The
+                // ids this transaction assigns stay local until it commits
+                // and `mergeRoleMaps` takes them, as in `readAsIfSaved`.
+                const roles = await storeRoles(newFacts, factTypes, deepCopyRoleMap(this.roleMap), connection, this.schema);
+
+                // Immediately before the insert, so that no save can take a
+                // fact id while another save that has already taken one is
+                // still open. Everything above this line assigns no fact id,
+                // and a save that reaches it inserts at least one fact.
+                await connection.query('SELECT pg_advisory_xact_lock($1::integer, hashtext(lower($2::text)))', [saveFactsLockKey, this.schema]);
                 const allFacts = await insertFactsEdgesAndAncestors(newFacts, factTypes, existingFacts, connection, roles, this.schema);
                 // For each new fact, find all of the signatures that were provided.
                 const newEnvelopes = newFacts.map(fact => {
