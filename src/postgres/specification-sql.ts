@@ -6,7 +6,7 @@ import {
 } from "jinaga";
 
 import { parseBookmarkPositions } from "../util/bookmark";
-import { EdgeDescription, ExistentialConditionDescription, FactEqualityDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
+import { EdgeDescription, ExistentialConditionDescription, FactEqualityDescription, OutputDescription, QueryDescription, QueryDescriptionBuilder } from "./query-description";
 
 interface SpecificationLabel {
     type: string;
@@ -30,7 +30,7 @@ function factEqualityClauses(factEqualities: FactEqualityDescription[]): string 
         .join("");
 }
 
-function generateSqlQuery(queryDescription: QueryDescription, schema: string, bookmark: string, limit: number): SpecificationSqlQuery {
+function generateSqlQuery(queryDescription: QueryDescription, schema: string, bookmark: string, limit: number, idOrderValidated: boolean): SpecificationSqlQuery {
     const hashes = queryDescription.outputs
         .map(output => `f${output.factIndex}.hash as hash${output.factIndex}`)
         .join(", ");
@@ -91,18 +91,46 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
     // already produced, and so bounds nothing. On the edge column it joins
     // `predecessor_fact_id` and `role_id` in the ix_predecessor index (or their
     // counterparts in ix_successor), which bounds the walk itself.
+    //
+    // Every output needs a branch of its own only while the ids within a tuple
+    // can come in any order. Where the database has validated that a
+    // successor's id is larger than its predecessors', the output carrying the
+    // tuple's largest id is the one that no other output sits above on a
+    // successor-direction path, and the branch of an output below it bounds
+    // nothing that its descendant's branch does not already bound. Running
+    // those branches anyway costs a second walk of the feed and a
+    // deduplicating hash over both results, which is what made a deep page of
+    // a multi-output feed slower with the bound than without it.
+    // `idOrderValidated` reports whether the database has recorded that
+    // invariant. Where it has not, every output keeps its branch, which is
+    // correct for any id order.
     const impliedConditionApplies = bookmarkValue.length > 0 && queryDescription.outputs.length > 0;
     let sql: string;
     let parameters: (string | number | number[])[];
     if (impliedConditionApplies) {
-        const branches = queryDescription.outputs
+        const boundedOutputs = idOrderValidated
+            ? outputsCarryingLargestFactId(queryDescription.outputs, queryDescription.edges)
+            : queryDescription.outputs;
+        const anchorConditions = boundedOutputs
             // The query's first fact is written before any edge is joined, so
             // it has no edge column. Its own primary key is the only anchor it
             // has, and it is already pinned by hash.
             .map(output => anchorColumns.get(output.factIndex) || `f${output.factIndex}.fact_id`)
-            .map(anchorColumn => `${matches} AND ${anchorColumn} >= $${firstParameter}`)
-            .join(" UNION ");
-        sql = `SELECT * FROM (${branches}) AS matches WHERE bookmark > $${bookmarkParameter} ${ordering}`;
+            .map(anchorColumn => `${anchorColumn} >= $${firstParameter}`);
+        if (idOrderValidated && anchorConditions.length === 1) {
+            // One branch is not a disjunction, so it needs neither the UNION
+            // that combines branches nor the wrapper that applies the bookmark
+            // filter once across them. The condition joins the query's own
+            // WHERE clause, which leaves the planner one relation to drive the
+            // query from instead of a hash over two scans of the same feed.
+            sql = `${matches} AND ${anchorConditions[0]} AND sort(array[${factIds}], 'desc') > $${bookmarkParameter} ${ordering}`;
+        }
+        else {
+            const branches = anchorConditions
+                .map(anchorCondition => `${matches} AND ${anchorCondition}`)
+                .join(" UNION ");
+            sql = `SELECT * FROM (${branches}) AS matches WHERE bookmark > $${bookmarkParameter} ${ordering}`;
+        }
         parameters = [...queryDescription.parameters, bookmarkValue, limit, bookmarkValue[0]];
     }
     else {
@@ -118,6 +146,64 @@ function generateSqlQuery(queryDescription: QueryDescription, schema: string, bo
         })),
         bookmark: "[]"
     };
+}
+
+/**
+ * Selects the output facts whose bookmark bound is not implied by another's.
+ *
+ * The bound only has to hold of the output that carries the tuple's largest
+ * fact id. Where a successor's id is larger than its predecessors', an output
+ * reached from another by walking edges in the successor direction always has
+ * the larger id, so the one it was reached from can never carry the largest.
+ * Its branch is dropped.
+ *
+ * The path runs through the query's own edges and may pass through facts that
+ * are not outputs: in `(site) { post [post->site = site] title [title->post =
+ * post] }` the path from `site` to `title` passes through `post`, and the path
+ * from `post` to `title` makes `post`'s branch redundant.
+ *
+ * The relation is derived here, from the same edges that generated the joins,
+ * rather than recorded anywhere. An output that reaches no other is kept, so
+ * outputs unrelated by ancestry all keep their branches.
+ */
+function outputsCarryingLargestFactId(outputs: OutputDescription[], edges: EdgeDescription[]): OutputDescription[] {
+    const successorFactIndexes = new Map<number, number[]>();
+    edges.forEach(edge => {
+        const reached = successorFactIndexes.get(edge.predecessorFactIndex);
+        if (reached) {
+            reached.push(edge.successorFactIndex);
+        }
+        else {
+            successorFactIndexes.set(edge.predecessorFactIndex, [edge.successorFactIndex]);
+        }
+    });
+    const outputFactIndexes = new Set<number>(outputs.map(output => output.factIndex));
+    const carriers = outputs.filter(output =>
+        !reachesAnotherOutput(output.factIndex, successorFactIndexes, outputFactIndexes));
+    // Two outputs that each reach the other would leave no carrier, and a
+    // bound on no output at all would drop rows. The edges of a feed cannot
+    // form such a cycle, since a fact's hash covers its predecessors, so this
+    // is a guard rather than a case: fall back to bounding every output, which
+    // is correct for any id order.
+    return carriers.length > 0 ? carriers : outputs;
+}
+
+function reachesAnotherOutput(factIndex: number, successorFactIndexes: Map<number, number[]>, outputFactIndexes: Set<number>): boolean {
+    const visited = new Set<number>();
+    const queue = [factIndex];
+    while (queue.length > 0) {
+        const reached = successorFactIndexes.get(queue.shift()!) || [];
+        for (const successorFactIndex of reached) {
+            if (outputFactIndexes.has(successorFactIndex)) {
+                return true;
+            }
+            if (!visited.has(successorFactIndex)) {
+                visited.add(successorFactIndex);
+                queue.push(successorFactIndex);
+            }
+        }
+    }
+    return false;
 }
 
 // An edge reaches a fact from one that the joins have already written. When
@@ -298,17 +384,27 @@ export function sqlFromSpecification(start: FactReference[], schema: string, boo
     const satisfiableQueryDescriptionsAndBookmarks = queryDescriptionsAndBookmarks.filter(qb =>
         qb.queryDescription.isSatisfiable());
     const sqlQueries = satisfiableQueryDescriptionsAndBookmarks.map(qdb =>
-        generateSqlQuery(qdb.queryDescription, schema, qdb.bookmark, limit));
+        generateSqlQuery(qdb.queryDescription, schema, qdb.bookmark, limit, false));
     return sqlQueries;
 }
 
-export function sqlFromFeed(feed: Specification, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>): SpecificationSqlQuery | null {
+/**
+ * Generates the SQL of one feed.
+ *
+ * `idOrderValidated` is the database's own record of whether every edge has
+ * `successor_fact_id > predecessor_fact_id`, which `PostgresStore` reads from
+ * the `ck_edge_successor_after_predecessor` constraint. Only `true` lets the
+ * bookmark bound drop the branch of an output that another output sits above;
+ * the default bounds every output, which is correct whatever order the ids
+ * were assigned in.
+ */
+export function sqlFromFeed(feed: Specification, start: FactReference[], schema: string, bookmark: string, limit: number, factTypes: Map<string, number>, roleMap: Map<number, Map<string, number>>, idOrderValidated: boolean = false): SpecificationSqlQuery | null {
     const queryDescriptionBuilder = new QueryDescriptionBuilder(factTypes, roleMap);
     const queryDescription = buildQueryDescription(queryDescriptionBuilder, feed, start);
     if (!queryDescription.isSatisfiable()) {
         return null;
     }
-    const sql = generateSqlQuery(queryDescription, schema, bookmark, limit);
+    const sql = generateSqlQuery(queryDescription, schema, bookmark, limit, idOrderValidated);
     return sql;
 }
 

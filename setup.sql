@@ -262,7 +262,8 @@ END IF;
 
 IF (SELECT character_maximum_length
     FROM information_schema.columns
-    WHERE table_name = 'fact_type'
+    WHERE table_schema = 'public'
+    AND table_name = 'fact_type'
     AND column_name = 'name') < 200 THEN
 
     ALTER TABLE fact_type
@@ -276,7 +277,8 @@ END IF;
 
 IF (SELECT character_maximum_length
     FROM information_schema.columns
-    WHERE table_name = 'role'
+    WHERE table_schema = 'public'
+    AND table_name = 'role'
     AND column_name = 'name') < 200 THEN
 
     ALTER TABLE role
@@ -290,7 +292,8 @@ END IF;
 
 IF (SELECT confdeltype
     FROM pg_constraint
-    WHERE conname = 'fk_predecessor_fact_id') != 'c' THEN
+    WHERE conname = 'fk_predecessor_fact_id'
+    AND conrelid = 'public.edge'::regclass) != 'c' THEN
 
     -- Configure cascade delete from fact to edge
     ALTER TABLE public.edge
@@ -388,6 +391,15 @@ IF (SELECT to_regclass('legacy.fact') IS NOT NULL) THEN
 	JOIN public.role r
 	  ON r.defining_fact_type_id = st.fact_type_id
 	  AND r.name = e.role
+	-- This block runs on every run of this file while the legacy schema
+	-- exists, and PostgreSQL checks ck_edge_successor_after_predecessor
+	-- before ON CONFLICT, so re-inserting an edge already migrated would fail
+	-- the run on any inverted one. Insert only the edges not yet present.
+	WHERE NOT EXISTS (SELECT 1
+	    FROM public.edge pe
+	    WHERE pe.successor_fact_id = s.fact_id
+	    AND pe.predecessor_fact_id = p.fact_id
+	    AND pe.role_id = r.role_id)
 	ON CONFLICT DO NOTHING;
 	
 	INSERT INTO public.ancestor
@@ -421,6 +433,51 @@ IF (SELECT to_regclass('legacy.fact') IS NOT NULL) THEN
 	JOIN public.public_key pk
 	  ON pk.public_key = s.public_key
 	ON CONFLICT DO NOTHING;
+
+END IF;
+
+--
+-- Every edge runs from a lower fact id to a higher one, because a fact is
+-- saved after the predecessors it names. A feed page's bookmark bound rests on
+-- that: the output fact carrying a tuple's largest id is the one that no other
+-- output is a predecessor of, so the bounds on the others add nothing. The
+-- server reads this constraint's convalidated flag to decide whether it may
+-- drop them, so the database itself, rather than configuration, says whether
+-- the order holds.
+--
+-- Add it NOT VALID, which enforces it on new and updated rows without scanning
+-- the existing ones, so no writer can add an inverted edge from here on, this
+-- server version or another sharing the database. A database written before
+-- the facts of one save were ordered may already hold an inverted edge, so
+-- validate only when no row violates it; repair-edge-order.sql restores the
+-- order of a database that does, and validates the constraint itself.
+--
+-- This comes last, after the migration above has inserted the legacy edges,
+-- which were written with no order to their fact ids.
+--
+
+IF NOT EXISTS (SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'ck_edge_successor_after_predecessor'
+    AND conrelid = 'public.edge'::regclass) THEN
+
+    ALTER TABLE public.edge
+        ADD CONSTRAINT ck_edge_successor_after_predecessor
+        CHECK (successor_fact_id > predecessor_fact_id) NOT VALID;
+
+END IF;
+
+IF EXISTS (SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'ck_edge_successor_after_predecessor'
+    AND conrelid = 'public.edge'::regclass
+    AND NOT convalidated)
+    AND NOT EXISTS (SELECT 1
+    FROM public.edge
+    WHERE successor_fact_id < predecessor_fact_id) THEN
+
+    ALTER TABLE public.edge
+        VALIDATE CONSTRAINT ck_edge_successor_after_predecessor;
 
 END IF;
 
