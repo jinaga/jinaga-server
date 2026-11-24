@@ -124,8 +124,14 @@ async function factShapes() {
         `SELECT
             t.name AS type,
             f.hash,
-            (SELECT array_agg(DISTINCT pt.name || ':' || p.hash ORDER BY pt.name || ':' || p.hash)
+            -- The role, not only the endpoints: an edge is the role it stands
+            -- for as much as the two facts it joins, and a comparison of
+            -- endpoints alone would call a rewritten role association
+            -- unchanged.
+            (SELECT array_agg(DISTINCT r.name || ' ' || pt.name || ':' || p.hash
+                              ORDER BY r.name || ' ' || pt.name || ':' || p.hash)
              FROM public.edge e
+             JOIN public.role r ON r.role_id = e.role_id
              JOIN public.fact p ON p.fact_id = e.predecessor_fact_id
              JOIN public.fact_type pt ON pt.fact_type_id = p.fact_type_id
              WHERE e.successor_fact_id = f.fact_id) AS predecessors,
@@ -457,6 +463,44 @@ describe("Bookmark bound pruned by the fact id order (issue #256)", () => {
         const titleId = await factIdOf(lateTitle);
         expect(siteId).toBeLessThan(postId);
         expect(postId).toBeLessThan(titleId);
+        expect(await invertedEdgeCount()).toBe(0);
+    });
+
+    it("stages a batch in either order too", async () => {
+        // `readAsIfSaved` inserts its staged facts inside a transaction it
+        // rolls back, and the CHECK fires at insert time rather than at
+        // commit, so it needs the same ordering `save` does. Without it a
+        // valid successor-first staged batch would be refused while `save`
+        // stayed green, so the path has a case of its own.
+        const stagedSite = site(`staged-${suffix}.example.com`);
+        await store.save(envelopesOf([stagedSite]));
+        const stagedPost = post(stagedSite, new Date(2026, 8, 1).toISOString());
+        const stagedTitle = title(stagedPost, 'a staged title', []);
+
+        const specification = parseSpecification(`
+            (site: ${siteType}) {
+                post: ${postType} [
+                    post->site: ${siteType} = site
+                ]
+                title: ${titleType} [
+                    title->post: ${postType} = post
+                ]
+            } => {
+                value = title.value
+            }`).specification;
+        const siteReference = [dehydrateReference(stagedSite)];
+
+        // Nothing committed under this site, so a plain read sees nothing.
+        expect(await store.read(siteReference, specification)).toEqual([]);
+
+        const envelopes = envelopesOf([stagedTitle]);
+        const reversed = envelopes.slice().reverse();
+        expect(reversed[0].fact.type).toEqual(titleType);
+        const staged = await store.readAsIfSaved(reversed, siteReference, specification);
+        expect(staged.map(projected => projected.result.value)).toEqual(['a staged title']);
+
+        // The staged facts stayed staged, and nothing they inserted survived.
+        expect(await store.read(siteReference, specification)).toEqual([]);
         expect(await invertedEdgeCount()).toBe(0);
     });
 
