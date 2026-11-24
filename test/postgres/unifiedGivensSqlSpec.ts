@@ -124,23 +124,22 @@ describe("Postgres read of two givens unified onto one fact", () => {
                         o = third
                     ]
                 } => o
-            `).query.sql,
-            // A unified pair beside a given on a fact index of its own, so
-            // one statement exercises both the index that is skipped and the
-            // index that is still joined. The second given needs its own
-            // unknown to bind it: a given no condition names is allocated no
-            // input at all, and leaves the SQL identical to the case above.
-            readQueryFor(`
-                (office: Office, other: Office, company: Company) {
-                    o: Office [
-                        o = office
-                        o = other
-                    ]
-                    c: Company [
-                        c = company
-                    ]
-                } => o
             `).query.sql
+            // A third case stood here: a unified pair beside a given on a fact
+            // index of its own, bound by its own unknown, so one statement
+            // exercised both the index that is skipped and the index that is
+            // still joined. That shape is outside the specification language
+            // as of jinaga 6.17.0, taken in issue #250: `o` uses office and
+            // other, `c` uses company, no condition joins the two, and the
+            // parser now refuses the product. It cannot be made connected
+            // while keeping what it was for, because a second given on a fact
+            // index of its own is unreached by definition, and joining it is
+            // what reaches it. The guarantee that no such specification
+            // arrives is held at the boundary instead, by
+            // test/http/disconnectedSpecificationSpec.ts. The two cases above
+            // still cover the alias this test was written for, and "still
+            // cross joins givens that do not unify" below still covers the
+            // cross-join path, for givens no match uses.
         ];
 
         sqls.forEach(sql => {
