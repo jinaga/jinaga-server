@@ -142,68 +142,7 @@ export class PostgresStore implements Storage {
     close() {
         return Promise.resolve();
     }
-
-    /**
-     * Reports whether the database has validated that every edge runs from a
-     * lower fact id to a higher one.
-     *
-     * A feed page's bookmark bound can drop the branch of an output that
-     * another output sits above only while that holds, so the answer comes
-     * from the database's own record of it, the
-     * `ck_edge_successor_after_predecessor` constraint, rather than from
-     * configuration or from a second copy kept in step by hand.
-     *
-     * The answer is read once and held for the store's lifetime. Only DDL can
-     * change it, and the repair script's DDL is transactional, so a validated
-     * constraint stays validated. The first read happens on the first feed
-     * because `JinagaServer.create` is synchronous and has no startup hook.
-     * The promise rather than its value is cached, so concurrent first feeds
-     * ask the database once.
-     */
-    private idOrderValidated(): Promise<boolean> {
-        if (this.idOrderValidatedPromise === null) {
-            this.idOrderValidatedPromise = this.readIdOrderValidated()
-                .catch(reason => {
-                    // A read that failed is not an answer, so it is not kept.
-                    // Caching the rejection would make one unreachable moment
-                    // the store's permanent state.
-                    this.idOrderValidatedPromise = null;
-                    throw reason;
-                });
-        }
-        return this.idOrderValidatedPromise;
-    }
-
-    private async readIdOrderValidated(): Promise<boolean> {
-        return await this.connectionFactory.with(async (connection) => {
-            const { rows }: { rows: { convalidated: boolean }[] } = await connection.query(
-                'SELECT convalidated FROM pg_constraint' +
-                ' WHERE conname = \'ck_edge_successor_after_predecessor\'' +
-                ' AND conrelid = $1::regclass',
-                [`${this.schema}.edge`]);
-            if (rows.length === 0) {
-                Trace.warn(`The ${this.schema}.edge table has no ck_edge_successor_after_predecessor constraint, ` +
-                    `so this schema predates the fact id order invariant and feed pages keep their redundant bounds. ` +
-                    `Run setup.sql to add the constraint.`);
-                return false;
-            }
-            if (!rows[0].convalidated) {
-                const { rows: counts }: { rows: { violations: string }[] } = await connection.query(
-                    `SELECT count(*) AS violations FROM ${this.schema}.edge` +
-                    ' WHERE successor_fact_id < predecessor_fact_id');
-                const violations = Number(counts[0].violations);
-                Trace.warn(`The ${this.schema}.edge constraint ck_edge_successor_after_predecessor is not validated, ` +
-                    `and ${violations} edge${violations === 1 ? '' : 's'} run from a higher fact id to a lower one, ` +
-                    `so feed pages keep their redundant bounds. ` +
-                    (violations === 0
-                        ? `Run setup.sql to validate the constraint.`
-                        : `Run repair-edge-order.sql to restore the order, which also validates the constraint.`));
-                return false;
-            }
-            return true;
-        });
-    }
-
+    
     async save(envelopes: FactEnvelope[]): Promise<FactEnvelope[]> {
         if (envelopes.length > 0) {
             const facts = envelopes.map(e => e.fact).filter((value, index, self) =>
@@ -397,6 +336,67 @@ export class PostgresStore implements Storage {
             finally {
                 await connection.query('ROLLBACK');
             }
+        });
+    }
+
+    /**
+     * Reports whether the database has validated that every edge runs from a
+     * lower fact id to a higher one.
+     *
+     * A feed page's bookmark bound can drop the branch of an output that
+     * another output sits above only while that holds, so the answer comes
+     * from the database's own record of it, the
+     * `ck_edge_successor_after_predecessor` constraint, rather than from
+     * configuration or from a second copy kept in step by hand.
+     *
+     * The answer is read once and held for the store's lifetime. Only DDL can
+     * change it, and the repair script's DDL is transactional, so a validated
+     * constraint stays validated. The first read happens on the first feed
+     * because `JinagaServer.create` is synchronous and has no startup hook.
+     * The promise rather than its value is cached, so concurrent first feeds
+     * ask the database once.
+     */
+    private idOrderValidated(): Promise<boolean> {
+        if (this.idOrderValidatedPromise === null) {
+            this.idOrderValidatedPromise = this.readIdOrderValidated()
+                .catch(reason => {
+                    // A read that failed is not an answer, so it is not kept.
+                    // Caching the rejection would make one unreachable moment
+                    // the store's permanent state.
+                    this.idOrderValidatedPromise = null;
+                    throw reason;
+                });
+        }
+        return this.idOrderValidatedPromise;
+    }
+
+    private async readIdOrderValidated(): Promise<boolean> {
+        return await this.connectionFactory.with(async (connection) => {
+            const { rows }: { rows: { convalidated: boolean }[] } = await connection.query(
+                'SELECT convalidated FROM pg_constraint' +
+                ' WHERE conname = \'ck_edge_successor_after_predecessor\'' +
+                ' AND conrelid = $1::regclass',
+                [`${this.schema}.edge`]);
+            if (rows.length === 0) {
+                Trace.warn(`The ${this.schema}.edge table has no ck_edge_successor_after_predecessor constraint, ` +
+                    `so this schema predates the fact id order invariant and feed pages keep their redundant bounds. ` +
+                    `Run setup.sql to add the constraint.`);
+                return false;
+            }
+            if (!rows[0].convalidated) {
+                const { rows: counts }: { rows: { violations: string }[] } = await connection.query(
+                    `SELECT count(*) AS violations FROM ${this.schema}.edge` +
+                    ' WHERE successor_fact_id < predecessor_fact_id');
+                const violations = Number(counts[0].violations);
+                Trace.warn(`The ${this.schema}.edge constraint ck_edge_successor_after_predecessor is not validated, ` +
+                    `and ${violations} edge${violations === 1 ? '' : 's'} run from a higher fact id to a lower one, ` +
+                    `so feed pages keep their redundant bounds. ` +
+                    (violations === 0
+                        ? `Run setup.sql to validate the constraint.`
+                        : `Run repair-edge-order.sql to restore the order, which also validates the constraint.`));
+                return false;
+            }
+            return true;
         });
     }
 
